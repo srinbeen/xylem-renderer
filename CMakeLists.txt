@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.31)
-project(Pipeliner)
+project(Xylem)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -61,7 +61,7 @@ donut_compile_shaders_all_platforms(
 
 add_executable(${PROJECT_NAME} WIN32 ${sources})
 
-target_compile_definitions(Pipeliner PRIVATE DONUT_SHADERS_OUTPUT_SUBDIR="${DONUT_SHADERS_OUTPUT_SUBDIR}")
+target_compile_definitions(Xylem PRIVATE DONUT_SHADERS_OUTPUT_SUBDIR="${DONUT_SHADERS_OUTPUT_SUBDIR}")
 
 if (DONUT_WITH_AFTERMATH)
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD

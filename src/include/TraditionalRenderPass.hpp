@@ -19,7 +19,7 @@ namespace Xylem {
 static const char* g_WindowTitle = "Xylem";
 static const std::filesystem::path g_BinDirectory = donut::app::GetDirectoryWithExecutable().parent_path();
 static const std::filesystem::path g_ProjectDirectory = g_BinDirectory.parent_path();
-static const std::filesystem::path g_SceneConfigDirectory = g_ProjectDirectory / "scene/scene.json";
+static const std::filesystem::path g_SceneConfigDirectory = g_ProjectDirectory / "scene/new_scene.json";
     
 using namespace donut;
 
@@ -85,7 +85,7 @@ private:
 
     UIData&                                            m_UI;
 
-    Scene::SceneData                                   m_Scene;
+    SceneData                                          m_Scene;
 
     // populated during render loop
     std::vector<Render::InstanceReference>             m_VisibleInstanceReferences;

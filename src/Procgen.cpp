@@ -25,6 +25,8 @@ void TreeGenerator::generateVertexAndIndexBuffers(const lstring_t& lSystemString
     buffers.vertices.clear();
     buffers.indices.clear();
     buffers.bbox = dm::box3::empty();
+    m_branchCounter = 0;
+    m_ringCounter   = 0;
 
     std::stack<TurtleState> stateStack;
     TurtleState state;
@@ -36,8 +38,8 @@ void TreeGenerator::generateVertexAndIndexBuffers(const lstring_t& lSystemString
         case F:
             state.branchLength += state.stepLength;
             state.pos          += dm::applyQuat(state.orientation, unit_k) * state.stepLength;
-            state.radius       *= params.taperRatio;
-            state.stepLength   *= params.stepRatio;
+            state.radius       *= params.taperRatio  * (1.f + 0.03f * branchRand());
+            state.stepLength   *= params.stepRatio   * (1.f + 0.03f * branchRand());
             state.baseRingIndex = createRing(state, buffers);
             break;
         case X:
@@ -56,8 +58,8 @@ void TreeGenerator::generateVertexAndIndexBuffers(const lstring_t& lSystemString
             state.orientation *= dm::rotationQuat(unit_k, -params.branchAngle);  break;
         case S_PUSH:
             stateStack.push(state);
-            state.radius     *= params.taperRatio;
-            state.stepLength *= params.stepRatio;
+            state.radius     *= params.taperRatio  * (1.f + 0.03f * branchRand());
+            state.stepLength *= params.stepRatio   * (1.f + 0.03f * branchRand());
             break;
         case S_POP:
             if (stateStack.empty())
@@ -77,12 +79,25 @@ uint32_t TreeGenerator::createRing(const TurtleState& state, Buffers& buffers) {
     uint32_t nextRingIndex = static_cast<uint32_t>(buffers.vertices.size());
     uint32_t segs          = params.radialSegments;
 
+    float firstRJitter = 0.f, firstNJitter = 0.f;
     for (uint32_t i = 0; i <= segs; i++) {
         float percentage = dm::clamp((float)i / (float)segs, 0.f, 1.f);
         float angle      = 2.f * dm::PI_f * percentage;
-        dm::float3 normal = dm::normalize(std::cos(angle) * right + std::sin(angle) * up);
-        dm::float3 pos    = state.pos + normal * state.radius;
-        buffers.vertices.emplace_back(pos, segs != 2 ? normal : up, dm::float2(percentage, state.branchLength));
+
+        float rJitter, nJitter;
+        if (i < segs) {
+            rJitter = state.radius * 0.02f * ringRand();
+            nJitter = 0.015f * ringRand();
+            if (i == 0) { firstRJitter = rJitter; firstNJitter = nJitter; }
+        } else {
+            rJitter = firstRJitter;
+            nJitter = firstNJitter;
+        }
+
+        dm::float3 normal        = dm::normalize(std::cos(angle) * right + std::sin(angle) * up);
+        dm::float3 shadingNormal = dm::normalize(normal + nJitter * forward);
+        dm::float3 pos           = state.pos + normal * (state.radius + rJitter);
+        buffers.vertices.emplace_back(pos, segs != 2 ? shadingNormal : up, dm::float2(percentage, state.branchLength));
     }
 
     if (nextRingIndex != 0) {

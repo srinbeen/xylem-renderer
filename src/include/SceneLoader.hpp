@@ -14,7 +14,7 @@
 #include "RegionManager.hpp"
 #include "Procgen.hpp"
 
-namespace Xylem::Scene {
+namespace Xylem {
 
 // Output of a successful scene load — everything the render pass needs.
 struct SceneData {
@@ -39,15 +39,14 @@ public:
     static Json::Value ParseFile(const std::filesystem::path& path);
 
 private:
-
     static void _BuildTreeAssetBuffers(
-        TreeAsset&                   asset,
+        Scene::TreeAsset&            asset,
         const std::vector<uint32_t>& lodSegments,
         ProcGen::TreeGenerator&      generator,
         nvrhi::IDevice*              device,
         nvrhi::ICommandList*         commandList);
 };
 
-} // namespace Xylem::Scene
+} // namespace Xylem
 
 #endif // XYLEM_SCENE_LOADER_H

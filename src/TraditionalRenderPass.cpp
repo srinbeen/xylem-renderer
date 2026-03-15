@@ -15,7 +15,7 @@ bool TraditionalRenderPass::Init() {
     m_CommandList = GetDevice()->createCommandList();
     m_CommandList->open();
 
-    if (!Scene::SceneLoader::Load(g_SceneConfigDirectory, GetDevice(), m_CommandList, m_Scene)) return false;
+    if (!SceneLoader::Load(g_SceneConfigDirectory, GetDevice(), m_CommandList, m_Scene)) return false;
     if (!_InitShaders())                     return false;
     if (!_InitVertexAttributes())            return false;
     if (!_InitBuffers())                     return false;
@@ -271,12 +271,41 @@ bool TraditionalRenderPass::_InitVertexAttributes() {
             .setIsInstanced(true),
 #endif
 #else
-        nvrhi::VertexAttributeDesc().setName("POSITION").setFormat(nvrhi::Format::RGB32_FLOAT).setOffset(0).setBufferIndex(0).setElementStride(sizeof(TreeVertex)),
-        nvrhi::VertexAttributeDesc().setName("NORMAL").setFormat(nvrhi::Format::RGB32_FLOAT).setOffset(0).setBufferIndex(1).setElementStride(sizeof(TreeVertex)),
-        nvrhi::VertexAttributeDesc().setName("UV").setFormat(nvrhi::Format::RG32_FLOAT).setOffset(0).setBufferIndex(2).setElementStride(sizeof(TreeVertex)),
+        nvrhi::VertexAttributeDesc()
+            .setName("POSITION")
+            .setFormat(nvrhi::Format::RGB32_FLOAT)
+            .setOffset(0)
+            .setBufferIndex(0)
+            .setElementStride(sizeof(ProcGen::TreeVertex)),
+        nvrhi::VertexAttributeDesc()
+            .setName("NORMAL")
+            .setFormat(nvrhi::Format::RGB32_FLOAT)
+            .setOffset(0)
+            .setBufferIndex(1)
+            .setElementStride(sizeof(ProcGen::TreeVertex)),
+        nvrhi::VertexAttributeDesc()
+            .setName("UV")
+            .setFormat(nvrhi::Format::RG32_FLOAT)
+            .setOffset(0)
+            .setBufferIndex(2)
+            .setElementStride(sizeof(ProcGen::TreeVertex)),
 #if !PIPELINER_USE_STRUCTURED_BUFFER
-        nvrhi::VertexAttributeDesc().setName("MODEL_MATRIX").setFormat(nvrhi::Format::RGBA32_FLOAT).setArraySize(4).setOffset(0).setBufferIndex(3).setElementStride(sizeof(InstanceBufferEntry)).setIsInstanced(true),
-        nvrhi::VertexAttributeDesc().setName("NORMAL_MATRIX").setFormat(nvrhi::Format::RGB32_FLOAT).setArraySize(3).setOffset(0).setBufferIndex(4).setElementStride(sizeof(InstanceBufferEntry)).setIsInstanced(true),
+        nvrhi::VertexAttributeDesc()
+            .setName("MODEL_MATRIX")
+            .setFormat(nvrhi::Format::RGBA32_FLOAT)
+            .setArraySize(4)
+            .setOffset(0).
+            setBufferIndex(3)
+            .setElementStride(sizeof(Render::InstanceBufferEntry))
+            .setIsInstanced(true),
+        nvrhi::VertexAttributeDesc()
+            .setName("NORMAL_MATRIX")
+            .setFormat(nvrhi::Format::RGB32_FLOAT)
+            .setArraySize(3)
+            .setOffset(0).
+            setBufferIndex(4)
+            .setElementStride(sizeof(Render::InstanceBufferEntry))
+            .setIsInstanced(true),
 #endif
 #endif
     };
@@ -343,20 +372,20 @@ bool TraditionalRenderPass::_InitBindingLayoutAndSet() {
 }
 
 bool TraditionalRenderPass::_InitViewHandler() {
-    auto config = Scene::SceneLoader::ParseFile(g_SceneConfigDirectory);
+    auto config = SceneLoader::ParseFile(g_SceneConfigDirectory);
     const auto& cam = config["camera"];
 
     // Leveraging donut >> overloads for the camera properties
     dm::float3 pos(0.f);
-    dm::float3 lookAt(0.f, 0.f, 1.f);
+    dm::float3 cameraDir(0.f, 0.f, 1.f);
     float moveSpeed = 15.f;
 
     cam["position"] >> pos;
-    cam["lookAt"] >> lookAt;
+    cam["direction"] >> cameraDir;
     cam["moveSpeed"] >> moveSpeed;
 
     m_ViewHandler = std::make_unique<ViewHandler>();
-    m_ViewHandler->camera.LookTo(pos, lookAt);
+    m_ViewHandler->camera.LookTo(pos, dm::normalize(cameraDir));
     m_ViewHandler->camera.SetMoveSpeed(moveSpeed);
     return !!m_ViewHandler;
 }

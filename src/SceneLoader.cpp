@@ -67,7 +67,7 @@ bool SceneLoader::Load(
 
         asset.generatorParams.radialSegments = 16;
         asset.generatorParams.stepLength     = 1.0f;
-        asset.generatorParams.branchAngle    = donut::math::radians(25.f);
+        asset.generatorParams.branchAngle    = 25.0f;
         asset.generatorParams.taperRatio     = 0.9f;
         asset.generatorParams.stepRatio      = 0.95f;
         asset.generatorParams.seed           = 0;
@@ -78,6 +78,8 @@ bool SceneLoader::Load(
         aNode["taperRatio"]     >> asset.generatorParams.taperRatio;
         aNode["stepRatio"]      >> asset.generatorParams.stepRatio;
         aNode["seed"]           >> asset.generatorParams.seed;
+
+        asset.generatorParams.branchAngle = dm::radians(asset.generatorParams.branchAngle);
 
         auto lsIt = out.lsystems.find(lsName);
         if (lsIt == out.lsystems.end()) continue;
@@ -156,7 +158,6 @@ void SceneLoader::_BuildTreeAssetBuffers(
     for (size_t j = 0; j < lodSegments.size(); j++) {
         genParams.radialSegments = lodSegments[j];
         generator.setParams(genParams);
-        generator.resetRandomGenerator();
 
         Buffers lod;
         generator.generateVertexAndIndexBuffers(asset.lsystemString, lod);

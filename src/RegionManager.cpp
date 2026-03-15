@@ -1,6 +1,7 @@
 #include "include/RegionManager.hpp"
 #include "include/hash.hpp"
 
+using namespace Xylem;
 using namespace Xylem::Scene;
 
 void RegionManager::clear() {

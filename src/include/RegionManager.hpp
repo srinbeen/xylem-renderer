@@ -7,8 +7,7 @@
 
 #include "Scene.hpp"
 
-namespace Xylem {
-namespace Scene {
+namespace Xylem::Scene {
 
 class RegionManager {
 private:
@@ -35,7 +34,6 @@ public:
     void updateRegion(size_t idx, const std::vector<TreeAsset>& assets);
 };
 
-} // namespace Scene
-} // namespace Xylem
+} // namespace Xylem::Scene
 
 #endif // XYLEM_REGION_MANAGER_H

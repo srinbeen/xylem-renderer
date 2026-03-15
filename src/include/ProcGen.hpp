@@ -4,12 +4,12 @@
 #include <string>
 #include <unordered_map>
 #include <numeric>
-#include <random>
 
 #include <donut/core/math/math.h>
 
-namespace Xylem {
-namespace ProcGen {
+#include "hash.hpp"
+
+namespace Xylem::ProcGen {
 
     struct TreeVertex {
         dm::float3  pos;
@@ -154,29 +154,39 @@ namespace ProcGen {
         struct Params {
             uint32_t radialSegments = 8;
             float    stepLength     = 1.f;
-            float    branchAngle    = dm::radians(25.f);
+            float    branchAngle    = 25.f;
             float    taperRatio     = 0.9f;
             float    stepRatio      = 0.95f;
             uint32_t seed           = 0;  // 0 = no randomization
         };
 
     private:
-        Params params;
-        std::default_random_engine rand_gen;
-        std::uniform_real_distribution<float> rand_dist;
+        Params   params;
+        uint32_t m_branchCounter = 0;
+        uint32_t m_ringCounter   = 0;
+
+        // Returns [-1, 1], or 0 when seed == 0 (no randomization).
+        // Branch-level randomization — independent of radial segment count.
+        float branchRand() {
+            if (params.seed == 0) return 0.f;
+            return Xylem::hashToFloat(m_branchCounter++, params.seed) * 2.f - 1.f;
+        }
+        // Ring vertex randomization — varies with LOD, which is expected.
+        float ringRand() {
+            if (params.seed == 0) return 0.f;
+            return Xylem::hashToFloat(m_ringCounter++, params.seed ^ 0x9e3779b9u) * 2.f - 1.f;
+        }
 
     public:
-        TreeGenerator(const Params& p) : params{p}, rand_gen{p.seed}, rand_dist{} {}
+        TreeGenerator(const Params& p) : params{p} {}
         TreeGenerator() = default;
 
         void setParams(const Params& p) { params = p; }
-        void resetRandomGenerator()     { rand_gen.seed(params.seed); rand_dist.reset(); }
 
         void     generateVertexAndIndexBuffers(const lstring_t& lSystemString, Buffers& buffers);
         uint32_t createRing(const TurtleState& state, Buffers& buffers);
     };
 
-} // namespace ProcGen
-} // namespace Xylem
+} // namespace Xylem::ProcGen
 
 #endif // PROC_GEN_H

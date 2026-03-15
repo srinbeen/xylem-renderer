@@ -11,8 +11,7 @@
 #include "Procgen.hpp"
 #include "Render.hpp"
 
-namespace Xylem {
-namespace Scene {
+namespace Xylem::Scene {
 
 struct LSystemInstance {
     std::string     name;
@@ -52,7 +51,6 @@ struct TreeRegion {
     }
 };
 
-} // namespace Scene
-} // namespace Xylem
+} // namespace Xylem::Scene
 
 #endif // XYLEM_SCENE_H

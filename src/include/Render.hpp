@@ -4,8 +4,7 @@
 #include <nvrhi/nvrhi.h>
 #include <donut/core/math/math.h>
 
-namespace Xylem {
-namespace Render {
+namespace Xylem::Render {
 
 struct InstanceBufferEntry {
     dm::float4x4 model;
@@ -53,7 +52,6 @@ struct InstanceReference {
     uint32_t lodID;
 };
 
-} // namespace Render
-} // namespace Xylem
+} // namespace Xylem::Render
 
 #endif // XYLEM_RENDER_H

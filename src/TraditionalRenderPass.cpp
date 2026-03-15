@@ -1,22 +1,21 @@
 #include "include/TraditionalRenderPass.hpp"
-#include "include/xylem-macros.h"
+#include "include/macros.h"
 
 #include <nvrhi/utils.h>
 #include <donut/app/imgui_renderer.h>
 #include <donut/app/Timer.h>
 #include <donut/engine/TextureCache.h>
 #include <donut/core/math/math.h>
-
-#include <fstream>
+#include <donut/core/json.h>
 
 using namespace Xylem;
 
-// public 
+// public
 bool TraditionalRenderPass::Init() {
     m_CommandList = GetDevice()->createCommandList();
     m_CommandList->open();
 
-    if (!_InitSceneData(_ParseConfigFile())) return false;
+    if (!Scene::SceneLoader::Load(g_SceneConfigDirectory, GetDevice(), m_CommandList, m_Scene)) return false;
     if (!_InitShaders())                     return false;
     if (!_InitVertexAttributes())            return false;
     if (!_InitBuffers())                     return false;
@@ -29,16 +28,16 @@ bool TraditionalRenderPass::Init() {
 
     _InitTimerQueries();
 
-    m_UI.totalInstanceCount = m_RegionManager.getTotalInstanceCount();
-    
-    m_VisibleInstanceReferences.reserve(m_RegionManager.getTotalInstanceCount());
-    
+    m_UI.totalInstanceCount = m_Scene.regionManager.getTotalInstanceCount();
+
+    m_VisibleInstanceReferences.reserve(m_Scene.regionManager.getTotalInstanceCount());
+
     // Initialize dynamic LOD counters
-    m_InstanceCounts.resize(m_TreeAssets.size(), std::vector<uint32_t>(m_LODSegments.size(), 0));
-    m_InstanceOffsets.assign(m_TreeAssets.size(), std::vector<uint32_t>(m_LODSegments.size(), 0));
-    
-    m_VisibleInstanceBuffer.resize(m_RegionManager.getTotalInstanceCount());
-    m_DrawCmds.reserve(m_TreeAssets.size() * m_LODSegments.size());
+    m_InstanceCounts.resize(m_Scene.assets.size(), std::vector<uint32_t>(m_Scene.lodSegments.size(), 0));
+    m_InstanceOffsets.assign(m_Scene.assets.size(), std::vector<uint32_t>(m_Scene.lodSegments.size(), 0));
+
+    m_VisibleInstanceBuffer.resize(m_Scene.regionManager.getTotalInstanceCount());
+    m_DrawCmds.reserve(m_Scene.assets.size() * m_Scene.lodSegments.size());
 
     return true;
 }
@@ -100,11 +99,11 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_CommandList->writeBuffer(m_Resources.constantBuffer, &constants, Render::c_ConstantBufferSize);
 
     m_VisibleInstanceReferences.clear();
-    m_InstanceCounts.assign(m_TreeAssets.size(), std::vector<uint32_t>(m_LODSegments.size(), 0));
+    m_InstanceCounts.assign(m_Scene.assets.size(), std::vector<uint32_t>(m_Scene.lodSegments.size(), 0));
     uint32_t culled = 0;
 
-    for (uint32_t ri = 0; ri < m_RegionManager.size(); ri++) {
-        const auto& region = m_RegionManager[ri];
+    for (uint32_t ri = 0; ri < m_Scene.regionManager.size(); ri++) {
+        const auto& region = m_Scene.regionManager[ri];
         if (!m_ViewHandler->view.IsBoxVisible(region.cullBox)) {
             culled += region.instanceCount;
             continue;
@@ -112,21 +111,21 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         for (uint32_t ii = 0; ii < region.instanceCount; ii++) {
             if (!m_ViewHandler->view.IsBoxVisible(region.instanceBbox[ii])) { culled++; continue; }
             float dist = dm::distance(m_ViewHandler->camera.GetPosition(), region.instanceBbox[ii]);
-            uint32_t lod = m_ViewHandler->distToLOD(dist, m_LODDistances);
+            uint32_t lod = m_ViewHandler->distToLOD(dist, m_Scene.lodDistances);
             m_VisibleInstanceReferences.push_back({ ri, ii, region.instanceBuffer[ii].treeId, lod });
             m_InstanceCounts[region.instanceBuffer[ii].treeId][lod]++;
         }
     }
 
     m_DrawCmds.clear();
-    m_InstanceOffsets.assign(m_TreeAssets.size(), std::vector<uint32_t>(m_LODSegments.size(), 0));
+    m_InstanceOffsets.assign(m_Scene.assets.size(), std::vector<uint32_t>(m_Scene.lodSegments.size(), 0));
     uint32_t instanceOffset = 0;
-    
+
     for (uint32_t ai = 0; ai < m_InstanceCounts.size(); ai++) {
-        for (uint32_t li = 0; li < m_LODSegments.size(); li++) {
+        for (uint32_t li = 0; li < m_Scene.lodSegments.size(); li++) {
             uint32_t count = m_InstanceCounts[ai][li];
             if (count == 0) continue;
-            const auto& lod = m_TreeAssets[ai].lods[li];
+            const auto& lod = m_Scene.assets[ai].lods[li];
             m_DrawCmds.push_back({ lod.vertexBuffer, lod.indexBuffer,
                 nvrhi::DrawArguments()
                     .setVertexCount(lod.indexCount)
@@ -139,7 +138,7 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
 
     for (const auto& ref : m_VisibleInstanceReferences) {
         uint32_t& writeOff = m_InstanceOffsets[ref.treeId][ref.lodID];
-        m_VisibleInstanceBuffer[writeOff] = m_RegionManager[ref.regionIdx].instanceBuffer[ref.instanceIdx];
+        m_VisibleInstanceBuffer[writeOff] = m_Scene.regionManager[ref.regionIdx].instanceBuffer[ref.instanceIdx];
         writeOff++;
     }
 
@@ -190,7 +189,7 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_UI.visibleInstanceCount = (uint32_t)m_VisibleInstanceReferences.size();
     m_UI.culledInstanceCount  = culled;
     m_UI.drawCallCount        = (uint32_t)m_DrawCmds.size();
-    m_UI.totalInstanceCount   = m_RegionManager.getTotalInstanceCount();
+    m_UI.totalInstanceCount   = m_Scene.regionManager.getTotalInstanceCount();
 
     m_VisibleInstanceReferences.clear();
 
@@ -224,161 +223,6 @@ bool TraditionalRenderPass::JoystickButtonUpdate(int button, bool pressed) {
 }
 bool TraditionalRenderPass::JoystickAxisUpdate(int axis, float value) {
     m_ViewHandler->camera.JoystickUpdate(axis, value); return true;
-}
-
-// private
-Json::Value TraditionalRenderPass::_ParseConfigFile(const std::filesystem::path& path) {
-    Json::CharReaderBuilder reader;
-    Json::Value root;
-    std::string errors;
-    std::ifstream jsonStream(path);
-    Json::parseFromStream(reader, jsonStream, &root, &errors);
-    return root;
-}
-
-bool TraditionalRenderPass::_InitSceneData(const Json::Value& root) {
-    if (!m_TreeGenerator) m_TreeGenerator = std::make_unique<ProcGen::TreeGenerator>();
-
-    // Load LODs Dynamically
-    if (root.isMember("lods") && root["lods"].isArray()) {
-        for (const auto& lodNode : root["lods"]) {
-            uint32_t segments = 8;
-            float distance = 100.f;
-            lodNode["segments"] >> segments;
-            lodNode["distance"] >> distance;
-            
-            m_LODSegments.push_back(segments);
-            m_LODDistances.push_back(distance);
-        }
-    } else {
-        // Fallbacks if no LODs provided in scene.json
-        m_LODSegments = { 16, 8, 4 };
-        m_LODDistances = { 16.0f, 64.0f, 256.0f };
-    }
-
-    // L-Systems
-    for (const auto& lsNode : root["lsystems"]) {
-        std::string name = "", axiom = "";
-        lsNode["name"] >> name;
-        lsNode["axiom"] >> axiom;
-
-        std::unordered_map<char, std::string> rules;
-        for (const auto& key : lsNode["rules"].getMemberNames())
-            if (!key.empty()) rules[key[0]] = lsNode["rules"][key].asString();
-        
-        m_LSystems.try_emplace(name, std::make_unique<ProcGen::LSystem>(axiom, rules));
-    }
-    if (m_LSystems.empty()) return false;
-
-    // Assets
-    for (const auto& aNode : root["assets"]) {
-        Scene::TreeAsset asset;
-        std::string lsName = m_LSystems.begin()->first;
-        uint32_t gen = 3;
-
-        aNode["name"] >> asset.name;
-        aNode["lsystem"] >> lsName;
-        aNode["generation"] >> gen;
-        asset.lsystemInstance = { lsName, gen };
-
-        // Setup defaults, then let Donut's >> operator cleanly overwrite them if they exist
-        asset.generatorParams.radialSegments = 16;
-        asset.generatorParams.stepLength     = 1.0f;
-        asset.generatorParams.branchAngle    = dm::radians(25.f);
-        asset.generatorParams.taperRatio     = 0.9f;
-        asset.generatorParams.stepRatio      = 0.95f;
-        asset.generatorParams.seed           = 0;
-
-        aNode["radialSegments"] >> asset.generatorParams.radialSegments;
-        aNode["stepLength"]     >> asset.generatorParams.stepLength;
-        aNode["branchAngle"]    >> asset.generatorParams.branchAngle;
-        aNode["taperRatio"]     >> asset.generatorParams.taperRatio;
-        aNode["stepRatio"]      >> asset.generatorParams.stepRatio;
-        aNode["seed"]           >> asset.generatorParams.seed;
-
-        auto lsIt = m_LSystems.find(lsName);
-        if (lsIt == m_LSystems.end()) continue;
-        lsIt->second->reset();
-        lsIt->second->generate(gen);
-        asset.lsystemString = lsIt->second->getCurrentString();
-
-        std::vector<ProcGen::Buffers> lods(m_LODSegments.size());
-        asset.lods.resize(m_LODSegments.size());
-        _BuildTreeAssetBuffers(asset, lods);
-        m_TreeAssets.push_back(std::move(asset));
-    }
-
-    std::unordered_map<std::string, uint32_t> assetNameToIdx;
-    for (uint32_t i = 0; i < m_TreeAssets.size(); i++) assetNameToIdx[m_TreeAssets[i].name] = i;
-
-    // Regions
-    for (const auto& rNode : root["regions"]) {
-        uint32_t count = 10;
-        float minX = 0.f, minY = 0.f, maxX = 10.f, maxY = 10.f;
-        std::string key = "Region";
-
-        rNode["instanceCount"] >> count;
-        rNode["boundsMinX"]    >> minX;
-        rNode["boundsMinY"]    >> minY;
-        rNode["boundsMaxX"]    >> maxX;
-        rNode["boundsMaxY"]    >> maxY;
-        rNode["name"]          >> key;
-
-        dm::box2 bounds(dm::float2(minX, minY), dm::float2(maxX, maxY));
-        
-        m_RegionManager.addRegion(key, count, bounds);
-        auto& r = m_RegionManager[key];
-
-        if (rNode.isMember("assets") && rNode["assets"].size() > 0) {
-            r.assetIndices.clear();
-            for (const auto& aName : rNode["assets"]) {
-                std::string n = aName.asString();
-                if (assetNameToIdx.count(n)) r.assetIndices.push_back(assetNameToIdx[n]);
-            }
-            m_RegionManager.updateRegion(m_RegionManager.size() - 1, m_TreeAssets);
-        }
-    }
-
-    return true;
-}
-
-void TraditionalRenderPass::_BuildTreeAssetBuffers(Scene::TreeAsset& asset, std::vector<ProcGen::Buffers>& lods) {
-    nvrhi::BufferDesc vDesc;
-    vDesc.isVertexBuffer = true;
-    vDesc.initialState   = nvrhi::ResourceStates::CopyDest;
-
-    nvrhi::BufferDesc iDesc;
-    iDesc.isIndexBuffer = true;
-    iDesc.initialState  = nvrhi::ResourceStates::CopyDest;
-
-    auto& genParams = asset.generatorParams;
-    for (size_t j = 0; j < m_LODSegments.size(); j++) {
-        genParams.radialSegments = m_LODSegments[j];
-        m_TreeGenerator->setParams(genParams);
-        m_TreeGenerator->resetRandomGenerator();
-        m_TreeGenerator->generateVertexAndIndexBuffers(asset.lsystemString, lods[j]);
-
-        auto& vBuf = asset.lods[j].vertexBuffer;
-        auto& iBuf = asset.lods[j].indexBuffer;
-
-        vDesc.debugName = "VB_" + asset.name + "_LOD" + std::to_string(j);
-        vDesc.byteSize  = lods[j].vertices.size() * sizeof(ProcGen::TreeVertex);
-        vBuf = GetDevice()->createBuffer(vDesc);
-        m_CommandList->beginTrackingBufferState(vBuf, nvrhi::ResourceStates::CopyDest);
-        m_CommandList->writeBuffer(vBuf, lods[j].vertices.data(), vDesc.byteSize);
-        m_CommandList->setPermanentBufferState(vBuf, nvrhi::ResourceStates::VertexBuffer);
-
-        iDesc.debugName = "IB_" + asset.name + "_LOD" + std::to_string(j);
-        iDesc.byteSize  = lods[j].indices.size() * sizeof(uint32_t);
-        iBuf = GetDevice()->createBuffer(iDesc);
-        m_CommandList->beginTrackingBufferState(iBuf, nvrhi::ResourceStates::CopyDest);
-        m_CommandList->writeBuffer(iBuf, lods[j].indices.data(), iDesc.byteSize);
-        m_CommandList->setPermanentBufferState(iBuf, nvrhi::ResourceStates::IndexBuffer);
-
-        asset.lods[j].indexCount     = static_cast<uint32_t>(lods[j].indices.size());
-        asset.lods[j].radialSegments = genParams.radialSegments;
-        asset.lods[j].bbox           = lods[j].bbox;
-    }
 }
 
 bool TraditionalRenderPass::_InitShaders() {
@@ -443,7 +287,7 @@ bool TraditionalRenderPass::_InitVertexAttributes() {
 bool TraditionalRenderPass::_InitBuffers() {
     m_Resources.instanceBuffer = GetDevice()->createBuffer(
         nvrhi::BufferDesc()
-            .setByteSize(std::max<size_t>(1, m_RegionManager.getTotalInstanceCount()) * sizeof(Render::InstanceBufferEntry))
+            .setByteSize(std::max<size_t>(1, m_Scene.regionManager.getTotalInstanceCount()) * sizeof(Render::InstanceBufferEntry))
             .setStructStride(sizeof(Render::InstanceBufferEntry))
             .setDebugName("InstanceBuffer")
 #if PIPELINER_USE_STRUCTURED_BUFFER
@@ -487,7 +331,7 @@ bool TraditionalRenderPass::_InitBindingLayoutAndSet() {
 #if PIPELINER_USE_STRUCTURED_BUFFER
         nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_Resources.instanceBuffer,
             nvrhi::Format::UNKNOWN,
-            nvrhi::BufferRange(0, m_RegionManager.getTotalInstances() * sizeof(InstanceBufferEntry))),
+            nvrhi::BufferRange(0, m_Scene.regionManager.getTotalInstanceCount() * sizeof(Render::InstanceBufferEntry))),
         nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t)),
 #endif
     };
@@ -499,7 +343,7 @@ bool TraditionalRenderPass::_InitBindingLayoutAndSet() {
 }
 
 bool TraditionalRenderPass::_InitViewHandler() {
-    auto config = _ParseConfigFile();
+    auto config = Scene::SceneLoader::ParseFile(g_SceneConfigDirectory);
     const auto& cam = config["camera"];
 
     // Leveraging donut >> overloads for the camera properties

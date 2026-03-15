@@ -1,4 +1,4 @@
-#include "include/xylem-procgen.hpp"
+#include "include/Procgen.hpp"
 
 #include <stack>
 #include <stdexcept>

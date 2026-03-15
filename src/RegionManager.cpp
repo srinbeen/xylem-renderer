@@ -1,5 +1,5 @@
-#include "include/xylem-scene.hpp"
-#include "include/xylem-hash.hpp"
+#include "include/RegionManager.hpp"
+#include "include/hash.hpp"
 
 using namespace Xylem::Scene;
 

@@ -24,6 +24,7 @@ struct SceneData {
     Scene::RegionManager                                     regionManager;
     std::vector<uint32_t>                                    lodSegments;
     std::vector<float>                                       lodDistances;
+    std::vector<std::string>                                 barkTextureSets;
 };
 
 class SceneLoader {

@@ -43,6 +43,7 @@ struct DrawCmd {
     nvrhi::BufferHandle  vertexBuffer;
     nvrhi::BufferHandle  indexBuffer;
     nvrhi::DrawArguments drawArgs;
+    uint32_t             textureSetIdx;
 };
 
 struct InstanceReference {

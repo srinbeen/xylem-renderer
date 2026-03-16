@@ -97,7 +97,12 @@ uint32_t TreeGenerator::createRing(const TurtleState& state, Buffers& buffers) {
         dm::float3 normal        = dm::normalize(std::cos(angle) * right + std::sin(angle) * up);
         dm::float3 shadingNormal = dm::normalize(normal + nJitter * forward);
         dm::float3 pos           = state.pos + normal * (state.radius + rJitter);
-        buffers.vertices.emplace_back(pos, segs != 2 ? shadingNormal : up, dm::float2(percentage, state.branchLength));
+
+        dm::float3 bitangent = forward;
+        dm::float3 tangent   = dm::cross(bitangent, normal);
+
+        dm::float3 usedNormal = segs != 2 ? shadingNormal : up;
+        buffers.vertices.emplace_back(pos, usedNormal, tangent, bitangent, dm::float2(percentage, state.branchLength));
     }
 
     if (nextRingIndex != 0) {

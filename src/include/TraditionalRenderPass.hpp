@@ -9,6 +9,7 @@
 #include <nvrhi/nvrhi.h>
 
 #include <donut/engine/ShaderFactory.h>
+#include <donut/engine/CommonRenderPasses.h>
 
 #include "SceneLoader.hpp"
 #include "Render.hpp"
@@ -20,7 +21,7 @@ static const char* g_WindowTitle = "Xylem";
 static const std::filesystem::path g_BinDirectory = donut::app::GetDirectoryWithExecutable().parent_path();
 static const std::filesystem::path g_ProjectDirectory = g_BinDirectory.parent_path();
 static const std::filesystem::path g_SceneConfigDirectory = g_ProjectDirectory / "scene/new_scene.json";
-    
+
 using namespace donut;
 
 class TraditionalRenderPass : public app::IRenderPass {
@@ -28,11 +29,11 @@ public:
     static constexpr uint32_t m_GlobalSeed   = 0xDEADBEEF;
     static constexpr uint32_t m_QueuedFrames = 4;
 
-    TraditionalRenderPass(app::DeviceManager* dm, UIData& ui) 
+    TraditionalRenderPass(app::DeviceManager* dm, UIData& ui)
         : IRenderPass{dm}, m_UI{ui} {}
-    
+
     void SetShaderFactory(std::shared_ptr<engine::ShaderFactory> sf) { m_ShaderFactory = std::move(sf); }
-    
+
     bool Init();
     void Animate(float seconds) override;
     void BackBufferResizing() override { m_Resources.pipeline = nullptr; }
@@ -65,14 +66,18 @@ private:
     struct GPUResources {
         nvrhi::ShaderHandle           vertexShader;
         nvrhi::ShaderHandle           pixelShader;
-        nvrhi::TextureHandle          texture;
-        nvrhi::SamplerHandle          sampler;
-        nvrhi::InputLayoutHandle      inputLayout;
-        nvrhi::BufferHandle           constantBuffer;
-        nvrhi::BufferHandle           instanceBuffer;
-        nvrhi::BindingLayoutHandle    bindingLayout;
-        nvrhi::BindingSetHandle       bindingSet;
-        nvrhi::GraphicsPipelineHandle pipeline;
+        struct TextureSet {
+            nvrhi::TextureHandle      diffuse;
+            nvrhi::TextureHandle      normalMap;
+        };
+        std::vector<TextureSet>                textureSets;
+        nvrhi::SamplerHandle                   sampler;
+        nvrhi::InputLayoutHandle               inputLayout;
+        nvrhi::BufferHandle                    constantBuffer;
+        nvrhi::BufferHandle                    instanceBuffer;
+        nvrhi::BindingLayoutHandle             bindingLayout;
+        std::vector<nvrhi::BindingSetHandle>   bindingSets;
+        nvrhi::GraphicsPipelineHandle          pipeline;
     };
 
     GPUResources                                       m_Resources;
@@ -97,7 +102,7 @@ private:
     bool _InitShaders();
     bool _InitVertexAttributes();
     bool _InitBuffers();
-    bool _InitTextureAndSampler();
+    bool _InitTextureAndSampler(nvrhi::ICommandList* initCL, engine::CommonRenderPasses& commonPasses);
     bool _InitBindingLayoutAndSet();
     bool _InitViewHandler();
     bool _InitTimerQueries();

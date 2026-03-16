@@ -32,6 +32,8 @@ struct TreeAsset {
     ProcGen::TreeGenerator::Params generatorParams;
     ProcGen::lstring_t             lsystemString;
     std::vector<TreeLODData>       lods;
+    std::string                    barkTexture;
+    uint32_t                       textureSetIdx = 0;
 };
 
 struct TreeRegion {

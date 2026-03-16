@@ -14,9 +14,12 @@ namespace Xylem::ProcGen {
     struct TreeVertex {
         dm::float3  pos;
         dm::float3  normal;
+        dm::float3  tangent;
+        dm::float3  bitangent;
         dm::float2  uv;
 
-        TreeVertex(dm::float3 p, dm::float3 n, dm::float2 t) : pos{p}, normal{n}, uv{t} {}
+        TreeVertex(dm::float3 p, dm::float3 n, dm::float3 t, dm::float3 b, dm::float2 tc)
+            : pos{p}, normal{n}, tangent{t}, bitangent{b}, uv{tc} {}
     };
 
     struct TurtleState {
@@ -94,7 +97,7 @@ namespace Xylem::ProcGen {
             _updateGrowthFactor();
         }
 
-        
+
         void setAxiom(const std::string& axiom) {
             m_axiomStr = axiom;
             m_axiom    = _toBinary(axiom);

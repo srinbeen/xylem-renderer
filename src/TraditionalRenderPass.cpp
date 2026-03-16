@@ -5,26 +5,39 @@
 #include <donut/app/imgui_renderer.h>
 #include <donut/app/Timer.h>
 #include <donut/engine/TextureCache.h>
+#include <donut/engine/CommonRenderPasses.h>
 #include <donut/core/math/math.h>
 #include <donut/core/json.h>
+
+#include <filesystem>
 
 using namespace Xylem;
 
 // public
 bool TraditionalRenderPass::Init() {
-    m_CommandList = GetDevice()->createCommandList();
-    m_CommandList->open();
+    // CommonRenderPasses must be constructed before opening initCL — its constructor
+    // opens its own temporary command list to upload placeholder textures.
+    engine::CommonRenderPasses commonPasses(GetDevice(), m_ShaderFactory);
 
-    if (!SceneLoader::Load(g_SceneConfigDirectory, GetDevice(), m_CommandList, m_Scene)) return false;
+    // Dedicated init command list for uploads + mipmap generation.
+    // Freed after init to release DX12 upload heap memory.
+    nvrhi::CommandListHandle initCL = GetDevice()->createCommandList();
+    initCL->open();
+
+    if (!SceneLoader::Load(g_SceneConfigDirectory, GetDevice(), initCL, m_Scene)) return false;
     if (!_InitShaders())                     return false;
     if (!_InitVertexAttributes())            return false;
     if (!_InitBuffers())                     return false;
-    if (!_InitTextureAndSampler())           return false;
+    if (!_InitTextureAndSampler(initCL, commonPasses)) return false;
     if (!_InitBindingLayoutAndSet())         return false;
     if (!_InitViewHandler())                 return false;
 
-    m_CommandList->close();
-    GetDevice()->executeCommandList(m_CommandList);
+    initCL->close();
+    GetDevice()->executeCommandList(initCL);
+    // initCL goes out of scope — upload buffers released
+
+    // Persistent render command list for per-frame drawing
+    m_CommandList = GetDevice()->createCommandList();
 
     _InitTimerQueries();
 
@@ -41,7 +54,7 @@ bool TraditionalRenderPass::Init() {
 
     return true;
 }
-    
+
 void TraditionalRenderPass::Animate(float seconds) {
     m_ViewHandler->camera.Animate(seconds);
     GetDeviceManager()->SetInformativeWindowTitle(g_WindowTitle);
@@ -130,7 +143,8 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
                 nvrhi::DrawArguments()
                     .setVertexCount(lod.indexCount)
                     .setInstanceCount(count)
-                    .setStartInstanceLocation(instanceOffset) });
+                    .setStartInstanceLocation(instanceOffset),
+                m_Scene.assets[ai].textureSetIdx });
             m_InstanceOffsets[ai][li] = instanceOffset;
             instanceOffset += count;
         }
@@ -150,9 +164,9 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     state.pipeline   = m_Resources.pipeline;
     state.framebuffer = framebuffer;
     state.viewport   = m_ViewHandler->view.GetViewportState();
-    state.bindings   = { m_Resources.bindingSet };
 
     for (const auto& cmd : m_DrawCmds) {
+        state.bindings = { m_Resources.bindingSets[cmd.textureSetIdx] };
         state.vertexBuffers = {
 #if PIPELINER_USE_INTERLEAVED_VERTEX_ATTRIBUTES
             { cmd.vertexBuffer, 0, 0 },
@@ -162,10 +176,12 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
 #else
             { cmd.vertexBuffer, 0, offsetof(ProcGen::TreeVertex, pos) },
             { cmd.vertexBuffer, 1, offsetof(ProcGen::TreeVertex, normal) },
-            { cmd.vertexBuffer, 2, offsetof(ProcGen::TreeVertex, uv) },
+            { cmd.vertexBuffer, 2, offsetof(ProcGen::TreeVertex, tangent) },
+            { cmd.vertexBuffer, 3, offsetof(ProcGen::TreeVertex, bitangent) },
+            { cmd.vertexBuffer, 4, offsetof(ProcGen::TreeVertex, uv) },
 #if !PIPELINER_USE_STRUCTURED_BUFFER
-            { m_Resources.instanceBuffer, 3, offsetof(Render::InstanceBufferEntry, model) },
-            { m_Resources.instanceBuffer, 4, offsetof(Render::InstanceBufferEntry, normal) },
+            { m_Resources.instanceBuffer, 5, offsetof(Render::InstanceBufferEntry, model) },
+            { m_Resources.instanceBuffer, 6, offsetof(Render::InstanceBufferEntry, normal) },
 #endif
 #endif
         };
@@ -247,6 +263,18 @@ bool TraditionalRenderPass::_InitVertexAttributes() {
             .setBufferIndex(0)
             .setElementStride(sizeof(ProcGen::TreeVertex)),
         nvrhi::VertexAttributeDesc()
+            .setName("TANGENT")
+            .setFormat(nvrhi::Format::RGB32_FLOAT)
+            .setOffset(offsetof(ProcGen::TreeVertex, tangent))
+            .setBufferIndex(0)
+            .setElementStride(sizeof(ProcGen::TreeVertex)),
+        nvrhi::VertexAttributeDesc()
+            .setName("BITANGENT")
+            .setFormat(nvrhi::Format::RGB32_FLOAT)
+            .setOffset(offsetof(ProcGen::TreeVertex, bitangent))
+            .setBufferIndex(0)
+            .setElementStride(sizeof(ProcGen::TreeVertex)),
+        nvrhi::VertexAttributeDesc()
             .setName("UV")
             .setFormat(nvrhi::Format::RG32_FLOAT)
             .setOffset(offsetof(ProcGen::TreeVertex, uv))
@@ -284,26 +312,38 @@ bool TraditionalRenderPass::_InitVertexAttributes() {
             .setBufferIndex(1)
             .setElementStride(sizeof(ProcGen::TreeVertex)),
         nvrhi::VertexAttributeDesc()
+            .setName("TANGENT")
+            .setFormat(nvrhi::Format::RGB32_FLOAT)
+            .setOffset(0)
+            .setBufferIndex(2)
+            .setElementStride(sizeof(ProcGen::TreeVertex)),
+        nvrhi::VertexAttributeDesc()
+            .setName("BITANGENT")
+            .setFormat(nvrhi::Format::RGB32_FLOAT)
+            .setOffset(0)
+            .setBufferIndex(3)
+            .setElementStride(sizeof(ProcGen::TreeVertex)),
+        nvrhi::VertexAttributeDesc()
             .setName("UV")
             .setFormat(nvrhi::Format::RG32_FLOAT)
             .setOffset(0)
-            .setBufferIndex(2)
+            .setBufferIndex(4)
             .setElementStride(sizeof(ProcGen::TreeVertex)),
 #if !PIPELINER_USE_STRUCTURED_BUFFER
         nvrhi::VertexAttributeDesc()
             .setName("MODEL_MATRIX")
             .setFormat(nvrhi::Format::RGBA32_FLOAT)
             .setArraySize(4)
-            .setOffset(0).
-            setBufferIndex(3)
+            .setOffset(0)
+            .setBufferIndex(5)
             .setElementStride(sizeof(Render::InstanceBufferEntry))
             .setIsInstanced(true),
         nvrhi::VertexAttributeDesc()
             .setName("NORMAL_MATRIX")
             .setFormat(nvrhi::Format::RGB32_FLOAT)
             .setArraySize(3)
-            .setOffset(0).
-            setBufferIndex(4)
+            .setOffset(0)
+            .setBufferIndex(6)
             .setElementStride(sizeof(Render::InstanceBufferEntry))
             .setIsInstanced(true),
 #endif
@@ -338,37 +378,72 @@ bool TraditionalRenderPass::_InitBuffers() {
     return !!m_Resources.instanceBuffer && !!m_Resources.constantBuffer;
 }
 
-bool TraditionalRenderPass::_InitTextureAndSampler() {
+bool TraditionalRenderPass::_InitTextureAndSampler(nvrhi::ICommandList* initCL, engine::CommonRenderPasses& commonPasses) {
     engine::TextureCache textureCache(GetDevice(), std::make_shared<vfs::NativeFileSystem>(), nullptr);
-    std::filesystem::path tex =
-        app::GetDirectoryWithExecutable().parent_path().parent_path() / "media/bark_willow_02_diff_1k.jpg";
-    auto loaded = textureCache.LoadTextureFromFile(tex, true, nullptr, m_CommandList);
-    m_Resources.texture = loaded->texture;
+
+    m_Resources.textureSets.resize(m_Scene.barkTextureSets.size());
+
+    for (size_t i = 0; i < m_Scene.barkTextureSets.size(); i++) {
+        std::filesystem::path texDir = g_ProjectDirectory / "media" / m_Scene.barkTextureSets[i] / "textures";
+        std::filesystem::path diffPath, normPath;
+
+        for (const auto& entry : std::filesystem::directory_iterator(texDir)) {
+            std::string filename = entry.path().filename().string();
+            if (filename.find("_diff_") != std::string::npos && entry.path().extension() == ".jpg")
+                diffPath = entry.path();
+            else if (filename.find("_nor_dx_") != std::string::npos && entry.path().extension() == ".jpg")
+                normPath = entry.path();
+        }
+
+        auto diffLoaded = textureCache.LoadTextureFromFile(diffPath, true,  &commonPasses, initCL);
+        auto normLoaded = textureCache.LoadTextureFromFile(normPath, false, &commonPasses, initCL);
+
+        m_Resources.textureSets[i].diffuse   = diffLoaded->texture;
+        m_Resources.textureSets[i].normalMap = normLoaded->texture;
+
+        if (!m_Resources.textureSets[i].diffuse || !m_Resources.textureSets[i].normalMap)
+            return false;
+    }
+
     m_Resources.sampler = GetDevice()->createSampler(
         nvrhi::SamplerDesc()
-        .setAllAddressModes(nvrhi::SamplerAddressMode::Wrap)
+            .setAllAddressModes(nvrhi::SamplerAddressMode::Wrap)
+            .setAllFilters(true)
+            .setMaxAnisotropy(8.f)
     );
-    return !!m_Resources.texture && !!m_Resources.sampler;
+
+    return !!m_Resources.sampler;
 }
 
 bool TraditionalRenderPass::_InitBindingLayoutAndSet() {
-    nvrhi::BindingSetDesc bsd;
-    bsd.bindings = {
-        nvrhi::BindingSetItem::ConstantBuffer(0, m_Resources.constantBuffer, nvrhi::BufferRange(0, Render::c_ConstantBufferSize)),
-        nvrhi::BindingSetItem::Sampler(0, m_Resources.sampler),
-        nvrhi::BindingSetItem::Texture_SRV(0, m_Resources.texture),
+    m_Resources.bindingSets.resize(m_Resources.textureSets.size());
+
+    for (size_t i = 0; i < m_Resources.textureSets.size(); i++) {
+        nvrhi::BindingSetDesc bsd;
+        bsd.bindings = {
+            nvrhi::BindingSetItem::ConstantBuffer(0, m_Resources.constantBuffer, nvrhi::BufferRange(0, Render::c_ConstantBufferSize)),
+            nvrhi::BindingSetItem::Sampler(0, m_Resources.sampler),
+            nvrhi::BindingSetItem::Texture_SRV(0, m_Resources.textureSets[i].diffuse),
+            nvrhi::BindingSetItem::Texture_SRV(1, m_Resources.textureSets[i].normalMap),
 #if PIPELINER_USE_STRUCTURED_BUFFER
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_Resources.instanceBuffer,
-            nvrhi::Format::UNKNOWN,
-            nvrhi::BufferRange(0, m_Scene.regionManager.getTotalInstanceCount() * sizeof(Render::InstanceBufferEntry))),
-        nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t)),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_Resources.instanceBuffer,
+                nvrhi::Format::UNKNOWN,
+                nvrhi::BufferRange(0, m_Scene.regionManager.getTotalInstanceCount() * sizeof(Render::InstanceBufferEntry))),
+            nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t)),
 #endif
-    };
-    if (!nvrhi::utils::CreateBindingSetAndLayout(GetDevice(), nvrhi::ShaderType::All, 0,
-            bsd, m_Resources.bindingLayout, m_Resources.bindingSet)) {
-        return false;
+        };
+
+        if (i == 0) {
+            if (!nvrhi::utils::CreateBindingSetAndLayout(GetDevice(), nvrhi::ShaderType::All, 0,
+                    bsd, m_Resources.bindingLayout, m_Resources.bindingSets[0]))
+                return false;
+        } else {
+            m_Resources.bindingSets[i] = GetDevice()->createBindingSet(bsd, m_Resources.bindingLayout);
+            if (!m_Resources.bindingSets[i]) return false;
+        }
     }
-    return !!m_Resources.bindingLayout && !!m_Resources.bindingSet;
+
+    return !!m_Resources.bindingLayout;
 }
 
 bool TraditionalRenderPass::_InitViewHandler() {

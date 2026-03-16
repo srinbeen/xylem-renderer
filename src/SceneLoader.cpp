@@ -1,5 +1,6 @@
 #include "include/SceneLoader.hpp"
 
+#include <algorithm>
 #include <fstream>
 
 #include <donut/core/json.h>
@@ -78,6 +79,18 @@ bool SceneLoader::Load(
         aNode["taperRatio"]     >> asset.generatorParams.taperRatio;
         aNode["stepRatio"]      >> asset.generatorParams.stepRatio;
         aNode["seed"]           >> asset.generatorParams.seed;
+
+        asset.barkTexture = "bark_willow_02_1k";
+        aNode["barkTexture"] >> asset.barkTexture;
+
+        // Assign texture set index — deduplicate by folder name
+        auto tsIt = std::find(out.barkTextureSets.begin(), out.barkTextureSets.end(), asset.barkTexture);
+        if (tsIt == out.barkTextureSets.end()) {
+            asset.textureSetIdx = static_cast<uint32_t>(out.barkTextureSets.size());
+            out.barkTextureSets.push_back(asset.barkTexture);
+        } else {
+            asset.textureSetIdx = static_cast<uint32_t>(std::distance(out.barkTextureSets.begin(), tsIt));
+        }
 
         asset.generatorParams.branchAngle = dm::radians(asset.generatorParams.branchAngle);
 

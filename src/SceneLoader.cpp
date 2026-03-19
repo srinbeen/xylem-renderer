@@ -1,4 +1,5 @@
 #include "include/SceneLoader.hpp"
+#include "include/Terrain.hpp"
 
 #include <algorithm>
 #include <fstream>
@@ -106,18 +107,21 @@ bool SceneLoader::Load(
     }
 
     // -------------------------------------------------------------------------
-    // Regions
+    // Regions (collect first, update after terrain generation)
     // -------------------------------------------------------------------------
     std::unordered_map<std::string, uint32_t> assetNameToIdx;
     for (uint32_t i = 0; i < out.assets.size(); i++)
         assetNameToIdx[out.assets[i].name] = i;
 
+    // Track which regions need updateRegion called
+    std::vector<size_t> regionsToUpdate;
+
     for (const auto& rNode : root["regions"]) {
-        uint32_t count = 10;
+        float    density = 0.02f;
         float    minX = 0.f, minY = 0.f, maxX = 10.f, maxY = 10.f;
         std::string key = "Region";
 
-        rNode["instanceCount"] >> count;
+        rNode["density"]       >> density;
         rNode["boundsMinX"]    >> minX;
         rNode["boundsMinY"]    >> minY;
         rNode["boundsMaxX"]    >> maxX;
@@ -125,7 +129,7 @@ bool SceneLoader::Load(
         rNode["name"]          >> key;
 
         dm::box2 bounds(dm::float2(minX, minY), dm::float2(maxX, maxY));
-        out.regionManager.addRegion(key, count, bounds);
+        out.regionManager.addRegion(key, density, bounds);
         auto& r = out.regionManager[key];
 
         if (rNode.isMember("assets") && rNode["assets"].size() > 0) {
@@ -134,8 +138,51 @@ bool SceneLoader::Load(
                 std::string n = aName.asString();
                 if (assetNameToIdx.count(n)) r.assetIndices.push_back(assetNameToIdx[n]);
             }
-            out.regionManager.updateRegion(out.regionManager.size() - 1, out.assets);
+            regionsToUpdate.push_back(out.regionManager.size() - 1);
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Terrain — generate before updating regions so trees snap to height
+    // -------------------------------------------------------------------------
+    {
+        TerrainConfig terrainConfig;
+
+        // Auto-compute terrain extent from region bounds + padding
+        float padding = 10.f;
+        float extMinX =  FLT_MAX, extMinZ =  FLT_MAX;
+        float extMaxX = -FLT_MAX, extMaxZ = -FLT_MAX;
+        for (size_t i = 0; i < out.regionManager.size(); i++) {
+            const auto& r = out.regionManager[i];
+            extMinX = std::min(extMinX, r.bounds.m_mins.x);
+            extMinZ = std::min(extMinZ, r.bounds.m_mins.y);
+            extMaxX = std::max(extMaxX, r.bounds.m_maxs.x);
+            extMaxZ = std::max(extMaxZ, r.bounds.m_maxs.y);
+        }
+        terrainConfig.worldMinX = extMinX - padding;
+        terrainConfig.worldMinZ = extMinZ - padding;
+        terrainConfig.worldMaxX = extMaxX + padding;
+        terrainConfig.worldMaxZ = extMaxZ + padding;
+
+        // Override with JSON values if present
+        if (root.isMember("terrain")) {
+            const auto& tNode = root["terrain"];
+            tNode["seed"]        >> terrainConfig.seed;
+            tNode["octaves"]     >> terrainConfig.octaves;
+            tNode["frequency"]   >> terrainConfig.frequency;
+            tNode["amplitude"]   >> terrainConfig.amplitude;
+            tNode["lacunarity"]  >> terrainConfig.lacunarity;
+            tNode["persistence"] >> terrainConfig.persistence;
+            tNode["gridSpacing"] >> terrainConfig.gridSpacing;
+        }
+
+        out.terrain = std::make_unique<Terrain>();
+        out.terrain->generate(terrainConfig);
+    }
+
+    // Now update regions with terrain height snapping
+    for (size_t idx : regionsToUpdate) {
+        out.regionManager.updateRegion(idx, out.assets, out.terrain.get());
     }
 
     return true;

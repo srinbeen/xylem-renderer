@@ -36,7 +36,7 @@ public:
 
     bool Init();
     void Animate(float seconds) override;
-    void BackBufferResizing() override { m_Resources.pipeline = nullptr; }
+    void BackBufferResizing() override { m_Resources.pipeline = nullptr; m_Resources.terrainPipeline = nullptr; }
     void Render(nvrhi::IFramebuffer* framebuffer) override;
 
     // Input overrides
@@ -78,6 +78,17 @@ private:
         nvrhi::BindingLayoutHandle             bindingLayout;
         std::vector<nvrhi::BindingSetHandle>   bindingSets;
         nvrhi::GraphicsPipelineHandle          pipeline;
+
+        // Terrain
+        nvrhi::BufferHandle                    terrainVertexBuffer;
+        nvrhi::BufferHandle                    terrainIndexBuffer;
+        uint32_t                               terrainIndexCount = 0;
+        nvrhi::ShaderHandle                    terrainVS;
+        nvrhi::ShaderHandle                    terrainPS;
+        nvrhi::InputLayoutHandle               terrainInputLayout;
+        nvrhi::GraphicsPipelineHandle          terrainPipeline;
+        nvrhi::BindingLayoutHandle             terrainBindingLayout;
+        nvrhi::BindingSetHandle                terrainBindingSet;
     };
 
     GPUResources                                       m_Resources;
@@ -106,6 +117,7 @@ private:
     bool _InitBindingLayoutAndSet();
     bool _InitViewHandler();
     bool _InitTimerQueries();
+    bool _InitTerrain(nvrhi::ICommandList* initCL);
 };
 
 } // namespace Xylem

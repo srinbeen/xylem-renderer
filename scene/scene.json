@@ -19,7 +19,7 @@
       "stepLength": 1.0, "seed": 0 }
   ],
   "regions": [
-    { "name": "Standard", "instanceCount": 15,
+    { "name": "Standard", "density": 0.067,
       "boundsMinX": -15, "boundsMinY": -15, "boundsMaxX": 0, "boundsMaxY": 0,
       "assets": ["Standard"] }
   ]

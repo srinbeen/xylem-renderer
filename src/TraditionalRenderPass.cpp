@@ -1,5 +1,6 @@
 #include "include/TraditionalRenderPass.hpp"
 #include "include/macros.h"
+#include "include/Terrain.hpp"
 
 #include <nvrhi/utils.h>
 #include <donut/app/imgui_renderer.h>
@@ -30,6 +31,7 @@ bool TraditionalRenderPass::Init() {
     if (!_InitBuffers())                     return false;
     if (!_InitTextureAndSampler(initCL, commonPasses)) return false;
     if (!_InitBindingLayoutAndSet())         return false;
+    if (!_InitTerrain(initCL))              return false;
     if (!_InitViewHandler())                 return false;
 
     initCL->close();
@@ -191,6 +193,36 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         m_CommandList->setPushConstants(&instanceOffset, sizeof(uint32_t));
 #endif
         m_CommandList->drawIndexed(cmd.drawArgs);
+    }
+
+    // --- Terrain draw ---
+    if (m_Resources.terrainIndexCount > 0) {
+        if (!m_Resources.terrainPipeline) {
+            nvrhi::GraphicsPipelineDesc terrainPso;
+            terrainPso.VS = m_Resources.terrainVS;
+            terrainPso.PS = m_Resources.terrainPS;
+            terrainPso.inputLayout = m_Resources.terrainInputLayout;
+            terrainPso.bindingLayouts = { m_Resources.terrainBindingLayout };
+            terrainPso.primType = nvrhi::PrimitiveType::TriangleList;
+#if PIPELINER_USE_REVERSE_Z
+            terrainPso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Greater);
+#else
+            terrainPso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
+#endif
+            m_Resources.terrainPipeline = GetDevice()->createGraphicsPipeline(terrainPso, fbinfo);
+        }
+
+        nvrhi::GraphicsState terrainState;
+        terrainState.pipeline   = m_Resources.terrainPipeline;
+        terrainState.framebuffer = framebuffer;
+        terrainState.viewport   = m_ViewHandler->view.GetViewportState();
+        terrainState.bindings   = { m_Resources.terrainBindingSet };
+        terrainState.vertexBuffers = { { m_Resources.terrainVertexBuffer, 0, 0 } };
+        terrainState.indexBuffer   = { m_Resources.terrainIndexBuffer, nvrhi::Format::R32_UINT, 0 };
+        m_CommandList->setGraphicsState(terrainState);
+        m_CommandList->drawIndexed(
+            nvrhi::DrawArguments()
+                .setVertexCount(m_Resources.terrainIndexCount));
     }
 
     m_CommandList->endTimerQuery(m_GpuTimers[m_NextTimerIdx]);
@@ -468,5 +500,79 @@ bool TraditionalRenderPass::_InitViewHandler() {
 bool TraditionalRenderPass::_InitTimerQueries() {
     for (uint32_t i = 0; i < m_QueuedFrames; i++)
         m_GpuTimers[i] = GetDevice()->createTimerQuery();
+    return true;
+}
+
+bool TraditionalRenderPass::_InitTerrain(nvrhi::ICommandList* initCL) {
+    if (!m_Scene.terrain) return true; // no terrain in scene, not an error
+
+    const auto& verts   = m_Scene.terrain->getVertices();
+    const auto& indices = m_Scene.terrain->getIndices();
+    if (verts.empty() || indices.empty()) return true;
+
+    m_Resources.terrainIndexCount = static_cast<uint32_t>(indices.size());
+
+    // Shaders
+    m_Resources.terrainVS = m_ShaderFactory->CreateShader("app/terrain.hlsl", "terrain_vs", nullptr, nvrhi::ShaderType::Vertex);
+    m_Resources.terrainPS = m_ShaderFactory->CreateShader("app/terrain.hlsl", "terrain_ps", nullptr, nvrhi::ShaderType::Pixel);
+    if (!m_Resources.terrainVS || !m_Resources.terrainPS) return false;
+
+    // Input layout
+    nvrhi::VertexAttributeDesc terrainAttrs[] = {
+        nvrhi::VertexAttributeDesc()
+            .setName("POSITION")
+            .setFormat(nvrhi::Format::RGB32_FLOAT)
+            .setOffset(offsetof(Scene::TerrainVertex, pos))
+            .setBufferIndex(0)
+            .setElementStride(sizeof(Scene::TerrainVertex)),
+        nvrhi::VertexAttributeDesc()
+            .setName("NORMAL")
+            .setFormat(nvrhi::Format::RGB32_FLOAT)
+            .setOffset(offsetof(Scene::TerrainVertex, normal))
+            .setBufferIndex(0)
+            .setElementStride(sizeof(Scene::TerrainVertex)),
+        nvrhi::VertexAttributeDesc()
+            .setName("UV")
+            .setFormat(nvrhi::Format::RG32_FLOAT)
+            .setOffset(offsetof(Scene::TerrainVertex, uv))
+            .setBufferIndex(0)
+            .setElementStride(sizeof(Scene::TerrainVertex)),
+    };
+    m_Resources.terrainInputLayout = GetDevice()->createInputLayout(
+        terrainAttrs, uint32_t(std::size(terrainAttrs)), m_Resources.terrainVS);
+    if (!m_Resources.terrainInputLayout) return false;
+
+    // Vertex buffer
+    nvrhi::BufferDesc vbDesc;
+    vbDesc.isVertexBuffer = true;
+    vbDesc.byteSize       = verts.size() * sizeof(Scene::TerrainVertex);
+    vbDesc.debugName      = "TerrainVB";
+    vbDesc.initialState   = nvrhi::ResourceStates::CopyDest;
+    m_Resources.terrainVertexBuffer = GetDevice()->createBuffer(vbDesc);
+    initCL->beginTrackingBufferState(m_Resources.terrainVertexBuffer, nvrhi::ResourceStates::CopyDest);
+    initCL->writeBuffer(m_Resources.terrainVertexBuffer, verts.data(), vbDesc.byteSize);
+    initCL->setPermanentBufferState(m_Resources.terrainVertexBuffer, nvrhi::ResourceStates::VertexBuffer);
+
+    // Index buffer
+    nvrhi::BufferDesc ibDesc;
+    ibDesc.isIndexBuffer = true;
+    ibDesc.byteSize      = indices.size() * sizeof(uint32_t);
+    ibDesc.debugName     = "TerrainIB";
+    ibDesc.initialState  = nvrhi::ResourceStates::CopyDest;
+    m_Resources.terrainIndexBuffer = GetDevice()->createBuffer(ibDesc);
+    initCL->beginTrackingBufferState(m_Resources.terrainIndexBuffer, nvrhi::ResourceStates::CopyDest);
+    initCL->writeBuffer(m_Resources.terrainIndexBuffer, indices.data(), ibDesc.byteSize);
+    initCL->setPermanentBufferState(m_Resources.terrainIndexBuffer, nvrhi::ResourceStates::IndexBuffer);
+
+    // Binding layout + set (only needs constant buffer)
+    nvrhi::BindingSetDesc bsd;
+    bsd.bindings = {
+        nvrhi::BindingSetItem::ConstantBuffer(0, m_Resources.constantBuffer,
+            nvrhi::BufferRange(0, Render::c_ConstantBufferSize)),
+    };
+    if (!nvrhi::utils::CreateBindingSetAndLayout(GetDevice(), nvrhi::ShaderType::All, 0,
+            bsd, m_Resources.terrainBindingLayout, m_Resources.terrainBindingSet))
+        return false;
+
     return true;
 }

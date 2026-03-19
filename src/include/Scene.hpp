@@ -1,6 +1,8 @@
 #ifndef XYLEM_SCENE_H
 #define XYLEM_SCENE_H
 
+#include <algorithm>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -10,6 +12,7 @@
 
 #include "Procgen.hpp"
 #include "Render.hpp"
+#include "Terrain.hpp"
 
 namespace Xylem::Scene {
 
@@ -38,6 +41,7 @@ struct TreeAsset {
 
 struct TreeRegion {
     std::string                              name;
+    float                                    density;
     uint32_t                                 instanceCount;
     dm::box2                                 bounds;
     std::vector<uint32_t>                    assetIndices;
@@ -45,9 +49,11 @@ struct TreeRegion {
     std::vector<dm::box3>                    instanceBbox;
     dm::box3                                 cullBox;
 
-    TreeRegion(const std::string& n, uint32_t c, const dm::box2& b)
-        : name{n}, instanceCount{c}, bounds{b}, cullBox{dm::box3::empty()}
+    TreeRegion(const std::string& n, float d, const dm::box2& b)
+        : name{n}, density{d}, bounds{b}, cullBox{dm::box3::empty()}
     {
+        float area = (b.m_maxs.x - b.m_mins.x) * (b.m_maxs.y - b.m_mins.y);
+        instanceCount = std::max(1u, static_cast<uint32_t>(std::round(density * area)));
         instanceBuffer.reserve(instanceCount);
         instanceBbox.reserve(instanceCount);
     }

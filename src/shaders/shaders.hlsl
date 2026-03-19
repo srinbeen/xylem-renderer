@@ -106,6 +106,6 @@ void main_ps(
 
 	float3 worldNormal = normalize(mul(tangentNormal, TBN));
 
-	float dif = max(dot(worldNormal, -normalize(float3(0, 0, 1))), 0);
+	float dif = max(dot(worldNormal, -normalize(float3(-1, -1, 1))), 0);
     o_color = float4(dif * t_Diffuse.Sample(s_Sampler, i_uv).rgb, 1);
 }

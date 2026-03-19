@@ -13,6 +13,7 @@
 #include "Scene.hpp"
 #include "RegionManager.hpp"
 #include "Procgen.hpp"
+#include "Terrain.hpp"
 
 namespace Xylem {
 
@@ -25,6 +26,7 @@ struct SceneData {
     std::vector<uint32_t>                                    lodSegments;
     std::vector<float>                                       lodDistances;
     std::vector<std::string>                                 barkTextureSets;
+    std::unique_ptr<Scene::Terrain>                          terrain;
 };
 
 class SceneLoader {

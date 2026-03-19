@@ -30,8 +30,8 @@ public:
 
     void clear();
     void addRegion(const TreeRegion& r);
-    void addRegion(const std::string& name, uint32_t instanceCount, const dm::box2& bounds);
-    void updateRegion(size_t idx, const std::vector<TreeAsset>& assets);
+    void addRegion(const std::string& name, float density, const dm::box2& bounds);
+    void updateRegion(size_t idx, const std::vector<TreeAsset>& assets, const Terrain* terrain = nullptr);
 };
 
 } // namespace Xylem::Scene

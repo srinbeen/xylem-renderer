@@ -110,28 +110,35 @@
       "barkTexture": "bark_willow_02_1k"
     }
   ],
+  "terrain": {
+    "seed": 42,
+    "octaves": 4,
+    "frequency": 0.05,
+    "amplitude": 8.0,
+    "gridSpacing": 0.5
+  },
   "regions": [
     {
       "name": "OakGrove",
-      "instanceCount": 20,
+      "density": 0.022,
       "boundsMinX": -40, "boundsMinY": -40, "boundsMaxX": -10, "boundsMaxY": -10,
       "assets": ["OakMature", "OakSapling"]
     },
     {
       "name": "PineStand",
-      "instanceCount": 25,
+      "density": 0.028,
       "boundsMinX": 10, "boundsMinY": -40, "boundsMaxX": 40, "boundsMaxY": -10,
       "assets": ["PineTall", "PineSmall"]
     },
     {
       "name": "WillowGlade",
-      "instanceCount": 12,
+      "density": 0.013,
       "boundsMinX": -15, "boundsMinY": 10, "boundsMaxX": 15, "boundsMaxY": 40,
       "assets": ["WillowLarge"]
     },
     {
       "name": "Undergrowth",
-      "instanceCount": 40,
+      "density": 0.025,
       "boundsMinX": -40, "boundsMinY": -10, "boundsMaxX": 40, "boundsMaxY": 10,
       "assets": ["ShrubDense", "OakSapling", "PineSmall"]
     }

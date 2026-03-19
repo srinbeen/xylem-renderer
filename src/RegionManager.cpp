@@ -1,5 +1,6 @@
 #include "include/RegionManager.hpp"
 #include "include/hash.hpp"
+#include "include/Terrain.hpp"
 
 using namespace Xylem;
 using namespace Xylem::Scene;
@@ -17,11 +18,11 @@ void RegionManager::addRegion(const TreeRegion& r) {
     m_Regions.push_back(r);
 }
 
-void RegionManager::addRegion(const std::string& name, uint32_t instanceCount, const dm::box2& bounds) {
-    addRegion(TreeRegion(name, instanceCount, bounds));
+void RegionManager::addRegion(const std::string& name, float density, const dm::box2& bounds) {
+    addRegion(TreeRegion(name, density, bounds));
 }
 
-void RegionManager::updateRegion(size_t idx, const std::vector<TreeAsset>& assets) {
+void RegionManager::updateRegion(size_t idx, const std::vector<TreeAsset>& assets, const Terrain* terrain) {
     if (idx >= m_Regions.size()) return;
     auto& region = m_Regions[idx];
 
@@ -47,9 +48,10 @@ void RegionManager::updateRegion(size_t idx, const std::vector<TreeAsset>& asset
         uint32_t assetIdx = region.assetIndices[i % region.assetIndices.size()];
         if (assetIdx >= assets.size()) continue;
 
+        float posY = terrain ? terrain->getHeightAt(posX, posZ) : 0.f;
         dm::affine3 worldMatrix = dm::rotation(dm::float3(1.f, 0.f, 0.f), -dm::PI_f/2.0f)
             * dm::rotation(dm::float3(0.f, 1.f, 0.f), rotY)
-            * dm::translation(dm::float3(posX, 0.f, posZ));
+            * dm::translation(dm::float3(posX, posY, posZ));
         dm::float3x3 normalMatrix;
         if (dm::isnear(worldMatrix.m_linear[0][0], worldMatrix.m_linear[1][1]) && 
             dm::isnear(worldMatrix.m_linear[1][1], worldMatrix.m_linear[2][2])) {

@@ -32,12 +32,13 @@ struct InstanceBufferEntry {
 struct ConstantBufferEntry {
     dm::float4x4 view;
     dm::float4x4 projection;
-    dm::float4x4 padding[2];
+    dm::float4x4 lightViewProj;
+    dm::float3   sunLightDir;
+    float        _pad0;
+    dm::float3x4 _pad1;
 };
 
-static constexpr size_t c_ConstantBufferSize =
-    sizeof(ConstantBufferEntry) +
-    (sizeof(ConstantBufferEntry) % nvrhi::c_ConstantBufferOffsetSizeAlignment);
+static constexpr size_t c_ConstantBufferSize = (sizeof(ConstantBufferEntry) + (nvrhi::c_ConstantBufferOffsetSizeAlignment - 1)) & ~(nvrhi::c_ConstantBufferOffsetSizeAlignment - 1);
 
 struct DrawCmd {
     nvrhi::BufferHandle  vertexBuffer;

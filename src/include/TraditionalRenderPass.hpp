@@ -28,6 +28,7 @@ class TraditionalRenderPass : public app::IRenderPass {
 public:
     static constexpr uint32_t m_GlobalSeed   = 0xDEADBEEF;
     static constexpr uint32_t m_QueuedFrames = 4;
+    static constexpr uint32_t m_ShadowRes = 2048;
 
     TraditionalRenderPass(app::DeviceManager* dm, UIData& ui)
         : IRenderPass{dm}, m_UI{ui} {}
@@ -36,7 +37,7 @@ public:
 
     bool Init();
     void Animate(float seconds) override;
-    void BackBufferResizing() override { m_Resources.pipeline = nullptr; m_Resources.terrainPipeline = nullptr; }
+    void BackBufferResizing() override { m_TreePass.pipeline = nullptr; m_TerrainPass.pipeline = nullptr; m_ShadowPass.treePipeline = nullptr; m_ShadowPass.terrainPipeline = nullptr; }
     void Render(nvrhi::IFramebuffer* framebuffer) override;
 
     // Input overrides
@@ -63,35 +64,62 @@ private:
         }
     };
 
-    struct GPUResources {
-        nvrhi::ShaderHandle           vertexShader;
-        nvrhi::ShaderHandle           pixelShader;
-        struct TextureSet {
-            nvrhi::TextureHandle      diffuse;
-            nvrhi::TextureHandle      normalMap;
-        };
+    struct TextureSet {
+        nvrhi::TextureHandle      diffuse;
+        nvrhi::TextureHandle      normalMap;
+    };
+
+    // Shared across all passes
+    struct SharedResources {
+        nvrhi::BufferHandle       constantBuffer;
+    };
+
+    // Main color pass — tree geometry
+    struct TreePassResources {
+        nvrhi::ShaderHandle                    vertexShader;
+        nvrhi::ShaderHandle                    pixelShader;
+        nvrhi::InputLayoutHandle               inputLayout;
+        nvrhi::BufferHandle                    instanceBuffer;
         std::vector<TextureSet>                textureSets;
         nvrhi::SamplerHandle                   sampler;
-        nvrhi::InputLayoutHandle               inputLayout;
-        nvrhi::BufferHandle                    constantBuffer;
-        nvrhi::BufferHandle                    instanceBuffer;
         nvrhi::BindingLayoutHandle             bindingLayout;
         std::vector<nvrhi::BindingSetHandle>   bindingSets;
         nvrhi::GraphicsPipelineHandle          pipeline;
-
-        // Terrain
-        nvrhi::BufferHandle                    terrainVertexBuffer;
-        nvrhi::BufferHandle                    terrainIndexBuffer;
-        uint32_t                               terrainIndexCount = 0;
-        nvrhi::ShaderHandle                    terrainVS;
-        nvrhi::ShaderHandle                    terrainPS;
-        nvrhi::InputLayoutHandle               terrainInputLayout;
-        nvrhi::GraphicsPipelineHandle          terrainPipeline;
-        nvrhi::BindingLayoutHandle             terrainBindingLayout;
-        nvrhi::BindingSetHandle                terrainBindingSet;
     };
 
-    GPUResources                                       m_Resources;
+    // Shadow depth pass
+    struct ShadowPassResources {
+        nvrhi::TextureHandle                   depthTexture;
+        nvrhi::FramebufferHandle               framebuffer;
+        nvrhi::ShaderHandle                    treeVS;
+        nvrhi::ShaderHandle                    terrainVS;
+        nvrhi::InputLayoutHandle               terrainInputLayout;
+        nvrhi::SamplerHandle                   comparisonSampler;
+        nvrhi::BufferHandle                    instanceBuffer;
+        nvrhi::BindingLayoutHandle             bindingLayout;
+        nvrhi::BindingSetHandle                bindingSet;
+        nvrhi::GraphicsPipelineHandle          treePipeline;
+        nvrhi::GraphicsPipelineHandle          terrainPipeline;
+    };
+
+    // Terrain color pass
+    struct TerrainPassResources {
+        nvrhi::ShaderHandle                    vertexShader;
+        nvrhi::ShaderHandle                    pixelShader;
+        nvrhi::InputLayoutHandle               inputLayout;
+        nvrhi::BufferHandle                    vertexBuffer;
+        nvrhi::BufferHandle                    indexBuffer;
+        uint32_t                               indexCount = 0;
+        nvrhi::BindingLayoutHandle             bindingLayout;
+        nvrhi::BindingSetHandle                bindingSet;
+        nvrhi::GraphicsPipelineHandle          pipeline;
+    };
+
+    SharedResources                                    m_Shared;
+    TreePassResources                                  m_TreePass;
+    ShadowPassResources                                m_ShadowPass;
+    TerrainPassResources                               m_TerrainPass;
+
     nvrhi::CommandListHandle                           m_CommandList;
     std::unique_ptr<ViewHandler>                       m_ViewHandler;
     std::shared_ptr<engine::ShaderFactory>             m_ShaderFactory;
@@ -110,14 +138,16 @@ private:
     std::vector<Render::DrawCmd>                       m_DrawCmds;
     std::vector<Render::InstanceBufferEntry>           m_VisibleInstanceBuffer;
 
-    bool _InitShaders();
-    bool _InitVertexAttributes();
-    bool _InitBuffers();
-    bool _InitTextureAndSampler(nvrhi::ICommandList* initCL, engine::CommonRenderPasses& commonPasses);
-    bool _InitBindingLayoutAndSet();
+    // Shadow pass draw data (extended frustum culled, lowest LOD)
+    std::vector<Render::DrawCmd>                       m_ShadowDrawCmds;
+    std::vector<Render::InstanceBufferEntry>           m_ShadowInstanceBuffer;
+
+    bool _InitShared();
+    bool _InitTreePass(nvrhi::ICommandList* initCL, engine::CommonRenderPasses& commonPasses);
+    bool _InitShadowPass();
+    bool _InitTerrainPass(nvrhi::ICommandList* initCL);
     bool _InitViewHandler();
     bool _InitTimerQueries();
-    bool _InitTerrain(nvrhi::ICommandList* initCL);
 };
 
 } // namespace Xylem

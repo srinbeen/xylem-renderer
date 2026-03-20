@@ -6,8 +6,10 @@ cbuffer CB : register(b0)
 {
     float4x4 view;
     float4x4 projection;
-
-	float4x4 padding[2];
+    float4x4 lightViewProj;
+    float3   sunLightDir;
+    float    _pad0;
+    float3x4 _pad1;
 };
 
 #if PIPELINER_USE_STRUCTURED_BUFFER
@@ -44,7 +46,8 @@ void main_vs(
 	out float3 	o_normal 	: NORMAL,
 	out float3 	o_tangent 	: TANGENT,
 	out float3 	o_bitangent : BITANGENT,
-	out float2 	o_uv 		: UV
+	out float2 	o_uv 		: UV,
+	out float3 	o_worldPos 	: WORLDPOS
 )
 {
 
@@ -71,20 +74,21 @@ void main_vs(
 	);
 #endif
 
-	o_pos = mul(
-		mul(float4(i_pos, 1), model),
-		viewProj
-	);
-	o_normal    = normalize(mul(i_normal, normalMat));
-	o_tangent   = normalize(mul(i_tangent, normalMat));
-	o_bitangent = normalize(mul(i_bitangent, normalMat));
-	o_uv = i_uv;
+	float4 worldPos4 = mul(float4(i_pos, 1), model);
+	o_pos 			 = mul(worldPos4, viewProj);
+	o_worldPos  	 = worldPos4.xyz;
+	o_normal    	 = normalize(mul(i_normal, normalMat));
+	o_tangent   	 = normalize(mul(i_tangent, normalMat));
+	o_bitangent 	 = normalize(mul(i_bitangent, normalMat));
+	o_uv 			 = i_uv;
 }
 
 
-Texture2D t_Diffuse   : register(t0);
-Texture2D t_NormalMap : register(t1);
+Texture2D t_Diffuse    : register(t0);
+Texture2D t_NormalMap  : register(t1);
+Texture2D t_ShadowMap  : register(t2);
 SamplerState s_Sampler : register(s0);
+SamplerComparisonState s_ShadowSampler : register(s1);
 
 void main_ps(
 	in float4 	i_pos 		: SV_Position,
@@ -92,6 +96,7 @@ void main_ps(
 	in float3 	i_tangent 	: TANGENT,
 	in float3 	i_bitangent : BITANGENT,
 	in float2 	i_uv 		: UV,
+	in float3 	i_worldPos 	: WORLDPOS,
 
 	out float4 o_color : SV_Target0
 )
@@ -105,7 +110,18 @@ void main_ps(
 	float3 tangentNormal = normalize(t_NormalMap.Sample(s_Sampler, i_uv).rgb * 2.0 - 1.0);
 
 	float3 worldNormal = normalize(mul(tangentNormal, TBN));
+	// float3 worldNormal = N;
 
-	float dif = max(dot(worldNormal, -normalize(float3(-1, -1, 1))), 0);
-    o_color = float4(dif * t_Diffuse.Sample(s_Sampler, i_uv).rgb, 1);
+	float3 lightDir = -normalize(sunLightDir);
+	float dif = max(dot(worldNormal, lightDir), 0);
+
+	// Shadow lookup
+	float4 shadowClip = mul(float4(i_worldPos, 1), lightViewProj);
+	float3 shadowNDC  = shadowClip.xyz / shadowClip.w;
+	float2 shadowUV   = shadowNDC.xy * float2(0.5, -0.5) + 0.5;
+	float  shadow     = t_ShadowMap.SampleCmpLevelZero(s_ShadowSampler, shadowUV, shadowNDC.z);
+
+	float ambient  = 0.15;
+	float lighting = ambient + (1.0 - ambient) * dif * shadow;
+    o_color = float4(lighting * t_Diffuse.Sample(s_Sampler, i_uv).rgb, 1);
 }

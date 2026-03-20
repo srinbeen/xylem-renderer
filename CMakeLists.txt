@@ -47,7 +47,7 @@ add_subdirectory(Donut)
 set(source_folder src/)
 
 include(donut/compileshaders.cmake)
-file(GLOB shaders "${source_folder}/*.hlsl")
+file(GLOB shaders "${source_folder}/shaders/*.hlsl")
 file(GLOB sources "${source_folder}/*.cpp")
 
 donut_compile_shaders_all_platforms(

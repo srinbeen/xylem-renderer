@@ -10,6 +10,9 @@
 #include <donut/core/math/math.h>
 #include <donut/core/json.h>
 
+using namespace donut::math;
+#include <donut/shaders/sky_cb.h>
+
 #include <filesystem>
 
 using namespace Xylem;
@@ -30,6 +33,7 @@ bool TraditionalRenderPass::Init() {
     if (!_InitShadowPass())                            return false;
     if (!_InitTreePass(initCL, commonPasses))          return false;
     if (!_InitTerrainPass(initCL))                     return false;
+    if (!_InitSkyPass())                               return false;
     if (!_InitViewHandler())                           return false;
 
     initCL->close();
@@ -142,6 +146,60 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     constants.lightViewProj = lightViewProj;
     constants.sunLightDir   = sunDir;
     m_CommandList->writeBuffer(m_Shared.constantBuffer, &constants, Render::c_ConstantBufferSize);
+
+    // --- Sky pass (fullscreen procedural sky) ---
+    {
+        if (!m_SkyPass.pipeline) {
+            nvrhi::GraphicsPipelineDesc pso;
+            pso.VS             = m_SkyPass.vertexShader;
+            pso.PS             = m_SkyPass.pixelShader;
+            pso.bindingLayouts = { m_SkyPass.bindingLayout };
+            pso.primType       = nvrhi::PrimitiveType::TriangleStrip;
+            pso.renderState.rasterState.setCullNone();
+            pso.renderState.depthStencilState
+                .enableDepthTest()
+                .disableDepthWrite()
+                .disableStencil()
+#if PIPELINER_USE_REVERSE_Z
+                .setDepthFunc(nvrhi::ComparisonFunc::GreaterOrEqual);
+#else
+                .setDepthFunc(nvrhi::ComparisonFunc::LessOrEqual);
+#endif
+            m_SkyPass.pipeline = GetDevice()->createGraphicsPipeline(pso, fbinfo);
+        }
+
+        dm::affine3 viewToWorld = dm::affine3(m_ViewHandler->view.GetInverseViewMatrix());
+        viewToWorld.m_translation = 0.f;
+        dm::float4x4 clipToTranslatedWorld =
+            m_ViewHandler->view.GetInverseProjectionMatrix(true) * dm::affineToHomogeneous(viewToWorld);
+
+        SkyConstants skyConstants{};
+        skyConstants.matClipToTranslatedWorld = clipToTranslatedWorld;
+
+        // Fill procedural sky parameters
+        auto& p         = skyConstants.params;
+        p.directionToLight  = dm::normalize(-sunDir);
+        p.angularSizeOfLight = dm::radians(1.0f);
+        p.lightColor        = dm::float3(100.f, 98.f, 90.f);
+        p.glowSize          = dm::radians(5.f);
+        p.skyColor          = dm::float3(0.017f, 0.037f, 0.065f);
+        p.glowIntensity     = 0.1f;
+        p.horizonColor      = dm::float3(0.050f, 0.070f, 0.092f);
+        p.horizonSize       = dm::radians(30.f);
+        p.groundColor       = dm::float3(0.062f, 0.059f, 0.055f);
+        p.glowSharpness     = 4.f;
+        p.directionUp       = dm::float3(0.f, 1.f, 0.f);
+
+        m_CommandList->writeBuffer(m_SkyPass.constantBuffer, &skyConstants, sizeof(skyConstants));
+
+        nvrhi::GraphicsState skyState;
+        skyState.pipeline    = m_SkyPass.pipeline;
+        skyState.framebuffer = framebuffer;
+        skyState.viewport    = m_ViewHandler->view.GetViewportState();
+        skyState.bindings    = { m_SkyPass.bindingSet };
+        m_CommandList->setGraphicsState(skyState);
+        m_CommandList->draw(nvrhi::DrawArguments().setVertexCount(4).setInstanceCount(1));
+    }
 
     // --- Shadow pass: draw ALL instances (lowest LOD, no culling) ---
     {
@@ -822,6 +880,31 @@ bool TraditionalRenderPass::_InitTerrainPass(nvrhi::ICommandList* initCL) {
     };
     if (!nvrhi::utils::CreateBindingSetAndLayout(GetDevice(), nvrhi::ShaderType::All, 0,
             bsd, m_TerrainPass.bindingLayout, m_TerrainPass.bindingSet))
+        return false;
+
+    return true;
+}
+
+bool TraditionalRenderPass::_InitSkyPass() {
+    m_SkyPass.vertexShader = m_ShaderFactory->CreateShader("app/sky.hlsl", "sky_vs", nullptr, nvrhi::ShaderType::Vertex);
+    m_SkyPass.pixelShader  = m_ShaderFactory->CreateShader("app/sky.hlsl", "sky_ps", nullptr, nvrhi::ShaderType::Pixel);
+    if (!m_SkyPass.vertexShader || !m_SkyPass.pixelShader) return false;
+
+    nvrhi::BufferDesc cbDesc;
+    cbDesc.byteSize         = sizeof(SkyConstants);
+    cbDesc.isConstantBuffer = true;
+    cbDesc.isVolatile       = true;
+    cbDesc.maxVersions      = 16;
+    cbDesc.debugName        = "SkyConstants";
+    m_SkyPass.constantBuffer = GetDevice()->createBuffer(cbDesc);
+    if (!m_SkyPass.constantBuffer) return false;
+
+    nvrhi::BindingSetDesc bsd;
+    bsd.bindings = {
+        nvrhi::BindingSetItem::ConstantBuffer(0, m_SkyPass.constantBuffer),
+    };
+    if (!nvrhi::utils::CreateBindingSetAndLayout(GetDevice(), nvrhi::ShaderType::All, 0,
+            bsd, m_SkyPass.bindingLayout, m_SkyPass.bindingSet))
         return false;
 
     return true;

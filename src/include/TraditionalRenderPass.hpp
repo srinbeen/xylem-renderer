@@ -37,7 +37,7 @@ public:
 
     bool Init();
     void Animate(float seconds) override;
-    void BackBufferResizing() override { m_TreePass.pipeline = nullptr; m_TerrainPass.pipeline = nullptr; m_ShadowPass.treePipeline = nullptr; m_ShadowPass.terrainPipeline = nullptr; }
+    void BackBufferResizing() override { m_TreePass.pipeline = nullptr; m_TerrainPass.pipeline = nullptr; m_ShadowPass.treePipeline = nullptr; m_ShadowPass.terrainPipeline = nullptr; m_SkyPass.pipeline = nullptr; }
     void Render(nvrhi::IFramebuffer* framebuffer) override;
 
     // Input overrides
@@ -115,10 +115,21 @@ private:
         nvrhi::GraphicsPipelineHandle          pipeline;
     };
 
+    // Sky pass (fullscreen procedural sky)
+    struct SkyPassResources {
+        nvrhi::ShaderHandle                    vertexShader;
+        nvrhi::ShaderHandle                    pixelShader;
+        nvrhi::BufferHandle                    constantBuffer;
+        nvrhi::BindingLayoutHandle             bindingLayout;
+        nvrhi::BindingSetHandle                bindingSet;
+        nvrhi::GraphicsPipelineHandle          pipeline;
+    };
+
     SharedResources                                    m_Shared;
     TreePassResources                                  m_TreePass;
     ShadowPassResources                                m_ShadowPass;
     TerrainPassResources                               m_TerrainPass;
+    SkyPassResources                                   m_SkyPass;
 
     nvrhi::CommandListHandle                           m_CommandList;
     std::unique_ptr<ViewHandler>                       m_ViewHandler;
@@ -146,6 +157,7 @@ private:
     bool _InitTreePass(nvrhi::ICommandList* initCL, engine::CommonRenderPasses& commonPasses);
     bool _InitShadowPass();
     bool _InitTerrainPass(nvrhi::ICommandList* initCL);
+    bool _InitSkyPass();
     bool _InitViewHandler();
     bool _InitTimerQueries();
 };

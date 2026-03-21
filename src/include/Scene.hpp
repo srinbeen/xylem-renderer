@@ -26,7 +26,7 @@ struct TreeLODData {
     nvrhi::BufferHandle indexBuffer;
     uint32_t            indexCount;
     uint32_t            radialSegments;
-    donut::math::box3   bbox;
+    dm::box3            bbox;
 };
 
 struct TreeAsset {

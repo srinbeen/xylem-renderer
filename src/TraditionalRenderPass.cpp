@@ -23,22 +23,21 @@ bool TraditionalRenderPass::Init() {
     // opens its own temporary command list to upload placeholder textures.
     engine::CommonRenderPasses commonPasses(GetDevice(), m_ShaderFactory);
 
-    // Dedicated init command list for uploads + mipmap generation.
-    // Freed after init to release DX12 upload heap memory.
-    nvrhi::CommandListHandle initCL = GetDevice()->createCommandList();
-    initCL->open();
+    { // uses a temp CL to free upload buffer memory back to the OS
+        nvrhi::CommandListHandle initCL = GetDevice()->createCommandList();
+        initCL->open();
 
-    if (!SceneLoader::Load(g_SceneConfigDirectory, GetDevice(), initCL, m_Scene)) return false;
-    if (!_InitShared())                                return false;
-    if (!_InitShadowPass())                            return false;
-    if (!_InitTreePass(initCL, commonPasses))          return false;
-    if (!_InitTerrainPass(initCL))                     return false;
-    if (!_InitSkyPass())                               return false;
-    if (!_InitViewHandler())                           return false;
+        if (!SceneLoader::Load(g_SceneConfigDirectory, GetDevice(), initCL, m_Scene)) return false;
+        if (!_InitShared())                                return false;
+        if (!_InitShadowPass())                            return false;
+        if (!_InitTreePass(initCL, commonPasses))          return false;
+        if (!_InitTerrainPass(initCL))                     return false;
+        if (!_InitSkyPass())                               return false;
+        if (!_InitViewHandler())                           return false;
 
-    initCL->close();
-    GetDevice()->executeCommandList(initCL);
-    // initCL goes out of scope — upload buffers released
+        initCL->close();
+        GetDevice()->executeCommandList(initCL);
+    }
 
     // Persistent render command list for per-frame drawing
     m_CommandList = GetDevice()->createCommandList();
@@ -80,22 +79,30 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         psoDesc.inputLayout  = m_TreePass.inputLayout;
         psoDesc.bindingLayouts = { m_TreePass.bindingLayout };
         psoDesc.primType     = nvrhi::PrimitiveType::TriangleList;
-#if PIPELINER_USE_REVERSE_Z
+    #if PIPELINER_USE_REVERSE_Z
         psoDesc.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Greater);
-#else
+    #else
         psoDesc.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
-#endif
+    #endif
         m_TreePass.pipeline = GetDevice()->createGraphicsPipeline(psoDesc, fbinfo);
 
         m_ViewHandler->view.SetViewport({ float(fbinfo.width), float(fbinfo.height) });
-#if PIPELINER_USE_REVERSE_Z
         m_ViewHandler->view.SetProjectionMatrix(
-            dm::perspProjD3DStyleReverse(dm::radians(60.f), float(fbinfo.width)/float(fbinfo.height), 0.1f));
-#else
-        m_ViewHandler->view.SetProjectionMatrix(
-            dm::perspProjD3DStyle(dm::radians(60.f), float(fbinfo.width)/float(fbinfo.height), 0.1f,
-                std::numeric_limits<float>::max()));
-#endif
+    #if PIPELINER_USE_REVERSE_Z
+            dm::perspProjD3DStyleReverse(
+                dm::radians(60.f), 
+                float(fbinfo.width)/float(fbinfo.height), 
+                0.1f
+            )
+    #else
+            dm::perspProjD3DStyle(
+                dm::radians(60.f), 
+                float(fbinfo.width)/float(fbinfo.height), 
+                0.1f,
+                std::numeric_limits<float>::max()
+            )
+    #endif
+        );
     }
 
     m_CommandList->open();
@@ -106,37 +113,40 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_ViewHandler->view.UpdateCache();
 
     nvrhi::utils::ClearColorAttachment(m_CommandList, framebuffer, 0, nvrhi::Color(0.f));
-#if PIPELINER_USE_REVERSE_Z
+    #if PIPELINER_USE_REVERSE_Z
     nvrhi::utils::ClearDepthStencilAttachment(m_CommandList, framebuffer, 0.f, 0);
-#else
+    #else
     nvrhi::utils::ClearDepthStencilAttachment(m_CommandList, framebuffer,
         m_ViewHandler->view.GetViewFrustum().farPlane().distance, 0);
-#endif
+    #endif
 
     // Compute light view-projection for shadow mapping
     dm::float3 sunDir = dm::normalize(dm::float3(-1.f, -1.f, 0.5f));
 
+    // TODO: can be run once in init and updates
     dm::box3 sceneBbox = dm::box3::empty();
     for (uint32_t ri = 0; ri < m_Scene.regionManager.size(); ri++)
         sceneBbox |= m_Scene.regionManager[ri].cullBox;
     if (m_Scene.terrain)
         sceneBbox |= m_Scene.terrain->getBbox();
 
-    // Build light view following Donut's PlanarShadowMap pattern
+    
     dm::affine3 lightToWorld = dm::lookatZ(sunDir);
+    // make it left-handed
     lightToWorld = dm::scaling(dm::float3(1.f, 1.f, -1.f)) * lightToWorld;
     dm::affine3 worldToLight = dm::inverse(lightToWorld);
 
     dm::box3 boundsInLight = sceneBbox * worldToLight;
     // Make shadow texels square
-    float maxXY = std::max(boundsInLight.diagonal().x, boundsInLight.diagonal().y);
+    float maxXY = dm::max(boundsInLight.diagonal().x, boundsInLight.diagonal().y);
+    // grows from center, apply half the difference of the square box
     dm::float3 grow = 0.5f * (dm::float3(maxXY, maxXY, boundsInLight.diagonal().z) - boundsInLight.diagonal());
     boundsInLight = boundsInLight.grow(grow);
 
     dm::float4x4 lightProj = dm::orthoProjD3DStyle(
         boundsInLight.m_mins.x, boundsInLight.m_maxs.x,
         boundsInLight.m_mins.y, boundsInLight.m_maxs.y,
-        -boundsInLight.m_maxs.z, -boundsInLight.m_mins.z);
+        boundsInLight.m_mins.z, boundsInLight.m_maxs.z);
 
     dm::float4x4 lightViewProj = dm::affineToHomogeneous(worldToLight) * lightProj;
 
@@ -160,11 +170,11 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
                 .enableDepthTest()
                 .disableDepthWrite()
                 .disableStencil()
-#if PIPELINER_USE_REVERSE_Z
+        #if PIPELINER_USE_REVERSE_Z
                 .setDepthFunc(nvrhi::ComparisonFunc::GreaterOrEqual);
-#else
+        #else
                 .setDepthFunc(nvrhi::ComparisonFunc::LessOrEqual);
-#endif
+        #endif
             m_SkyPass.pipeline = GetDevice()->createGraphicsPipeline(pso, fbinfo);
         }
 
@@ -177,6 +187,7 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         skyConstants.matClipToTranslatedWorld = clipToTranslatedWorld;
 
         // Fill procedural sky parameters
+        // TODO: These are constants that don't need to be rewritten
         auto& p         = skyConstants.params;
         p.directionToLight  = dm::normalize(-sunDir);
         p.angularSizeOfLight = dm::radians(1.0f);
@@ -198,12 +209,12 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         skyState.viewport    = m_ViewHandler->view.GetViewportState();
         skyState.bindings    = { m_SkyPass.bindingSet };
         m_CommandList->setGraphicsState(skyState);
-        m_CommandList->draw(nvrhi::DrawArguments().setVertexCount(4).setInstanceCount(1));
+        m_CommandList->draw(nvrhi::DrawArguments().setVertexCount(4));
     }
 
     // --- Shadow pass: draw ALL instances (lowest LOD, no culling) ---
     {
-        uint32_t shadowLod = static_cast<uint32_t>(m_Scene.lodSegments.size() - 1);
+        uint32_t lodIndex = static_cast<uint32_t>(m_Scene.lodSegments.size() - 1);
         m_ShadowDrawCmds.clear();
         std::vector<uint32_t> shadowCounts(m_Scene.assets.size(), 0);
 
@@ -221,7 +232,7 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         uint32_t shadowOffset = 0;
         for (uint32_t ai = 0; ai < shadowCounts.size(); ai++) {
             if (shadowCounts[ai] == 0) continue;
-            const auto& lod = m_Scene.assets[ai].lods[shadowLod];
+            const auto& lod = m_Scene.assets[ai].lods[lodIndex];
             m_ShadowDrawCmds.push_back({ lod.vertexBuffer, lod.indexBuffer,
                 nvrhi::DrawArguments()
                     .setVertexCount(lod.indexCount)
@@ -340,28 +351,28 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         for (const auto& cmd : m_ShadowDrawCmds) {
             shadowState.bindings = { m_ShadowPass.bindingSet };
             shadowState.vertexBuffers = {
-#if PIPELINER_USE_INTERLEAVED_VERTEX_ATTRIBUTES
+    #if PIPELINER_USE_INTERLEAVED_VERTEX_ATTRIBUTES
                 { cmd.vertexBuffer, 0, 0 },
-#if !PIPELINER_USE_STRUCTURED_BUFFER
+        #if !PIPELINER_USE_STRUCTURED_BUFFER
                 { m_ShadowPass.instanceBuffer, 1, 0 },
-#endif
-#else
+        #endif
+    #else
                 { cmd.vertexBuffer, 0, offsetof(ProcGen::TreeVertex, pos) },
                 { cmd.vertexBuffer, 1, offsetof(ProcGen::TreeVertex, normal) },
                 { cmd.vertexBuffer, 2, offsetof(ProcGen::TreeVertex, tangent) },
                 { cmd.vertexBuffer, 3, offsetof(ProcGen::TreeVertex, bitangent) },
                 { cmd.vertexBuffer, 4, offsetof(ProcGen::TreeVertex, uv) },
-#if !PIPELINER_USE_STRUCTURED_BUFFER
+        #if !PIPELINER_USE_STRUCTURED_BUFFER
                 { m_ShadowPass.instanceBuffer, 5, offsetof(Render::InstanceBufferEntry, model) },
                 { m_ShadowPass.instanceBuffer, 6, offsetof(Render::InstanceBufferEntry, normal) },
-#endif
-#endif
+        #endif
+    #endif
             };
             shadowState.indexBuffer = { cmd.indexBuffer, nvrhi::Format::R32_UINT, 0 };
             m_CommandList->setGraphicsState(shadowState);
-#if PIPELINER_USE_STRUCTURED_BUFFER
+    #if PIPELINER_USE_STRUCTURED_BUFFER
             m_CommandList->setPushConstants(&instanceOffset, sizeof(uint32_t));
-#endif
+    #endif
             m_CommandList->drawIndexed(cmd.drawArgs);
         }
 
@@ -723,18 +734,17 @@ bool TraditionalRenderPass::_InitTimerQueries() {
 }
 
 bool TraditionalRenderPass::_InitShadowPass() {
-    // Depth texture
-    nvrhi::TextureDesc texDesc;
-    texDesc.width            = m_ShadowRes;
-    texDesc.height           = m_ShadowRes;
-    texDesc.format           = nvrhi::Format::D32;
-    texDesc.isRenderTarget   = true;
-    texDesc.useClearValue    = true;
-    texDesc.clearValue       = nvrhi::Color(1.f);
-    texDesc.initialState     = nvrhi::ResourceStates::DepthWrite;
-    texDesc.keepInitialState = true;
-    texDesc.debugName        = "ShadowMap";
-    m_ShadowPass.depthTexture = GetDevice()->createTexture(texDesc);
+    m_ShadowPass.depthTexture = GetDevice()->createTexture(
+        nvrhi::TextureDesc()
+            .setWidth(m_ShadowRes).setHeight(m_ShadowRes)
+            .setFormat(nvrhi::Format::D32)
+            .setIsRenderTarget(true)
+            .setUseClearValue(true)
+            .setClearValue(nvrhi::Color(1.f))
+            .setInitialState(nvrhi::ResourceStates::DepthWrite)
+            .setKeepInitialState(true)
+            .setDebugName("ShadowMap")
+    );
     if (!m_ShadowPass.depthTexture) return false;
 
     // Framebuffer (depth only)
@@ -751,6 +761,7 @@ bool TraditionalRenderPass::_InitShadowPass() {
 
     // Terrain shadow input layout
     nvrhi::VertexAttributeDesc terrainShadowAttrs[] = {
+        #if PIPELINER_USE_INTERLEAVED_VERTEX_ATTRIBUTES
         nvrhi::VertexAttributeDesc()
             .setName("POSITION")
             .setFormat(nvrhi::Format::RGB32_FLOAT)
@@ -769,20 +780,41 @@ bool TraditionalRenderPass::_InitShadowPass() {
             .setOffset(offsetof(Scene::TerrainVertex, uv))
             .setBufferIndex(0)
             .setElementStride(sizeof(Scene::TerrainVertex)),
+        #else
+        nvrhi::VertexAttributeDesc()
+            .setName("POSITION")
+            .setFormat(nvrhi::Format::RGB32_FLOAT)
+            .setOffset(0)
+            .setBufferIndex(0)
+            .setElementStride(sizeof(Scene::TerrainVertex)),
+        nvrhi::VertexAttributeDesc()
+            .setName("NORMAL")
+            .setFormat(nvrhi::Format::RGB32_FLOAT)
+            .setOffset(0)
+            .setBufferIndex(1)
+            .setElementStride(sizeof(Scene::TerrainVertex)),
+        nvrhi::VertexAttributeDesc()
+            .setName("UV")
+            .setFormat(nvrhi::Format::RG32_FLOAT)
+            .setOffset(0)
+            .setBufferIndex(2)
+            .setElementStride(sizeof(Scene::TerrainVertex)),
+        #endif
     };
     m_ShadowPass.terrainInputLayout = GetDevice()->createInputLayout(
         terrainShadowAttrs, uint32_t(std::size(terrainShadowAttrs)), m_ShadowPass.terrainVS);
     if (!m_ShadowPass.terrainInputLayout) return false;
 
     // Comparison sampler (consumed by tree and terrain color passes for shadow sampling)
-    nvrhi::SamplerDesc samplerDesc;
-    samplerDesc.minFilter     = true;
-    samplerDesc.magFilter     = true;
-    samplerDesc.mipFilter     = false;
-    samplerDesc.reductionType = nvrhi::SamplerReductionType::Comparison;
-    samplerDesc.setAllAddressModes(nvrhi::SamplerAddressMode::Border);
-    samplerDesc.borderColor   = nvrhi::Color(1.f);
-    m_ShadowPass.comparisonSampler = GetDevice()->createSampler(samplerDesc);
+    m_ShadowPass.comparisonSampler = GetDevice()->createSampler(
+        nvrhi::SamplerDesc()
+            .setMinFilter(true)
+            .setMagFilter(true)
+            .setMipFilter(false)
+            .setReductionType(nvrhi::SamplerReductionType::Comparison)
+            .setAllAddressModes(nvrhi::SamplerAddressMode::Border)
+            .setBorderColor(nvrhi::Color(1.f))
+    );
     if (!m_ShadowPass.comparisonSampler) return false;
 
     // Instance buffer (for shadow casters)
@@ -810,7 +842,7 @@ bool TraditionalRenderPass::_InitShadowPass() {
 }
 
 bool TraditionalRenderPass::_InitTerrainPass(nvrhi::ICommandList* initCL) {
-    if (!m_Scene.terrain) return true; // no terrain in scene, not an error
+    if (!m_Scene.terrain) return true;
 
     const auto& verts   = m_Scene.terrain->getVertices();
     const auto& indices = m_Scene.terrain->getIndices();

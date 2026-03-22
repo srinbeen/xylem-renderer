@@ -1,4 +1,7 @@
 {
+  "sun": {
+    "direction": [-2, -1, 0.75]
+  },
   "camera": {
     "position": [0, 8, -40],
     "direction": [0, -0.5, 1],

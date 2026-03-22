@@ -38,6 +38,8 @@ void UIRenderer::buildUI() {
         ImGui::Separator();
         ImGui::Text("Instances  visible: %u / %u  (culled: %u)",
             m_ui.visibleInstanceCount, m_ui.totalInstanceCount, m_ui.culledInstanceCount);
+        ImGui::Text("Shadow     visible: %u / %u  (culled: %u)",
+            m_ui.shadowVisibleCount, m_ui.totalInstanceCount, m_ui.shadowCulledCount);
         ImGui::Text("Draw calls: %u", m_ui.drawCallCount);
     }
 

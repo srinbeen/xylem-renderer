@@ -56,6 +56,10 @@ private:
     struct ViewHandler {
         app::FirstPersonCamera camera;
         engine::PlanarView     view;
+        dm::affine3            worldToLight;
+        dm::box3               shadowCasterBboxLS;
+
+        void updateShadowVolume(const dm::box3& sceneBbox, dm::float3 sunDirection);
 
         uint32_t distToLOD(float value, const std::vector<float>& arr) {
             auto it = std::lower_bound(arr.begin(), arr.end(), value);
@@ -150,6 +154,7 @@ private:
     std::vector<Render::InstanceBufferEntry>           m_VisibleInstanceBuffer;
 
     // Shadow pass draw data (extended frustum culled, lowest LOD)
+    std::vector<Render::InstanceReference>             m_ShadowVisibleRefs;
     std::vector<Render::DrawCmd>                       m_ShadowDrawCmds;
     std::vector<Render::InstanceBufferEntry>           m_ShadowInstanceBuffer;
 
@@ -160,6 +165,10 @@ private:
     bool _InitSkyPass();
     bool _InitViewHandler();
     bool _InitTimerQueries();
+
+    void _RenderSkyPass(nvrhi::IFramebuffer* framebuffer);
+    void _RenderShadowPass();
+    void _RenderScenePass(nvrhi::IFramebuffer* framebuffer);
 };
 
 } // namespace Xylem

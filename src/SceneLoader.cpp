@@ -37,6 +37,15 @@ bool SceneLoader::Load(
     }
 
     // -------------------------------------------------------------------------
+    // Sun
+    // -------------------------------------------------------------------------
+    if (root.isMember("sun")) {
+        const auto& sunNode = root["sun"];
+        sunNode["direction"] >> out.sunDirection;
+    }
+    out.sunDirection = dm::normalize(out.sunDirection);
+
+    // -------------------------------------------------------------------------
     // L-Systems
     // -------------------------------------------------------------------------
     for (const auto& lsNode : root["lsystems"]) {
@@ -152,7 +161,7 @@ bool SceneLoader::Load(
         float padding = 10.f;
         float extMinX =  FLT_MAX, extMinZ =  FLT_MAX;
         float extMaxX = -FLT_MAX, extMaxZ = -FLT_MAX;
-        for (size_t i = 0; i < out.regionManager.size(); i++) {
+        for (uint32_t i = 0; i < out.regionManager.size(); i++) {
             const auto& r = out.regionManager[i];
             extMinX = std::min(extMinX, r.bounds.m_mins.x);
             extMinZ = std::min(extMinZ, r.bounds.m_mins.y);

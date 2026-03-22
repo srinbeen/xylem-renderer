@@ -42,12 +42,12 @@ void main_vs(
 	#endif
 
 	// outputs
-	out float4 	o_pos 			 : SV_Position,
-	out float4	o_lightSpace_pos : LIGHT_SPACE_POS,
-	out float3 	o_normal 		 : NORMAL,
-	out float3 	o_tangent 		 : TANGENT,
-	out float3 	o_bitangent 	 : BITANGENT,
-	out float2 	o_uv 			 : UV
+	out float4 	o_pos 		: SV_Position,
+	out float4	o_pos_LS 	: POSITION_LS,
+	out float3 	o_normal 	: NORMAL,
+	out float3 	o_tangent 	: TANGENT,
+	out float3 	o_bitangent	: BITANGENT,
+	out float2 	o_uv 		: UV
 
 )
 {
@@ -75,13 +75,13 @@ void main_vs(
 	);
 #endif
 
-	float4 worldPos  = mul(float4(i_pos, 1), model);
-	o_pos 			 = mul(worldPos, viewProj);
-	o_lightSpace_pos = mul(worldPos, lightViewProj);
-	o_normal    	 = normalize(mul(i_normal, normalMat));
-	o_tangent   	 = normalize(mul(i_tangent, normalMat));
-	o_bitangent 	 = normalize(mul(i_bitangent, normalMat));
-	o_uv 			 = i_uv;
+	float4 worldPos	= mul(float4(i_pos, 1), model);
+	o_pos 			= mul(worldPos, viewProj);
+	o_pos_LS		= mul(worldPos, lightViewProj);
+	o_normal    	= normalize(mul(i_normal, normalMat));
+	o_tangent   	= normalize(mul(i_tangent, normalMat));
+	o_bitangent 	= normalize(mul(i_bitangent, normalMat));
+	o_uv 			= i_uv;
 }
 
 
@@ -92,12 +92,12 @@ SamplerState s_Sampler : register(s0);
 SamplerComparisonState s_ShadowSampler : register(s1);
 
 void main_ps(
-	in float4 	i_pos 			 : SV_Position,
-	in float4	i_lightSpace_pos : LIGHT_SPACE_POS,
-	in float3 	i_normal 		 : NORMAL,
-	in float3 	i_tangent 		 : TANGENT,
-	in float3 	i_bitangent 	 : BITANGENT,
-	in float2 	i_uv 			 : UV,
+	in float4 	i_pos 		: SV_Position,
+	in float4	i_pos_LS 	: POSITION_LS,
+	in float3 	i_normal 	: NORMAL,
+	in float3 	i_tangent 	: TANGENT,
+	in float3 	i_bitangent	: BITANGENT,
+	in float2 	i_uv 		: UV,
 
 	out float4 o_color : SV_Target0
 )
@@ -114,8 +114,8 @@ void main_ps(
 	float3 lightDir = -normalize(sunLightDir);
 	float diffuse = max(dot(worldNormal, lightDir), 0);
 
-	float2 shadowUV    = i_lightSpace_pos.xy * float2(0.5, -0.5) + 0.5;
-	float  notInShadow = t_ShadowMap.SampleCmpLevelZero(s_ShadowSampler, shadowUV, i_lightSpace_pos.z);
+	float2 shadowUV    = i_pos_LS.xy * float2(0.5, -0.5) + 0.5;
+	float  notInShadow = t_ShadowMap.SampleCmpLevelZero(s_ShadowSampler, shadowUV, i_pos_LS.z);
 
 	float ambient  = 0.15;
 	float lighting = ambient + (1.0 - ambient) * diffuse * notInShadow;

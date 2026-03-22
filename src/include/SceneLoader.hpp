@@ -27,6 +27,7 @@ struct SceneData {
     std::vector<float>                                       lodDistances;
     std::vector<std::string>                                 barkTextureSets;
     std::unique_ptr<Scene::Terrain>                          terrain;
+    dm::float3                                               sunDirection;
 };
 
 class SceneLoader {

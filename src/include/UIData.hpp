@@ -14,6 +14,8 @@ struct UIData {
     uint32_t drawCallCount        = 0;
     uint32_t totalInstanceCount   = 0;
     uint32_t culledInstanceCount  = 0;
+    uint32_t shadowVisibleCount   = 0;
+    uint32_t shadowCulledCount    = 0;
 };
 
 } // namespace Xylem

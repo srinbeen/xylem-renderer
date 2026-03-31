@@ -47,6 +47,12 @@ struct DrawCmd {
     uint32_t             textureSetIdx;
 };
 
+struct ShadowDrawCmd {
+    nvrhi::BufferHandle  vertexBuffer;
+    nvrhi::BufferHandle  indexBuffer;
+    nvrhi::DrawArguments drawArgs;
+};
+
 struct InstanceReference {
     uint32_t regionIdx;
     uint32_t instanceIdx;

@@ -1,7 +1,10 @@
 #include "include/TraditionalRenderPass.hpp"
+#include "include/Globals.hpp"
+#include "include/SceneLoader.hpp"
 #include "include/UIRenderer.hpp"
 
 using namespace Xylem;
+
 
 std::shared_ptr<engine::ShaderFactory> createShaderFactory(app::DeviceManager* deviceManager) {
     std::filesystem::path fwShaderPath =
@@ -47,13 +50,17 @@ int main(int __argc, const char** __argv)
 
     {
         UIData uiData;
-        TraditionalRenderPass renderPass(deviceManager, uiData);
+        SceneRegistry registry;
+        if (!SceneLoader::Load(g_SceneConfigDirectory, registry)) 
+            log::error("Error in scene loading");
+
+        TraditionalRenderPass renderPass(deviceManager, registry, uiData);
 
         auto shaderFactory = createShaderFactory(deviceManager);
         renderPass.SetShaderFactory(shaderFactory);
 
         if (renderPass.Init()) {
-            UIRenderer uiPass(deviceManager, &renderPass, uiData);
+            UIRenderer uiPass(deviceManager, &registry, uiData);
             uiPass.Init(shaderFactory);
 
             deviceManager->AddRenderPassToBack(&renderPass);

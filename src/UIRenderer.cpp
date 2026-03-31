@@ -1,5 +1,4 @@
 #include "include/UIRenderer.hpp"
-#include "include/TraditionalRenderPass.hpp"
 
 using namespace Xylem;
 
@@ -49,13 +48,13 @@ void UIRenderer::buildUI() {
     // SCENE SUMMARY
     // =====================================================================
     if (ImGui::CollapsingHeader("Scene Summary", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::Text("Loaded L-Systems: %zu", m_pass->GetLSystems().size());
-        ImGui::Text("Loaded Tree Assets: %zu", m_pass->GetTreeAssets().size());
-        ImGui::Text("Loaded Regions: %zu", m_pass->GetRegions().size());
+        ImGui::Text("Loaded L-Systems: %zu", m_Registry->getLSystems().size());
+        ImGui::Text("Loaded Tree Assets: %zu", m_Registry->getAssets().size());
+        ImGui::Text("Loaded Regions: %zu", m_Registry->getRegions().size());
     }
 
     ImGui::Spacing();
     if (ImGui::Button("Hide UI  [ESC]")) m_ui.ShowUI = false;
-    
+
     ImGui::End();
 }

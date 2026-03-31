@@ -21,6 +21,15 @@ struct LSystemInstance {
     ProcGen::lgen_t gen;
 };
 
+// CPU-only LOD data — no GPU handles. Used by SceneRegistry.
+struct TreeLODDef {
+    std::vector<ProcGen::TreeVertex> vertices;
+    std::vector<uint32_t>            indices;
+    dm::box3                         bbox;
+    uint32_t                         radialSegments = 0;
+};
+
+// GPU-side LOD data — owned by render passes.
 struct TreeLODData {
     nvrhi::BufferHandle vertexBuffer;
     nvrhi::BufferHandle indexBuffer;

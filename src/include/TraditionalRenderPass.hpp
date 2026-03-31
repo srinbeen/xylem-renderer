@@ -11,16 +11,13 @@
 #include <donut/engine/ShaderFactory.h>
 #include <donut/engine/CommonRenderPasses.h>
 
-#include "SceneLoader.hpp"
+#include <unordered_map>
+
+#include "SceneRegistry.hpp"
 #include "Render.hpp"
 #include "UIData.hpp"
 
 namespace Xylem {
-
-static const char* g_WindowTitle = "Xylem";
-static const std::filesystem::path g_BinDirectory = donut::app::GetDirectoryWithExecutable().parent_path();
-static const std::filesystem::path g_ProjectDirectory = g_BinDirectory.parent_path();
-static const std::filesystem::path g_SceneConfigDirectory = g_ProjectDirectory / "scene/new_scene.json";
 
 using namespace donut;
 
@@ -30,8 +27,8 @@ public:
     static constexpr uint32_t m_QueuedFrames = 4;
     static constexpr uint32_t m_ShadowRes = 2048;
 
-    TraditionalRenderPass(app::DeviceManager* dm, UIData& ui)
-        : IRenderPass{dm}, m_UI{ui} {}
+    TraditionalRenderPass(app::DeviceManager* dm, SceneRegistry& registry, UIData& ui)
+        : IRenderPass{dm}, m_Registry{registry}, m_UI{ui} {}
 
     void SetShaderFactory(std::shared_ptr<engine::ShaderFactory> sf) { m_ShaderFactory = std::move(sf); }
 
@@ -48,9 +45,9 @@ public:
     bool JoystickButtonUpdate(int button, bool pressed) override;
     bool JoystickAxisUpdate(int axis, float value) override;
 
-    const std::map<std::string, std::unique_ptr<ProcGen::LSystem>>& GetLSystems() const { return m_Scene.lsystems; }
-    const std::vector<Scene::TreeAsset>& GetTreeAssets() const { return m_Scene.assets; }
-    const Scene::RegionManager& GetRegions() const { return m_Scene.regionManager; }
+    // Hot-reload callbacks
+    void onAssetsDirty(const std::vector<size_t>& dirtyAssetIndices);
+    void onRegionsDirty(const std::vector<size_t>& dirtyRegionIndices);
 
 private:
     struct ViewHandler {
@@ -71,6 +68,12 @@ private:
     struct TextureSet {
         nvrhi::TextureHandle      diffuse;
         nvrhi::TextureHandle      normalMap;
+    };
+
+    // GPU-side per-asset data (VB/IB per LOD).
+    struct GPUTreeAsset {
+        std::vector<Scene::TreeLODData> lods;
+        uint32_t                        textureSetIdx;
     };
 
     // Shared across all passes
@@ -143,8 +146,11 @@ private:
     int                                                m_NextTimerIdx = 0;
 
     UIData&                                            m_UI;
+    SceneRegistry&                                     m_Registry;
 
-    SceneData                                          m_Scene;
+    // GPU-side asset tracking
+    std::vector<GPUTreeAsset>                          m_GPUAssets;
+    std::unordered_map<uint32_t, size_t>               m_AssetIdToGPUIndex;
 
     // populated during render loop
     std::vector<Render::InstanceReference>             m_VisibleInstanceReferences;
@@ -155,7 +161,7 @@ private:
 
     // Shadow pass draw data (extended frustum culled, lowest LOD)
     std::vector<Render::InstanceReference>             m_ShadowVisibleRefs;
-    std::vector<Render::DrawCmd>                       m_ShadowDrawCmds;
+    std::vector<Render::ShadowDrawCmd>                 m_ShadowDrawCmds;
     std::vector<Render::InstanceBufferEntry>           m_ShadowInstanceBuffer;
 
     bool _InitShared();
@@ -165,6 +171,12 @@ private:
     bool _InitSkyPass();
     bool _InitViewHandler();
     bool _InitTimerQueries();
+
+    void _UploadAllAssets(nvrhi::IDevice* device, nvrhi::ICommandList* commandList);
+    void _UploadAsset(const TreeAssetDef& assetDef, GPUTreeAsset& gpuAsset,
+                      nvrhi::IDevice* device, nvrhi::ICommandList* commandList);
+    void _RebuildInstanceBuffers();
+    void _RebuildBindingSets();
 
     void _RenderSkyPass(nvrhi::IFramebuffer* framebuffer);
     void _RenderShadowPass();

@@ -44,7 +44,7 @@ endif()
 # Include the Donut framework
 add_subdirectory(Donut)
 
-set(source_folder src/)
+set(source_folder src)
 
 include(donut/compileshaders.cmake)
 file(GLOB shaders "${source_folder}/shaders/*.hlsl")

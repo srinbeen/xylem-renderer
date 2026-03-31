@@ -4,21 +4,20 @@
 #include <donut/app/imgui_renderer.h>
 
 #include "UIData.hpp"
+#include "SceneRegistry.hpp"
 
 using namespace donut;
 
 namespace Xylem {
 
-class TraditionalRenderPass;
-
 class UIRenderer : public app::ImGui_Renderer {
 private:
-    TraditionalRenderPass* m_pass;
-    UIData&                m_ui;
+    const SceneRegistry* m_Registry;
+    UIData&              m_ui;
 
 public:
-    UIRenderer(app::DeviceManager* dm, TraditionalRenderPass* pass, UIData& ui)
-        : ImGui_Renderer(dm), m_pass(pass), m_ui(ui)
+    UIRenderer(app::DeviceManager* dm, const SceneRegistry* registry, UIData& ui)
+        : ImGui_Renderer(dm), m_Registry(registry), m_ui(ui)
     {
         ImGui::GetIO().IniFilename = nullptr;
     }

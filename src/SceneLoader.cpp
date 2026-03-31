@@ -11,39 +11,58 @@ using namespace Xylem::Scene;
 using namespace Xylem::ProcGen;
 
 // static
-bool SceneLoader::Load(
-    const std::filesystem::path& path,
-    nvrhi::IDevice*              device,
-    nvrhi::ICommandList*         commandList,
-    SceneData&                   out)
-{
+bool SceneLoader::Load(const std::filesystem::path& path, SceneRegistry& registry) {
     const Json::Value root = ParseFile(path);
 
     // -------------------------------------------------------------------------
     // LODs
     // -------------------------------------------------------------------------
-    if (root.isMember("lods") && root["lods"].isArray()) {
-        for (const auto& lodNode : root["lods"]) {
-            uint32_t segments = 8;
-            float    distance = 100.f;
-            lodNode["segments"] >> segments;
-            lodNode["distance"] >> distance;
-            out.lodSegments.push_back(segments);
-            out.lodDistances.push_back(distance);
+    {
+        std::vector<uint32_t> lodSegments;
+        std::vector<float>    lodDistances;
+        if (root.isMember("lods") && root["lods"].isArray()) {
+            for (const auto& lodNode : root["lods"]) {
+                uint32_t segments = 8;
+                float    distance = 100.f;
+                lodNode["segments"] >> segments;
+                lodNode["distance"] >> distance;
+                lodSegments.push_back(segments);
+                lodDistances.push_back(distance);
+            }
+        } else {
+            lodSegments  = { 16, 8, 4 };
+            lodDistances = { 16.0f, 64.0f, 256.0f };
         }
-    } else {
-        out.lodSegments  = { 16, 8, 4 };
-        out.lodDistances = { 16.0f, 64.0f, 256.0f };
+        registry.setLodConfig(std::move(lodSegments), std::move(lodDistances));
     }
 
     // -------------------------------------------------------------------------
     // Sun
     // -------------------------------------------------------------------------
-    if (root.isMember("sun")) {
-        const auto& sunNode = root["sun"];
-        sunNode["direction"] >> out.sunDirection;
+    {
+        dm::float3 sunDir = dm::float3(0.f, -1.f, 0.f);
+        if (root.isMember("sun")) {
+            const auto& sunNode = root["sun"];
+            sunNode["direction"] >> sunDir;
+        }
+        registry.setSunDirection(sunDir);
     }
-    out.sunDirection = dm::normalize(out.sunDirection);
+
+
+    // -------------------------------------------------------------------------
+    // Camera
+    // -------------------------------------------------------------------------
+    {
+        const auto& cam = root["camera"];
+
+        SceneRegistry::CameraInit cameraInit;
+
+        cam["position"] >> cameraInit.pos;
+        cam["direction"] >> cameraInit.cameraDir;
+        cam["moveSpeed"] >> cameraInit.moveSpeed;
+
+        registry.setCameraInit(cameraInit);
+    }
 
     // -------------------------------------------------------------------------
     // L-Systems
@@ -57,112 +76,104 @@ bool SceneLoader::Load(
         for (const auto& key : lsNode["rules"].getMemberNames())
             if (!key.empty()) rules[key[0]] = lsNode["rules"][key].asString();
 
-        out.lsystems.try_emplace(name, std::make_unique<LSystem>(axiom, rules));
+        registry.addLSystem(name, std::make_unique<LSystem>(axiom, rules));
     }
-    if (out.lsystems.empty()) return false;
+    if (registry.getLSystems().empty()) return false;
+
+    // -------------------------------------------------------------------------
+    // Tree Generator
+    // -------------------------------------------------------------------------
+    registry.setTreeGenerator(std::make_unique<TreeGenerator>());
 
     // -------------------------------------------------------------------------
     // Assets
     // -------------------------------------------------------------------------
-    out.treeGenerator = std::make_unique<TreeGenerator>();
+    // Keep a name→stableId map for region wiring below.
+    std::unordered_map<std::string, uint32_t> assetNameToId;
 
     for (const auto& aNode : root["assets"]) {
-        TreeAsset asset;
-        std::string lsName = out.lsystems.begin()->first;
+        std::string assetName;
+        std::string lsName = registry.getLSystems().begin()->first;
         uint32_t    gen    = 3;
 
-        aNode["name"]    >> asset.name;
-        aNode["lsystem"] >> lsName;
+        aNode["name"]       >> assetName;
+        aNode["lsystem"]    >> lsName;
         aNode["generation"] >> gen;
-        asset.lsystemInstance = { lsName, gen };
 
-        asset.generatorParams.radialSegments = 16;
-        asset.generatorParams.stepLength     = 1.0f;
-        asset.generatorParams.branchAngle    = 25.0f;
-        asset.generatorParams.taperRatio     = 0.9f;
-        asset.generatorParams.stepRatio      = 0.95f;
-        asset.generatorParams.seed           = 0;
+        TreeGenerator::Params params;
+        params.radialSegments = 16;
+        params.stepLength     = 1.0f;
+        params.branchAngle    = 25.0f;
+        params.taperRatio     = 0.9f;
+        params.stepRatio      = 0.95f;
+        params.seed           = 0;
 
-        aNode["radialSegments"] >> asset.generatorParams.radialSegments;
-        aNode["stepLength"]     >> asset.generatorParams.stepLength;
-        aNode["branchAngle"]    >> asset.generatorParams.branchAngle;
-        aNode["taperRatio"]     >> asset.generatorParams.taperRatio;
-        aNode["stepRatio"]      >> asset.generatorParams.stepRatio;
-        aNode["seed"]           >> asset.generatorParams.seed;
+        aNode["radialSegments"] >> params.radialSegments;
+        aNode["stepLength"]     >> params.stepLength;
+        aNode["branchAngle"]    >> params.branchAngle;
+        aNode["taperRatio"]     >> params.taperRatio;
+        aNode["stepRatio"]      >> params.stepRatio;
+        aNode["seed"]           >> params.seed;
 
-        asset.barkTexture = "bark_willow_02_1k";
-        aNode["barkTexture"] >> asset.barkTexture;
+        params.branchAngle = dm::radians(params.branchAngle);
 
-        // Assign texture set index — deduplicate by folder name
-        auto tsIt = std::find(out.barkTextureSets.begin(), out.barkTextureSets.end(), asset.barkTexture);
-        if (tsIt == out.barkTextureSets.end()) {
-            asset.textureSetIdx = static_cast<uint32_t>(out.barkTextureSets.size());
-            out.barkTextureSets.push_back(asset.barkTexture);
-        } else {
-            asset.textureSetIdx = static_cast<uint32_t>(std::distance(out.barkTextureSets.begin(), tsIt));
-        }
+        std::string barkTexture = "bark_willow_02_1k";
+        aNode["barkTexture"] >> barkTexture;
 
-        asset.generatorParams.branchAngle = dm::radians(asset.generatorParams.branchAngle);
-
-        auto lsIt = out.lsystems.find(lsName);
-        if (lsIt == out.lsystems.end()) continue;
-        lsIt->second->reset();
-        lsIt->second->generate(gen);
-        asset.lsystemString = lsIt->second->getCurrentString();
-
-        asset.lods.resize(out.lodSegments.size());
-        _BuildTreeAssetBuffers(asset, out.lodSegments, *out.treeGenerator, device, commandList);
-        out.assets.push_back(std::move(asset));
+        LSystemInstance lsInstance { lsName, gen };
+        uint32_t stableId = registry.addAsset(assetName, lsInstance, params, barkTexture);
+        assetNameToId[assetName] = stableId;
     }
 
     // -------------------------------------------------------------------------
-    // Regions (collect first, update after terrain generation)
+    // Regions (collect first, rebuild after terrain generation)
     // -------------------------------------------------------------------------
-    std::unordered_map<std::string, uint32_t> assetNameToIdx;
-    for (uint32_t i = 0; i < out.assets.size(); i++)
-        assetNameToIdx[out.assets[i].name] = i;
-
-    // Track which regions need updateRegion called
-    std::vector<size_t> regionsToUpdate;
+    struct PendingRegion {
+        size_t                  index;
+        std::vector<uint32_t>   assetIds;
+    };
+    std::vector<PendingRegion> pendingRegions;
 
     for (const auto& rNode : root["regions"]) {
         float    density = 0.02f;
         float    minX = 0.f, minY = 0.f, maxX = 10.f, maxY = 10.f;
         std::string key = "Region";
 
-        rNode["density"]       >> density;
-        rNode["boundsMinX"]    >> minX;
-        rNode["boundsMinY"]    >> minY;
-        rNode["boundsMaxX"]    >> maxX;
-        rNode["boundsMaxY"]    >> maxY;
-        rNode["name"]          >> key;
+        rNode["density"]    >> density;
+        rNode["boundsMinX"] >> minX;
+        rNode["boundsMinY"] >> minY;
+        rNode["boundsMaxX"] >> maxX;
+        rNode["boundsMaxY"] >> maxY;
+        rNode["name"]       >> key;
 
         dm::box2 bounds(dm::float2(minX, minY), dm::float2(maxX, maxY));
-        out.regionManager.addRegion(key, density, bounds);
-        auto& r = out.regionManager[key];
 
+        std::vector<uint32_t> regionAssetIds;
         if (rNode.isMember("assets") && rNode["assets"].size() > 0) {
-            r.assetIndices.clear();
             for (const auto& aName : rNode["assets"]) {
                 std::string n = aName.asString();
-                if (assetNameToIdx.count(n)) r.assetIndices.push_back(assetNameToIdx[n]);
+                auto it = assetNameToId.find(n);
+                if (it != assetNameToId.end())
+                    regionAssetIds.push_back(it->second);
             }
-            regionsToUpdate.push_back(out.regionManager.size() - 1);
         }
+
+        size_t regionIdx = registry.getRegions().size();
+        registry.addRegion(key, density, bounds, regionAssetIds);
+        if (!regionAssetIds.empty())
+            pendingRegions.push_back({ regionIdx, regionAssetIds });
     }
 
     // -------------------------------------------------------------------------
-    // Terrain — generate before updating regions so trees snap to height
+    // Terrain — generate before rebuilding regions so trees snap to height
     // -------------------------------------------------------------------------
     {
         TerrainConfig terrainConfig;
 
-        // Auto-compute terrain extent from region bounds + padding
         float padding = 10.f;
         float extMinX =  FLT_MAX, extMinZ =  FLT_MAX;
         float extMaxX = -FLT_MAX, extMaxZ = -FLT_MAX;
-        for (uint32_t i = 0; i < out.regionManager.size(); i++) {
-            const auto& r = out.regionManager[i];
+        for (const auto& r : registry.getRegions()) {
             extMinX = std::min(extMinX, r.bounds.m_mins.x);
             extMinZ = std::min(extMinZ, r.bounds.m_mins.y);
             extMaxX = std::max(extMaxX, r.bounds.m_maxs.x);
@@ -173,7 +184,6 @@ bool SceneLoader::Load(
         terrainConfig.worldMaxX = extMaxX + padding;
         terrainConfig.worldMaxZ = extMaxZ + padding;
 
-        // Override with JSON values if present
         if (root.isMember("terrain")) {
             const auto& tNode = root["terrain"];
             tNode["seed"]        >> terrainConfig.seed;
@@ -185,14 +195,17 @@ bool SceneLoader::Load(
             tNode["gridSpacing"] >> terrainConfig.gridSpacing;
         }
 
-        out.terrain = std::make_unique<Terrain>();
-        out.terrain->generate(terrainConfig);
+        auto terrain = std::make_unique<Terrain>();
+        terrain->generate(terrainConfig);
+        registry.setTerrain(std::move(terrain));
     }
 
-    // Now update regions with terrain height snapping
-    for (size_t idx : regionsToUpdate) {
-        out.regionManager.updateRegion(idx, out.assets, out.terrain.get());
-    }
+    // -------------------------------------------------------------------------
+    // Rebuild all CPU data (mesh generation + instance placement)
+    // -------------------------------------------------------------------------
+    registry.rebuildDirtyAssets();
+    registry.rebuildDirtyRegions();
+    registry.clearDirtyFlags();
 
     return true;
 }
@@ -205,51 +218,4 @@ Json::Value SceneLoader::ParseFile(const std::filesystem::path& path) {
     std::ifstream jsonStream(path);
     Json::parseFromStream(reader, jsonStream, &root, &errors);
     return root;
-}
-
-// static
-void SceneLoader::_BuildTreeAssetBuffers(
-    TreeAsset&                   asset,
-    const std::vector<uint32_t>& lodSegments,
-    TreeGenerator&               generator,
-    nvrhi::IDevice*              device,
-    nvrhi::ICommandList*         commandList)
-{
-    nvrhi::BufferDesc vDesc;
-    vDesc.isVertexBuffer = true;
-    vDesc.initialState   = nvrhi::ResourceStates::CopyDest;
-
-    nvrhi::BufferDesc iDesc;
-    iDesc.isIndexBuffer = true;
-    iDesc.initialState  = nvrhi::ResourceStates::CopyDest;
-
-    auto& genParams = asset.generatorParams;
-    for (size_t j = 0; j < lodSegments.size(); j++) {
-        genParams.radialSegments = lodSegments[j];
-        generator.setParams(genParams);
-
-        Buffers lod;
-        generator.generateVertexAndIndexBuffers(asset.lsystemString, lod);
-
-        auto& vBuf = asset.lods[j].vertexBuffer;
-        auto& iBuf = asset.lods[j].indexBuffer;
-
-        vDesc.debugName = "VB_" + asset.name + "_LOD" + std::to_string(j);
-        vDesc.byteSize  = lod.vertices.size() * sizeof(TreeVertex);
-        vBuf = device->createBuffer(vDesc);
-        commandList->beginTrackingBufferState(vBuf, nvrhi::ResourceStates::CopyDest);
-        commandList->writeBuffer(vBuf, lod.vertices.data(), vDesc.byteSize);
-        commandList->setPermanentBufferState(vBuf, nvrhi::ResourceStates::VertexBuffer);
-
-        iDesc.debugName = "IB_" + asset.name + "_LOD" + std::to_string(j);
-        iDesc.byteSize  = lod.indices.size() * sizeof(uint32_t);
-        iBuf = device->createBuffer(iDesc);
-        commandList->beginTrackingBufferState(iBuf, nvrhi::ResourceStates::CopyDest);
-        commandList->writeBuffer(iBuf, lod.indices.data(), iDesc.byteSize);
-        commandList->setPermanentBufferState(iBuf, nvrhi::ResourceStates::IndexBuffer);
-
-        asset.lods[j].indexCount     = static_cast<uint32_t>(lod.indices.size());
-        asset.lods[j].radialSegments = genParams.radialSegments;
-        asset.lods[j].bbox           = lod.bbox;
-    }
 }

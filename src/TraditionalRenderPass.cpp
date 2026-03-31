@@ -1,4 +1,5 @@
 #include "include/TraditionalRenderPass.hpp"
+#include "include/Globals.hpp"
 #include "include/macros.h"
 #include "include/Terrain.hpp"
 
@@ -17,7 +18,127 @@ using namespace donut::math;
 
 using namespace Xylem;
 
-// public
+// ===========================================================================
+// GPU asset upload helpers
+// ===========================================================================
+
+void TraditionalRenderPass::_UploadAsset(
+    const TreeAssetDef& assetDef,
+    GPUTreeAsset& gpuAsset,
+    nvrhi::IDevice* device,
+    nvrhi::ICommandList* commandList)
+{
+    gpuAsset.textureSetIdx = assetDef.textureSetIdx;
+    gpuAsset.lods.resize(assetDef.lods.size());
+
+    nvrhi::BufferDesc vDesc;
+    vDesc.isVertexBuffer = true;
+    vDesc.initialState   = nvrhi::ResourceStates::CopyDest;
+
+    nvrhi::BufferDesc iDesc;
+    iDesc.isIndexBuffer = true;
+    iDesc.initialState  = nvrhi::ResourceStates::CopyDest;
+
+    for (size_t j = 0; j < assetDef.lods.size(); j++) {
+        const auto& lodDef = assetDef.lods[j];
+
+        vDesc.debugName = "VB_" + assetDef.name + "_LOD" + std::to_string(j);
+        vDesc.byteSize  = lodDef.vertices.size() * sizeof(ProcGen::TreeVertex);
+        auto vBuf = device->createBuffer(vDesc);
+        commandList->beginTrackingBufferState(vBuf, nvrhi::ResourceStates::CopyDest);
+        commandList->writeBuffer(vBuf, lodDef.vertices.data(), vDesc.byteSize);
+        commandList->setPermanentBufferState(vBuf, nvrhi::ResourceStates::VertexBuffer);
+
+        iDesc.debugName = "IB_" + assetDef.name + "_LOD" + std::to_string(j);
+        iDesc.byteSize  = lodDef.indices.size() * sizeof(uint32_t);
+        auto iBuf = device->createBuffer(iDesc);
+        commandList->beginTrackingBufferState(iBuf, nvrhi::ResourceStates::CopyDest);
+        commandList->writeBuffer(iBuf, lodDef.indices.data(), iDesc.byteSize);
+        commandList->setPermanentBufferState(iBuf, nvrhi::ResourceStates::IndexBuffer);
+
+        gpuAsset.lods[j].vertexBuffer   = vBuf;
+        gpuAsset.lods[j].indexBuffer    = iBuf;
+        gpuAsset.lods[j].indexCount     = static_cast<uint32_t>(lodDef.indices.size());
+        gpuAsset.lods[j].radialSegments = lodDef.radialSegments;
+        gpuAsset.lods[j].bbox           = lodDef.bbox;
+    }
+}
+
+void TraditionalRenderPass::_UploadAllAssets(nvrhi::IDevice* device, nvrhi::ICommandList* commandList) {
+    const auto& assets = m_Registry.getAssets();
+    m_GPUAssets.resize(assets.size());
+    m_AssetIdToGPUIndex.clear();
+
+    for (size_t i = 0; i < assets.size(); i++) {
+        _UploadAsset(assets[i], m_GPUAssets[i], device, commandList);
+        m_AssetIdToGPUIndex[assets[i].id] = i;
+    }
+}
+
+void TraditionalRenderPass::_RebuildInstanceBuffers() {
+    uint32_t totalInstances = std::max<uint32_t>(1, m_Registry.totalInstanceCount());
+
+    m_TreePass.instanceBuffer = GetDevice()->createBuffer(
+        nvrhi::BufferDesc()
+            .setByteSize(totalInstances * sizeof(Render::InstanceBufferEntry))
+            .setStructStride(sizeof(Render::InstanceBufferEntry))
+            .setDebugName("TreeInstanceBuffer")
+#if XYLEM_USE_STRUCTURED_BUFFER
+            .enableAutomaticStateTracking(nvrhi::ResourceStates::ShaderResource)
+#else
+            .setIsVertexBuffer(true)
+            .enableAutomaticStateTracking(nvrhi::ResourceStates::CopyDest)
+#endif
+    );
+
+    m_ShadowPass.instanceBuffer = GetDevice()->createBuffer(
+        nvrhi::BufferDesc()
+            .setByteSize(totalInstances * sizeof(Render::InstanceBufferEntry))
+            .setStructStride(sizeof(Render::InstanceBufferEntry))
+            .setDebugName("ShadowInstanceBuffer")
+            .setIsVertexBuffer(true)
+            .enableAutomaticStateTracking(nvrhi::ResourceStates::CopyDest)
+    );
+
+    m_VisibleInstanceBuffer.resize(totalInstances);
+    m_ShadowInstanceBuffer.resize(totalInstances);
+}
+
+void TraditionalRenderPass::_RebuildBindingSets() {
+    uint32_t totalInstances = std::max<uint32_t>(1, m_Registry.totalInstanceCount());
+
+    m_TreePass.bindingSets.resize(m_TreePass.textureSets.size());
+
+    for (size_t i = 0; i < m_TreePass.textureSets.size(); i++) {
+        nvrhi::BindingSetDesc bsd;
+        bsd.bindings = {
+            nvrhi::BindingSetItem::ConstantBuffer(0, m_Shared.constantBuffer, nvrhi::BufferRange(0, Render::c_ConstantBufferSize)),
+            nvrhi::BindingSetItem::Sampler(0, m_TreePass.sampler),
+            nvrhi::BindingSetItem::Sampler(1, m_ShadowPass.comparisonSampler),
+            nvrhi::BindingSetItem::Texture_SRV(0, m_TreePass.textureSets[i].diffuse),
+            nvrhi::BindingSetItem::Texture_SRV(1, m_TreePass.textureSets[i].normalMap),
+            nvrhi::BindingSetItem::Texture_SRV(2, m_ShadowPass.depthTexture),
+#if XYLEM_USE_STRUCTURED_BUFFER
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_TreePass.instanceBuffer,
+                nvrhi::Format::UNKNOWN,
+                nvrhi::BufferRange(0, totalInstances * sizeof(Render::InstanceBufferEntry))),
+            nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t)),
+#endif
+        };
+
+        if (i == 0) {
+            nvrhi::utils::CreateBindingSetAndLayout(GetDevice(), nvrhi::ShaderType::All, 0,
+                bsd, m_TreePass.bindingLayout, m_TreePass.bindingSets[0]);
+        } else {
+            m_TreePass.bindingSets[i] = GetDevice()->createBindingSet(bsd, m_TreePass.bindingLayout);
+        }
+    }
+}
+
+// ===========================================================================
+// Init
+// ===========================================================================
+
 bool TraditionalRenderPass::Init() {
     // CommonRenderPasses must be constructed before opening initCL — its constructor
     // opens its own temporary command list to upload placeholder textures.
@@ -27,7 +148,9 @@ bool TraditionalRenderPass::Init() {
         nvrhi::CommandListHandle initCL = GetDevice()->createCommandList();
         initCL->open();
 
-        if (!SceneLoader::Load(g_SceneConfigDirectory, GetDevice(), initCL, m_Scene)) return false;
+        // Upload GPU buffers from registry CPU data
+        _UploadAllAssets(GetDevice(), initCL);
+
         if (!_InitShared())                                return false;
         if (!_InitShadowPass())                            return false;
         if (!_InitTreePass(initCL, commonPasses))          return false;
@@ -44,27 +167,99 @@ bool TraditionalRenderPass::Init() {
 
     _InitTimerQueries();
 
-    m_UI.totalInstanceCount = m_Scene.regionManager.getTotalInstanceCount();
+    uint32_t totalInstances = m_Registry.totalInstanceCount();
+    m_UI.totalInstanceCount = totalInstances;
 
-    m_VisibleInstanceReferences.reserve(m_Scene.regionManager.getTotalInstanceCount());
+    m_VisibleInstanceReferences.reserve(totalInstances);
 
-    // Initialize dynamic LOD counters
-    m_InstanceCounts.resize(m_Scene.assets.size(), std::vector<uint32_t>(m_Scene.lodSegments.size(), 0));
-    m_InstanceOffsets.assign(m_Scene.assets.size(), std::vector<uint32_t>(m_Scene.lodSegments.size(), 0));
+    size_t numAssets = m_GPUAssets.size();
+    size_t numLods   = m_Registry.getLodSegments().size();
 
-    m_VisibleInstanceBuffer.resize(m_Scene.regionManager.getTotalInstanceCount());
-    m_DrawCmds.reserve(m_Scene.assets.size() * m_Scene.lodSegments.size());
+    m_InstanceCounts.resize(numAssets, std::vector<uint32_t>(numLods, 0));
+    m_InstanceOffsets.assign(numAssets, std::vector<uint32_t>(numLods, 0));
 
-    m_ShadowInstanceBuffer.resize(m_Scene.regionManager.getTotalInstanceCount());
-    m_ShadowDrawCmds.reserve(m_Scene.assets.size());
+    m_VisibleInstanceBuffer.resize(std::max<uint32_t>(1, totalInstances));
+    m_DrawCmds.reserve(numAssets * numLods);
+
+    m_ShadowInstanceBuffer.resize(std::max<uint32_t>(1, totalInstances));
+    m_ShadowDrawCmds.reserve(numAssets);
 
     return true;
 }
 
+// ===========================================================================
+// Animate — drives the hot-reload cycle
+// ===========================================================================
+
 void TraditionalRenderPass::Animate(float seconds) {
     m_ViewHandler->camera.Animate(seconds);
     GetDeviceManager()->SetInformativeWindowTitle(g_WindowTitle);
+
+    // Hot-reload cycle
+    if (!m_Registry.anyDirty()) return;
+
+    auto dirtyAssets  = m_Registry.getDirtyAssetIndices();
+    auto dirtyRegions = m_Registry.getDirtyRegionIndices();
+
+    m_Registry.rebuildDirtyAssets();
+    m_Registry.rebuildDirtyRegions();
+
+    if (!dirtyAssets.empty())  onAssetsDirty(dirtyAssets);
+    if (!dirtyRegions.empty()) onRegionsDirty(dirtyRegions);
+
+    m_Registry.clearDirtyFlags();
 }
+
+// ===========================================================================
+// Hot-reload callbacks
+// ===========================================================================
+
+void TraditionalRenderPass::onAssetsDirty(const std::vector<size_t>& dirtyAssetIndices) {
+    nvrhi::CommandListHandle cl = GetDevice()->createCommandList();
+    cl->open();
+
+    const auto& assets = m_Registry.getAssets();
+    for (size_t idx : dirtyAssetIndices) {
+        const auto& assetDef = assets[idx];
+        auto it = m_AssetIdToGPUIndex.find(assetDef.id);
+        if (it != m_AssetIdToGPUIndex.end()) {
+            // Re-upload existing asset slot
+            _UploadAsset(assetDef, m_GPUAssets[it->second], GetDevice(), cl);
+        } else {
+            // New asset — append
+            GPUTreeAsset gpuAsset;
+            _UploadAsset(assetDef, gpuAsset, GetDevice(), cl);
+            m_AssetIdToGPUIndex[assetDef.id] = m_GPUAssets.size();
+            m_GPUAssets.push_back(std::move(gpuAsset));
+        }
+    }
+
+    cl->close();
+    GetDevice()->executeCommandList(cl);
+
+    // Resize per-asset working arrays
+    size_t numAssets = m_GPUAssets.size();
+    size_t numLods   = m_Registry.getLodSegments().size();
+    m_InstanceCounts.resize(numAssets, std::vector<uint32_t>(numLods, 0));
+    m_InstanceOffsets.resize(numAssets, std::vector<uint32_t>(numLods, 0));
+}
+
+void TraditionalRenderPass::onRegionsDirty(const std::vector<size_t>& /*dirtyRegionIndices*/) {
+    uint32_t newTotal = m_Registry.totalInstanceCount();
+    uint32_t oldTotal = static_cast<uint32_t>(m_VisibleInstanceBuffer.size());
+
+    if (newTotal != oldTotal) {
+        _RebuildInstanceBuffers();
+        _RebuildBindingSets();
+    }
+
+    m_UI.totalInstanceCount = newTotal;
+    m_VisibleInstanceReferences.reserve(newTotal);
+}
+
+// ===========================================================================
+// Render
+// ===========================================================================
 
 void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     app::HiResTimer cpuTimer;
@@ -108,17 +303,16 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         m_ViewHandler->view.GetViewFrustum().farPlane().distance, 0);
     #endif
 
-    // TODO: sceneBbox can be cached and updated only on scene changes
     dm::box3 sceneBbox = dm::box3::empty();
-    for (uint32_t ri = 0; ri < m_Scene.regionManager.size(); ri++)
-        sceneBbox |= m_Scene.regionManager[ri].cullBox;
-    if (m_Scene.terrain)
-        sceneBbox |= m_Scene.terrain->getBbox();
+    for (const auto& region : m_Registry.getRegions())
+        sceneBbox |= region.cullBox;
+    const auto* terrain = m_Registry.getTerrain();
+    if (terrain)
+        sceneBbox |= terrain->getBbox();
 
-    m_ViewHandler->updateShadowVolume(sceneBbox, m_Scene.sunDirection);
+    m_ViewHandler->updateShadowVolume(sceneBbox, m_Registry.getSunDirection());
 
     const dm::box3& shadowCasterBboxLS = m_ViewHandler->shadowCasterBboxLS;
-    // Make shadow texels square
     float maxXY = dm::max(shadowCasterBboxLS.diagonal().x, shadowCasterBboxLS.diagonal().y);
     dm::float3 grow = 0.5f * (dm::float3(maxXY, maxXY, shadowCasterBboxLS.diagonal().z)
                                - shadowCasterBboxLS.diagonal());
@@ -127,7 +321,6 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     dm::float4x4 lightProj = dm::orthoProjD3DStyle(
         orthoBox.m_mins.x, orthoBox.m_maxs.x,
         orthoBox.m_mins.y, orthoBox.m_maxs.y,
-        // -orthoBox.m_maxs.z, -orthoBox.m_mins.z);
         orthoBox.m_mins.z, orthoBox.m_maxs.z);
 
     dm::float4x4 lightViewProj = dm::affineToHomogeneous(m_ViewHandler->worldToLight) * lightProj;
@@ -136,7 +329,7 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     constants.view          = dm::affineToHomogeneous(m_ViewHandler->view.GetViewMatrix());
     constants.projection    = m_ViewHandler->view.GetProjectionMatrix();
     constants.lightViewProj = lightViewProj;
-    constants.sunLightDir   = m_Scene.sunDirection;
+    constants.sunLightDir   = m_Registry.getSunDirection();
     m_CommandList->writeBuffer(m_Shared.constantBuffer, &constants, Render::c_ConstantBufferSize);
 
     _RenderSkyPass(framebuffer);
@@ -152,7 +345,7 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         m_UI.gpuFrameTimeMs = GetDevice()->getTimerQueryTime(m_GpuTimers[prevIdx]) * 1000.0f;
     m_NextTimerIdx = (m_NextTimerIdx + 1) % m_QueuedFrames;
 
-    m_UI.totalInstanceCount   = m_Scene.regionManager.getTotalInstanceCount();
+    m_UI.totalInstanceCount   = m_Registry.totalInstanceCount();
     m_UI.visibleInstanceCount = (uint32_t)m_VisibleInstanceReferences.size();
     m_UI.culledInstanceCount  = m_UI.totalInstanceCount - m_UI.visibleInstanceCount;
     m_UI.drawCallCount        = (uint32_t)m_DrawCmds.size();
@@ -195,10 +388,8 @@ void TraditionalRenderPass::_RenderSkyPass(nvrhi::IFramebuffer* framebuffer) {
     SkyConstants skyConstants{};
     skyConstants.matClipToTranslatedWorld = clipToTranslatedWorld;
 
-    // Fill procedural sky parameters
-    // TODO: These are constants that don't need to be rewritten
     auto& p         = skyConstants.params;
-    p.directionToLight  = dm::normalize(-m_Scene.sunDirection);
+    p.directionToLight  = dm::normalize(-m_Registry.getSunDirection());
     p.angularSizeOfLight = dm::radians(1.0f);
     p.lightColor        = dm::float3(100.f, 98.f, 90.f);
     p.glowSize          = dm::radians(5.f);
@@ -223,54 +414,65 @@ void TraditionalRenderPass::_RenderSkyPass(nvrhi::IFramebuffer* framebuffer) {
 
 void TraditionalRenderPass::_RenderShadowPass() {
     const dm::affine3& worldToLight = m_ViewHandler->worldToLight;
-    // lowest lod
-    uint32_t lodIndex = static_cast<uint32_t>(m_Scene.lodSegments.size() - 1);
+    const auto& lodSegments = m_Registry.getLodSegments();
+    uint32_t lodIndex = static_cast<uint32_t>(lodSegments.size() - 1);
 
-    // Cull instances against shadow volume
+    const auto& regions = m_Registry.getRegions();
+
     m_ShadowVisibleRefs.clear();
-    std::vector<uint32_t> shadowCounts(m_Scene.assets.size(), 0);
-
-    for (uint32_t ri = 0; ri < m_Scene.regionManager.size(); ri++) {
-        const auto& region = m_Scene.regionManager[ri];
+    std::vector<uint32_t> shadowCounts(m_GPUAssets.size(), 0);
+    m_ShadowDrawCmds.clear();
+    
+    if (m_ViewHandler->shadowCasterBboxLS.isempty()) {
+        return;
+    }
+    
+    // Cull instances against shadow volume
+    for (uint32_t ri = 0; ri < regions.size(); ri++) {
+        const auto& region = regions[ri];
 
         dm::box3 regionLS = region.cullBox * worldToLight;
         if (!regionLS.intersects(m_ViewHandler->shadowCasterBboxLS))
             continue;
 
-        for (uint32_t ii = 0; ii < region.instanceCount; ii++) {
-            dm::box3 instanceLS = region.instanceBbox[ii] * worldToLight;
+        for (uint32_t ii = 0; ii < region.instances.size(); ii++) {
+            const auto& inst = region.instances[ii];
+            dm::box3 instanceLS = inst.bbox * worldToLight;
             if (!instanceLS.intersects(m_ViewHandler->shadowCasterBboxLS))
                 continue;
-            uint32_t tid = region.instanceBuffer[ii].treeId;
-            m_ShadowVisibleRefs.push_back({ ri, ii, tid, lodIndex });
-            shadowCounts[tid]++;
+
+            auto it = m_AssetIdToGPUIndex.find(inst.assetId);
+            if (it == m_AssetIdToGPUIndex.end()) continue;
+            uint32_t gpuIdx = static_cast<uint32_t>(it->second);
+
+            m_ShadowVisibleRefs.push_back({ ri, ii, gpuIdx, lodIndex });
+            shadowCounts[gpuIdx]++;
         }
     }
 
     // Build draw commands
-    m_ShadowDrawCmds.clear();
-    std::vector<uint32_t> shadowWriteOff(m_Scene.assets.size(), 0);
+    std::vector<uint32_t> shadowWriteOff(m_GPUAssets.size(), 0);
     uint32_t shadowOffset = 0;
     for (uint32_t ai = 0; ai < shadowCounts.size(); ai++) {
         if (shadowCounts[ai] == 0) continue;
-        const auto& lod = m_Scene.assets[ai].lods[lodIndex];
-        m_ShadowDrawCmds.push_back({ 
-            lod.vertexBuffer, 
+        const auto& lod = m_GPUAssets[ai].lods[lodIndex];
+        m_ShadowDrawCmds.push_back({
+            lod.vertexBuffer,
             lod.indexBuffer,
             nvrhi::DrawArguments()
                 .setVertexCount(lod.indexCount)
                 .setInstanceCount(shadowCounts[ai])
-                .setStartInstanceLocation(shadowOffset),
-            m_Scene.assets[ai].textureSetIdx 
+                .setStartInstanceLocation(shadowOffset)
         });
         shadowWriteOff[ai] = shadowOffset;
         shadowOffset += shadowCounts[ai];
     }
 
-    
     for (const auto& ref : m_ShadowVisibleRefs) {
         uint32_t& writeOffset = shadowWriteOff[ref.treeId];
-        m_ShadowInstanceBuffer[writeOffset] = m_Scene.regionManager[ref.regionIdx].instanceBuffer[ref.instanceIdx];
+        const auto& inst = regions[ref.regionIdx].instances[ref.instanceIdx];
+        m_ShadowInstanceBuffer[writeOffset] = Render::InstanceBufferEntry(
+            inst.model, inst.normal, ref.treeId);
         writeOffset++;
     }
 
@@ -279,7 +481,6 @@ void TraditionalRenderPass::_RenderShadowPass() {
             m_ShadowVisibleRefs.size() * sizeof(Render::InstanceBufferEntry));
 
     // Create shadow pipelines on demand
-    // frontface culling to increase shadow acne bias
     if (!m_ShadowPass.treePipeline) {
         nvrhi::GraphicsPipelineDesc pso;
         pso.VS             = m_ShadowPass.treeVS;
@@ -314,7 +515,6 @@ void TraditionalRenderPass::_RenderShadowPass() {
     nvrhi::ViewportState shadowVPState;
     shadowVPState.addViewportAndScissorRect(shadowVP);
 
-    // Draw trees into shadow map
     nvrhi::GraphicsState shadowState;
     shadowState.pipeline    = m_ShadowPass.treePipeline;
     shadowState.framebuffer = m_ShadowPass.framebuffer;
@@ -345,9 +545,10 @@ void TraditionalRenderPass::_RenderShadowPass() {
         m_CommandList->drawIndexed(cmd.drawArgs);
     }
 
-    // Draw terrain into shadow map (cull against shadow volume)
-    if (m_TerrainPass.indexCount > 0
-        && (m_Scene.terrain->getBbox() * worldToLight).intersects(m_ViewHandler->shadowCasterBboxLS)) {
+    // Draw terrain into shadow map
+    const auto* terrainPtr = m_Registry.getTerrain();
+    if (m_TerrainPass.indexCount > 0 && terrainPtr
+        && (terrainPtr->getBbox() * worldToLight).intersects(m_ViewHandler->shadowCasterBboxLS)) {
         nvrhi::GraphicsState terrShadow;
         terrShadow.pipeline    = m_ShadowPass.terrainPipeline;
         terrShadow.framebuffer = m_ShadowPass.framebuffer;
@@ -363,6 +564,9 @@ void TraditionalRenderPass::_RenderShadowPass() {
 
 void TraditionalRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
     const nvrhi::FramebufferInfoEx& fbinfo = framebuffer->getFramebufferInfo();
+    const auto& lodSegments  = m_Registry.getLodSegments();
+    const auto& lodDistances = m_Registry.getLodDistances();
+    const auto& regions      = m_Registry.getRegions();
 
     // Tree pass pipeline
     if (!m_TreePass.pipeline) {
@@ -382,37 +586,46 @@ void TraditionalRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
 
     // Frustum culling & LOD assignment
     m_VisibleInstanceReferences.clear();
-    m_InstanceCounts.assign(m_Scene.assets.size(), std::vector<uint32_t>(m_Scene.lodSegments.size(), 0));
+    m_InstanceCounts.assign(m_GPUAssets.size(), std::vector<uint32_t>(lodSegments.size(), 0));
 
-    for (uint32_t ri = 0; ri < m_Scene.regionManager.size(); ri++) {
-        const auto& region = m_Scene.regionManager[ri];
+    for (uint32_t ri = 0; ri < regions.size(); ri++) {
+        const auto& region = regions[ri];
         if (!m_ViewHandler->view.IsBoxVisible(region.cullBox))
             continue;
-        for (uint32_t ii = 0; ii < region.instanceCount; ii++) {
-            if (!m_ViewHandler->view.IsBoxVisible(region.instanceBbox[ii])) continue;
-            float dist = dm::distance(m_ViewHandler->camera.GetPosition(), region.instanceBbox[ii]);
-            uint32_t lod = m_ViewHandler->distToLOD(dist, m_Scene.lodDistances);
-            m_VisibleInstanceReferences.push_back({ ri, ii, region.instanceBuffer[ii].treeId, lod });
-            m_InstanceCounts[region.instanceBuffer[ii].treeId][lod]++;
+        for (uint32_t ii = 0; ii < region.instances.size(); ii++) {
+            const auto& inst = region.instances[ii];
+            if (!m_ViewHandler->view.IsBoxVisible(inst.bbox)) continue;
+            float dist = dm::distance(m_ViewHandler->camera.GetPosition(), inst.bbox);
+            uint32_t lod = m_ViewHandler->distToLOD(dist, lodDistances);
+
+            auto it = m_AssetIdToGPUIndex.find(inst.assetId);
+            if (it == m_AssetIdToGPUIndex.end()) continue;
+            uint32_t gpuIdx = static_cast<uint32_t>(it->second);
+
+            m_VisibleInstanceReferences.push_back({ ri, ii, gpuIdx, lod });
+            m_InstanceCounts[gpuIdx][lod]++;
         }
     }
 
     // Build draw commands
     m_DrawCmds.clear();
-    m_InstanceOffsets.assign(m_Scene.assets.size(), std::vector<uint32_t>(m_Scene.lodSegments.size(), 0));
+    m_InstanceOffsets.assign(m_GPUAssets.size(), std::vector<uint32_t>(lodSegments.size(), 0));
     uint32_t instanceOffset = 0;
 
     for (uint32_t ai = 0; ai < m_InstanceCounts.size(); ai++) {
-        for (uint32_t li = 0; li < m_Scene.lodSegments.size(); li++) {
+        for (uint32_t li = 0; li < lodSegments.size(); li++) {
             uint32_t count = m_InstanceCounts[ai][li];
             if (count == 0) continue;
-            const auto& lod = m_Scene.assets[ai].lods[li];
-            m_DrawCmds.push_back({ lod.vertexBuffer, lod.indexBuffer,
+            const auto& lod = m_GPUAssets[ai].lods[li];
+            m_DrawCmds.push_back({ 
+                lod.vertexBuffer, 
+                lod.indexBuffer,
                 nvrhi::DrawArguments()
                     .setVertexCount(lod.indexCount)
                     .setInstanceCount(count)
                     .setStartInstanceLocation(instanceOffset),
-                m_Scene.assets[ai].textureSetIdx });
+                m_GPUAssets[ai].textureSetIdx 
+            });
             m_InstanceOffsets[ai][li] = instanceOffset;
             instanceOffset += count;
         }
@@ -420,7 +633,9 @@ void TraditionalRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
 
     for (const auto& ref : m_VisibleInstanceReferences) {
         uint32_t& writeOff = m_InstanceOffsets[ref.treeId][ref.lodID];
-        m_VisibleInstanceBuffer[writeOff] = m_Scene.regionManager[ref.regionIdx].instanceBuffer[ref.instanceIdx];
+        const auto& inst = regions[ref.regionIdx].instances[ref.instanceIdx];
+        m_VisibleInstanceBuffer[writeOff] = Render::InstanceBufferEntry(
+            inst.model, inst.normal, ref.treeId);
         writeOff++;
     }
 
@@ -645,9 +860,10 @@ bool TraditionalRenderPass::_InitTreePass(nvrhi::ICommandList* initCL, engine::C
     if (!m_TreePass.inputLayout) return false;
 
     // Instance buffer
+    uint32_t totalInstances = std::max<uint32_t>(1, m_Registry.totalInstanceCount());
     m_TreePass.instanceBuffer = GetDevice()->createBuffer(
         nvrhi::BufferDesc()
-            .setByteSize(std::max<size_t>(1, m_Scene.regionManager.getTotalInstanceCount()) * sizeof(Render::InstanceBufferEntry))
+            .setByteSize(totalInstances * sizeof(Render::InstanceBufferEntry))
             .setStructStride(sizeof(Render::InstanceBufferEntry))
             .setDebugName("TreeInstanceBuffer")
 #if XYLEM_USE_STRUCTURED_BUFFER
@@ -660,11 +876,12 @@ bool TraditionalRenderPass::_InitTreePass(nvrhi::ICommandList* initCL, engine::C
     if (!m_TreePass.instanceBuffer) return false;
 
     // Textures
+    const auto& barkTextureSets = m_Registry.getBarkTextureSets();
     engine::TextureCache textureCache(GetDevice(), std::make_shared<vfs::NativeFileSystem>(), nullptr);
-    m_TreePass.textureSets.resize(m_Scene.barkTextureSets.size());
+    m_TreePass.textureSets.resize(barkTextureSets.size());
 
-    for (size_t i = 0; i < m_Scene.barkTextureSets.size(); i++) {
-        std::filesystem::path texDir = g_ProjectDirectory / "media" / m_Scene.barkTextureSets[i] / "textures";
+    for (size_t i = 0; i < barkTextureSets.size(); i++) {
+        std::filesystem::path texDir = g_ProjectDirectory / "media" / barkTextureSets[i] / "textures";
         std::filesystem::path diffPath, normPath;
 
         for (const auto& entry : std::filesystem::directory_iterator(texDir)) {
@@ -709,7 +926,7 @@ bool TraditionalRenderPass::_InitTreePass(nvrhi::ICommandList* initCL, engine::C
 #if XYLEM_USE_STRUCTURED_BUFFER
             nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_TreePass.instanceBuffer,
                 nvrhi::Format::UNKNOWN,
-                nvrhi::BufferRange(0, m_Scene.regionManager.getTotalInstanceCount() * sizeof(Render::InstanceBufferEntry))),
+                nvrhi::BufferRange(0, totalInstances * sizeof(Render::InstanceBufferEntry))),
             nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t)),
 #endif
         };
@@ -728,21 +945,10 @@ bool TraditionalRenderPass::_InitTreePass(nvrhi::ICommandList* initCL, engine::C
 }
 
 bool TraditionalRenderPass::_InitViewHandler() {
-    auto config = SceneLoader::ParseFile(g_SceneConfigDirectory);
-    const auto& cam = config["camera"];
-
-    // Leveraging donut >> overloads for the camera properties
-    dm::float3 pos(0.f);
-    dm::float3 cameraDir(0.f, 0.f, 1.f);
-    float moveSpeed = 15.f;
-
-    cam["position"] >> pos;
-    cam["direction"] >> cameraDir;
-    cam["moveSpeed"] >> moveSpeed;
-
     m_ViewHandler = std::make_unique<ViewHandler>();
-    m_ViewHandler->camera.LookTo(pos, dm::normalize(cameraDir));
-    m_ViewHandler->camera.SetMoveSpeed(moveSpeed);
+    const SceneRegistry::CameraInit& cameraInit = m_Registry.getCameraInit();
+    m_ViewHandler->camera.LookTo(cameraInit.pos, cameraInit.cameraDir);
+    m_ViewHandler->camera.SetMoveSpeed(cameraInit.moveSpeed);
     return !!m_ViewHandler;
 }
 
@@ -751,7 +957,6 @@ void TraditionalRenderPass::ViewHandler::updateShadowVolume(const dm::box3& scen
     worldToLight = dm::lookatZ(sunDirection) * dm::scaling(dm::float3(1.f, 1.f, -1.f));
     dm::box3 sceneBoundsLS = sceneBbox * worldToLight;
 
-    // find the furthest corner of the scene to get the projection far plane
     const dm::float3& camPos = camera.GetPosition();
     float maxShadowDist = 0.f;
     for (int i = 0; i < dm::box3::numCorners; i++) {
@@ -765,7 +970,6 @@ void TraditionalRenderPass::ViewHandler::updateShadowVolume(const dm::box3& scen
     dm::float4x4 finiteProj = dm::perspProjD3DStyle(
         dm::radians(60.f), vp.width() / vp.height(), 0.1f, maxShadowDist);
 
-    // create separate frustum for shadow caster culling
     dm::frustum camFrustum(
         dm::affineToHomogeneous(view.GetViewMatrix()) * finiteProj, false);
 
@@ -773,10 +977,8 @@ void TraditionalRenderPass::ViewHandler::updateShadowVolume(const dm::box3& scen
     for (int i = 0; i < dm::frustum::numCorners; i++)
         frustumLS |= worldToLight.transformPoint(camFrustum.getCorner(i));
 
-    // extrude camera frustum up until scene extent to encompass all casters
     frustumLS.m_mins.z = sceneBoundsLS.m_mins.z;
 
-    // empty if frustum does not intersect with scene
     shadowCasterBboxLS = frustumLS & sceneBoundsLS;
 }
 
@@ -800,19 +1002,16 @@ bool TraditionalRenderPass::_InitShadowPass() {
     );
     if (!m_ShadowPass.depthTexture) return false;
 
-    // Framebuffer (depth only)
     m_ShadowPass.framebuffer = GetDevice()->createFramebuffer(
         nvrhi::FramebufferDesc().setDepthAttachment(m_ShadowPass.depthTexture));
     if (!m_ShadowPass.framebuffer) return false;
 
-    // Shaders
     m_ShadowPass.treeVS = m_ShaderFactory->CreateShader(
         "app/shadow.hlsl", "tree_vs", nullptr, nvrhi::ShaderType::Vertex);
     m_ShadowPass.terrainVS = m_ShaderFactory->CreateShader(
         "app/shadow.hlsl", "terrain_vs", nullptr, nvrhi::ShaderType::Vertex);
     if (!m_ShadowPass.treeVS || !m_ShadowPass.terrainVS) return false;
 
-    // Terrain shadow input layout
     nvrhi::VertexAttributeDesc terrainShadowAttrs[] = {
         #if XYLEM_USE_INTERLEAVED_VERTEX_ATTRIBUTES
         nvrhi::VertexAttributeDesc()
@@ -858,7 +1057,6 @@ bool TraditionalRenderPass::_InitShadowPass() {
         terrainShadowAttrs, uint32_t(std::size(terrainShadowAttrs)), m_ShadowPass.terrainVS);
     if (!m_ShadowPass.terrainInputLayout) return false;
 
-    // Comparison sampler (consumed by tree and terrain color passes for shadow sampling)
     m_ShadowPass.comparisonSampler = GetDevice()->createSampler(
         nvrhi::SamplerDesc()
             .setMinFilter(true)
@@ -870,10 +1068,10 @@ bool TraditionalRenderPass::_InitShadowPass() {
     );
     if (!m_ShadowPass.comparisonSampler) return false;
 
-    // Instance buffer (for shadow casters)
+    uint32_t totalInstances = std::max<uint32_t>(1, m_Registry.totalInstanceCount());
     m_ShadowPass.instanceBuffer = GetDevice()->createBuffer(
         nvrhi::BufferDesc()
-            .setByteSize(std::max<size_t>(1, m_Scene.regionManager.getTotalInstanceCount()) * sizeof(Render::InstanceBufferEntry))
+            .setByteSize(totalInstances * sizeof(Render::InstanceBufferEntry))
             .setStructStride(sizeof(Render::InstanceBufferEntry))
             .setDebugName("ShadowInstanceBuffer")
             .setIsVertexBuffer(true)
@@ -881,7 +1079,6 @@ bool TraditionalRenderPass::_InitShadowPass() {
     );
     if (!m_ShadowPass.instanceBuffer) return false;
 
-    // Binding layout + set (CB only)
     nvrhi::BindingSetDesc bsd;
     bsd.bindings = {
         nvrhi::BindingSetItem::ConstantBuffer(0, m_Shared.constantBuffer,
@@ -895,20 +1092,19 @@ bool TraditionalRenderPass::_InitShadowPass() {
 }
 
 bool TraditionalRenderPass::_InitTerrainPass(nvrhi::ICommandList* initCL) {
-    if (!m_Scene.terrain) return true;
+    const auto* terrain = m_Registry.getTerrain();
+    if (!terrain) return true;
 
-    const auto& verts   = m_Scene.terrain->getVertices();
-    const auto& indices = m_Scene.terrain->getIndices();
+    const auto& verts   = terrain->getVertices();
+    const auto& indices = terrain->getIndices();
     if (verts.empty() || indices.empty()) return true;
 
     m_TerrainPass.indexCount = static_cast<uint32_t>(indices.size());
 
-    // Shaders
     m_TerrainPass.vertexShader = m_ShaderFactory->CreateShader("app/terrain.hlsl", "terrain_vs", nullptr, nvrhi::ShaderType::Vertex);
     m_TerrainPass.pixelShader  = m_ShaderFactory->CreateShader("app/terrain.hlsl", "terrain_ps", nullptr, nvrhi::ShaderType::Pixel);
     if (!m_TerrainPass.vertexShader || !m_TerrainPass.pixelShader) return false;
 
-    // Input layout
     nvrhi::VertexAttributeDesc terrainAttrs[] = {
         nvrhi::VertexAttributeDesc()
             .setName("POSITION")
@@ -933,7 +1129,6 @@ bool TraditionalRenderPass::_InitTerrainPass(nvrhi::ICommandList* initCL) {
         terrainAttrs, uint32_t(std::size(terrainAttrs)), m_TerrainPass.vertexShader);
     if (!m_TerrainPass.inputLayout) return false;
 
-    // Vertex buffer
     nvrhi::BufferDesc vbDesc;
     vbDesc.isVertexBuffer = true;
     vbDesc.byteSize       = verts.size() * sizeof(Scene::TerrainVertex);
@@ -944,7 +1139,6 @@ bool TraditionalRenderPass::_InitTerrainPass(nvrhi::ICommandList* initCL) {
     initCL->writeBuffer(m_TerrainPass.vertexBuffer, verts.data(), vbDesc.byteSize);
     initCL->setPermanentBufferState(m_TerrainPass.vertexBuffer, nvrhi::ResourceStates::VertexBuffer);
 
-    // Index buffer
     nvrhi::BufferDesc ibDesc;
     ibDesc.isIndexBuffer = true;
     ibDesc.byteSize      = indices.size() * sizeof(uint32_t);
@@ -955,7 +1149,6 @@ bool TraditionalRenderPass::_InitTerrainPass(nvrhi::ICommandList* initCL) {
     initCL->writeBuffer(m_TerrainPass.indexBuffer, indices.data(), ibDesc.byteSize);
     initCL->setPermanentBufferState(m_TerrainPass.indexBuffer, nvrhi::ResourceStates::IndexBuffer);
 
-    // Binding layout + set (constant buffer + shadow map)
     nvrhi::BindingSetDesc bsd;
     bsd.bindings = {
         nvrhi::BindingSetItem::ConstantBuffer(0, m_Shared.constantBuffer,

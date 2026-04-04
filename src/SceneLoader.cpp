@@ -89,7 +89,7 @@ bool SceneLoader::Load(const std::filesystem::path& path, SceneRegistry& registr
     // Assets
     // -------------------------------------------------------------------------
     // Keep a name→stableId map for region wiring below.
-    std::unordered_map<std::string, uint32_t> assetNameToId;
+    std::unordered_map<std::string, size_t> assetNameToId;
 
     for (const auto& aNode : root["assets"]) {
         std::string assetName;
@@ -121,7 +121,7 @@ bool SceneLoader::Load(const std::filesystem::path& path, SceneRegistry& registr
         aNode["barkTexture"] >> barkTexture;
 
         LSystemInstance lsInstance { lsName, gen };
-        uint32_t stableId = registry.addAsset(assetName, lsInstance, params, barkTexture);
+        size_t stableId = registry.addAsset(assetName, lsInstance, params, barkTexture);
         assetNameToId[assetName] = stableId;
     }
 
@@ -130,7 +130,7 @@ bool SceneLoader::Load(const std::filesystem::path& path, SceneRegistry& registr
     // -------------------------------------------------------------------------
     struct PendingRegion {
         size_t                  index;
-        std::vector<uint32_t>   assetIds;
+        std::vector<size_t>     assetIds;
     };
     std::vector<PendingRegion> pendingRegions;
 
@@ -148,7 +148,7 @@ bool SceneLoader::Load(const std::filesystem::path& path, SceneRegistry& registr
 
         dm::box2 bounds(dm::float2(minX, minY), dm::float2(maxX, maxY));
 
-        std::vector<uint32_t> regionAssetIds;
+        std::vector<size_t> regionAssetIds;
         if (rNode.isMember("assets") && rNode["assets"].size() > 0) {
             for (const auto& aName : rNode["assets"]) {
                 std::string n = aName.asString();

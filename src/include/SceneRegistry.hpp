@@ -19,7 +19,7 @@ namespace Xylem {
 
 // CPU-only asset definition — no GPU handles.
 struct TreeAssetDef {
-    uint32_t                          id;
+    size_t                            id;
     std::string                       name;
     Scene::LSystemInstance            lsystemInstance;
     ProcGen::TreeGenerator::Params    genParams;
@@ -27,14 +27,15 @@ struct TreeAssetDef {
     std::vector<Scene::TreeLODDef>    lods;
     std::string                       barkTexture;
     uint32_t                          textureSetIdx = 0;
-    bool                              dirty = true;
+    bool                              dirty   = true;
+    bool                              visible = true;  // render-time visibility toggle
 };
 
 // CPU-only instance data — stable asset ID, no GPU index.
 struct InstanceData {
     dm::float4x4 model;
     dm::float3x3 normal;
-    uint32_t     assetId;
+    size_t       assetId;
     dm::box3     bbox;
 };
 
@@ -44,10 +45,12 @@ struct RegionDef {
     float                     density;
     uint32_t                  instanceCount;
     dm::box2                  bounds;
-    std::vector<uint32_t>     assetIds;     // stable asset IDs
+    std::vector<size_t>       assetIds;     // stable asset IDs
     std::vector<InstanceData> instances;
     dm::box3                  cullBox;
     bool                      dirty = true;
+    // Per-asset render-time visibility within this region (absent = visible).
+    std::unordered_map<size_t, bool> assetVisible;
 
     RegionDef() = default;
     RegionDef(const std::string& n, float d, const dm::box2& b)
@@ -84,11 +87,11 @@ public:
     uint32_t totalInstanceCount() const;
 
     // Lookup asset by stable ID (returns nullptr if not found).
-    TreeAssetDef*       findAsset(uint32_t id);
-    const TreeAssetDef* findAsset(uint32_t id) const;
+    TreeAssetDef*       findAsset(size_t id);
+    const TreeAssetDef* findAsset(size_t id) const;
 
     // Lookup asset vector index by stable ID (returns SIZE_MAX if not found).
-    size_t assetIndexById(uint32_t id) const;
+    size_t assetIndexById(size_t id) const;
 
     // -------------------------------------------------------------------
     // Mutation — auto-sets dirty flags
@@ -96,17 +99,20 @@ public:
     void addLSystem(const std::string& name, std::unique_ptr<ProcGen::LSystem> ls);
 
     // Returns the stable ID assigned to the new asset.
-    uint32_t addAsset(const std::string& name,
+    size_t addAsset(const std::string& name,
                       const Scene::LSystemInstance& lsInstance,
                       const ProcGen::TreeGenerator::Params& params,
                       const std::string& barkTexture = "bark_willow_02_1k");
 
-    void modifyAsset(uint32_t id, const ProcGen::TreeGenerator::Params& params);
-    void removeAsset(uint32_t id);
+    void modifyAsset(size_t id, const ProcGen::TreeGenerator::Params& params);
+    void setAssetVisible(size_t id, bool visible);
+    void removeAsset(size_t id);
 
     void addRegion(const std::string& name, float density, const dm::box2& bounds,
-                   const std::vector<uint32_t>& assetIds);
+                   const std::vector<size_t>& assetIds);
     void modifyRegion(size_t idx, float density, const dm::box2& bounds);
+    void modifyRegionAssets(size_t idx, const std::vector<size_t>& assetIds);
+    void setRegionAssetVisible(size_t regionIdx, size_t assetId, bool visible);
     void removeRegion(size_t idx);
 
     // -------------------------------------------------------------------
@@ -153,10 +159,10 @@ private:
     dm::float3                                               m_SunDirection = dm::float3(0.f, -1.f, 0.f);
     CameraInit                                               m_CameraInit;
 
-    uint32_t m_NextAssetId = 0;
+    size_t m_NextAssetId = 0;
 
     // Internal ID-to-index map for fast lookup.
-    std::unordered_map<uint32_t, size_t> m_AssetIdToIndex;
+    std::unordered_map<size_t, size_t> m_AssetIdToIndex;
 
     void _rebuildAsset(TreeAssetDef& asset);
     void _rebuildRegion(RegionDef& region);

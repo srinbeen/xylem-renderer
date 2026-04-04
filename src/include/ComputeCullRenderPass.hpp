@@ -1,15 +1,15 @@
-#ifndef XYLEM_TRADITIONAL_RENDER_PASS_H
-#define XYLEM_TRADITIONAL_RENDER_PASS_H
+#ifndef XYLEM_COMPUTE_CULL_RENDER_PASS_H
+#define XYLEM_COMPUTE_CULL_RENDER_PASS_H
 
 #include <donut/app/ApplicationBase.h>
-
 #include <donut/app/Camera.h>
 #include <donut/engine/View.h>
-
-#include <nvrhi/nvrhi.h>
-
 #include <donut/engine/ShaderFactory.h>
 #include <donut/engine/CommonRenderPasses.h>
+
+#include <nvrhi/nvrhi.h>
+#include <nvrhi/d3d12.h>
+#include <GFSDK_Aftermath.h>
 
 #include <unordered_map>
 
@@ -21,22 +21,23 @@ namespace Xylem {
 
 using namespace donut;
 
-class TraditionalRenderPass : public app::IRenderPass {
+class ComputeCullRenderPass : public app::IRenderPass {
 public:
-    static constexpr uint32_t m_QueuedFrames = 4;
-    static constexpr uint32_t m_ShadowRes = 2048;
+    // static constexpr uint32_t k_QueuedFrames  = 4;
+    static constexpr uint32_t k_ShadowRes     = 2048;
+    static constexpr float    k_CapacitySlack = 1.5f;
 
-    TraditionalRenderPass(app::DeviceManager* dm, SceneRegistry& registry, UIData& ui)
+    ComputeCullRenderPass(app::DeviceManager* dm, SceneRegistry& registry, UIData& ui)
         : IRenderPass{dm}, m_Registry{registry}, m_UI{ui} {}
 
     void SetShaderFactory(std::shared_ptr<engine::ShaderFactory> sf) { m_ShaderFactory = std::move(sf); }
 
+    ~ComputeCullRenderPass();
     bool Init();
     void Animate(float seconds) override;
-    void BackBufferResizing() override { m_TreePass.pipeline = nullptr; m_TerrainPass.pipeline = nullptr; m_ShadowPass.treePipeline = nullptr; m_ShadowPass.terrainPipeline = nullptr; m_SkyPass.pipeline = nullptr; }
+    void BackBufferResizing() override;
     void Render(nvrhi::IFramebuffer* framebuffer) override;
 
-    // Input overrides
     bool KeyboardUpdate(int key, int scancode, int action, int mods) override;
     bool MousePosUpdate(double xpos, double ypos) override;
     bool MouseScrollUpdate(double xoffset, double yoffset) override;
@@ -44,7 +45,6 @@ public:
     bool JoystickButtonUpdate(int button, bool pressed) override;
     bool JoystickAxisUpdate(int axis, float value) override;
 
-    // Hot-reload callbacks
     void onAssetsDirty(const std::vector<size_t>& dirtyAssetIndices);
     void onRegionsDirty(const std::vector<size_t>& dirtyRegionIndices);
 
@@ -56,36 +56,54 @@ private:
         dm::box3               shadowCasterBboxLS;
 
         void updateShadowVolume(const dm::box3& sceneBbox, dm::float3 sunDirection);
-
-        uint32_t distToLOD(float value, const std::vector<float>& arr) {
-            auto it = std::lower_bound(arr.begin(), arr.end(), value);
-            if (it == arr.end()) return static_cast<uint32_t>(arr.size() - 1);
-            return static_cast<uint32_t>(std::distance(arr.begin(), it));
-        }
     };
 
     struct TextureSet {
-        nvrhi::TextureHandle      diffuse;
-        nvrhi::TextureHandle      normalMap;
+        nvrhi::TextureHandle diffuse;
+        nvrhi::TextureHandle normalMap;
     };
 
-    // GPU-side per-asset data (VB/IB per LOD).
     struct GPUTreeAsset {
         std::vector<Scene::TreeLODData> lods;
         uint32_t                        textureSetIdx;
     };
 
-    // Shared across all passes
-    struct SharedResources {
-        nvrhi::BufferHandle       constantBuffer;
+    struct RegionBufferWindow {
+        uint32_t offset;
+        uint32_t capacity;
+        uint32_t count;
     };
 
-    // Main color pass — tree geometry
+    // -----------------------------------------------------------------------
+    // Resource groups
+    // -----------------------------------------------------------------------
+    struct SharedResources {
+        nvrhi::BufferHandle constantBuffer;  // CullConstantBufferEntry
+    };
+
+    // GPU compute cull resources
+    struct CullPassResources {
+        nvrhi::ShaderHandle              mainCS;
+        nvrhi::ShaderHandle              shadowCS;
+        nvrhi::ComputePipelineHandle     mainPipeline;
+        nvrhi::ComputePipelineHandle     shadowPipeline;
+        nvrhi::BindingLayoutHandle       bindingLayout;
+        nvrhi::BindingSetHandle          bindingSet;
+
+        nvrhi::BufferHandle              cullDataBuffer;       // SRV CullInstanceData[totalCapacity]
+        nvrhi::BufferHandle              persistentInstBuffer; // SRV InstanceBufferEntry[totalCapacity]
+        nvrhi::BufferHandle              slotOffsetBuffer;     // SRV uint32[numSlots]
+        nvrhi::BufferHandle              countBuffer;          // UAV uint32[numSlots]
+        nvrhi::BufferHandle              visibilityBuffer;     // UAV uint32[visBufferSize]
+        nvrhi::BufferHandle              shadowCountBuffer;    // UAV uint32[1]
+        nvrhi::BufferHandle              shadowVisBuffer;      // UAV uint32[totalCapacity]
+    };
+
+    // Tree draw pass — uses visibility indirection via structured buffers
     struct TreePassResources {
         nvrhi::ShaderHandle                    vertexShader;
         nvrhi::ShaderHandle                    pixelShader;
         nvrhi::InputLayoutHandle               inputLayout;
-        nvrhi::BufferHandle                    instanceBuffer;
         std::vector<TextureSet>                textureSets;
         nvrhi::SamplerHandle                   sampler;
         nvrhi::BindingLayoutHandle             bindingLayout;
@@ -93,23 +111,20 @@ private:
         nvrhi::GraphicsPipelineHandle          pipeline;
     };
 
-    // Shadow depth pass
     struct ShadowPassResources {
         nvrhi::TextureHandle                   depthTexture;
         nvrhi::FramebufferHandle               framebuffer;
         nvrhi::ShaderHandle                    treeVS;
         nvrhi::ShaderHandle                    terrainVS;
-        nvrhi::InputLayoutHandle               terrainInputLayout;
         nvrhi::InputLayoutHandle               treeInputLayout;
+        nvrhi::InputLayoutHandle               terrainInputLayout;
         nvrhi::SamplerHandle                   comparisonSampler;
-        nvrhi::BufferHandle                    instanceBuffer;
         nvrhi::BindingLayoutHandle             bindingLayout;
         nvrhi::BindingSetHandle                bindingSet;
         nvrhi::GraphicsPipelineHandle          treePipeline;
         nvrhi::GraphicsPipelineHandle          terrainPipeline;
     };
 
-    // Terrain color pass
     struct TerrainPassResources {
         nvrhi::ShaderHandle                    vertexShader;
         nvrhi::ShaderHandle                    pixelShader;
@@ -122,7 +137,6 @@ private:
         nvrhi::GraphicsPipelineHandle          pipeline;
     };
 
-    // Sky pass (fullscreen procedural sky)
     struct SkyPassResources {
         nvrhi::ShaderHandle                    vertexShader;
         nvrhi::ShaderHandle                    pixelShader;
@@ -132,17 +146,22 @@ private:
         nvrhi::GraphicsPipelineHandle          pipeline;
     };
 
+    // -----------------------------------------------------------------------
+    // Members
+    // -----------------------------------------------------------------------
     SharedResources                                    m_Shared;
+    CullPassResources                                  m_CullPass;
     TreePassResources                                  m_TreePass;
     ShadowPassResources                                m_ShadowPass;
     TerrainPassResources                               m_TerrainPass;
     SkyPassResources                                   m_SkyPass;
 
     nvrhi::CommandListHandle                           m_CommandList;
+    GFSDK_Aftermath_ContextHandle                      m_AftermathContext = nullptr;
     std::unique_ptr<ViewHandler>                       m_ViewHandler;
     std::shared_ptr<engine::ShaderFactory>             m_ShaderFactory;
 
-    // nvrhi::TimerQueryHandle                            m_GpuTimers[m_QueuedFrames];
+    // nvrhi::TimerQueryHandle                            m_GpuTimers[k_QueuedFrames];
     // int                                                m_NextTimerIdx = 0;
 
     UIData&                                            m_UI;
@@ -152,19 +171,23 @@ private:
     std::vector<GPUTreeAsset>                          m_GPUAssets;
     std::unordered_map<size_t, size_t>                 m_AssetIdToGPUIndex;
 
-    // populated during render loop
-    std::vector<Render::InstanceReference>             m_VisibleInstanceReferences;
-    std::vector<std::vector<uint32_t>>                 m_InstanceCounts;
-    std::vector<std::vector<uint32_t>>                 m_InstanceOffsets;
-    std::vector<Render::DrawCmd>                       m_DrawCmds;
-    std::vector<Render::InstanceBufferEntry>           m_VisibleInstanceBuffer;
+    // Persistent instance data (gapped layout, per-region windows)
+    std::vector<RegionBufferWindow>                    m_RegionWindows;
+    uint32_t                                           m_TotalCapacity = 0;
+    std::vector<Render::InstanceBufferEntry>           m_InstanceStaging;
+    std::vector<Render::CullInstanceData>              m_CullDataStaging;
 
-    // Shadow pass draw data (extended frustum culled, lowest LOD)
-    std::vector<Render::InstanceReference>             m_ShadowVisibleRefs;
-    std::vector<Render::ShadowDrawCmd>                 m_ShadowDrawCmds;
-    std::vector<Render::InstanceBufferEntry>           m_ShadowInstanceBuffer;
+    // Slot layout
+    uint32_t                                           m_NumSlots = 0;
+    std::vector<uint32_t>                              m_SlotOffsets;     // prefix sums
+    std::vector<uint32_t>                              m_MaxSlotCounts;   // max instances per slot
+    uint32_t                                           m_VisBufferSize = 0;
 
+    // -----------------------------------------------------------------------
+    // Init helpers
+    // -----------------------------------------------------------------------
     bool _InitShared();
+    bool _InitCullPass(nvrhi::ICommandList* initCL);
     bool _InitTreePass(nvrhi::ICommandList* initCL, engine::CommonRenderPasses& commonPasses);
     bool _InitShadowPass();
     bool _InitTerrainPass(nvrhi::ICommandList* initCL);
@@ -175,9 +198,14 @@ private:
     void _UploadAllAssets(nvrhi::IDevice* device, nvrhi::ICommandList* commandList);
     void _UploadAsset(const TreeAssetDef& assetDef, GPUTreeAsset& gpuAsset,
                       nvrhi::IDevice* device, nvrhi::ICommandList* commandList);
-    void _RebuildInstanceBuffers();
-    void _RebuildBindingSets();
+    void _BuildRegionWindows();
+    void _BuildSlotLayout();
+    void _UploadCullBuffers(nvrhi::ICommandList* commandList);
+    void _RebuildCullBindings();
 
+    // -----------------------------------------------------------------------
+    // Render helpers
+    // -----------------------------------------------------------------------
     void _RenderSkyPass(nvrhi::IFramebuffer* framebuffer);
     void _RenderShadowPass();
     void _RenderScenePass(nvrhi::IFramebuffer* framebuffer);
@@ -185,4 +213,4 @@ private:
 
 } // namespace Xylem
 
-#endif // XYLEM_TRADITIONAL_RENDER_PASS_H
+#endif // XYLEM_COMPUTE_CULL_RENDER_PASS_H

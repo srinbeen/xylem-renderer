@@ -27,7 +27,8 @@ set(DONUT_WITH_VULKAN OFF CACHE BOOL "" FORCE)
 
 set(DONUT_FORCE_DISCRETE_GPU ON CACHE BOOL "" FORCE)
 
-set(DONUT_WITH_AFTERMATH OFF CACHE BOOL "" FORCE)
+set(DONUT_WITH_AFTERMATH ON CACHE BOOL "" FORCE)
+set(AFTERMATH_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build/_deps/aftermath-src")
 
 
 if (NVRHI_WITH_DX12)
@@ -59,7 +60,9 @@ donut_compile_shaders_all_platforms(
     SHADER_MODEL 6_5
 )
 
-add_executable(${PROJECT_NAME} WIN32 ${sources})
+add_executable(${PROJECT_NAME} WIN32 ${sources}
+    Donut/thirdparty/imgui/misc/cpp/imgui_stdlib.cpp
+)
 
 target_compile_definitions(Xylem PRIVATE DONUT_SHADERS_OUTPUT_SUBDIR="${DONUT_SHADERS_OUTPUT_SUBDIR}")
 
@@ -72,7 +75,19 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
 endif()
 
 add_dependencies(${PROJECT_NAME} ${PROJECT_NAME}_shaders)
-target_link_libraries(${PROJECT_NAME} PRIVATE donut_app donut_render donut_engine donut_core)
-target_include_directories(${PROJECT_NAME} PRIVATE ${source_folder}/include ${DONUT_D3D_AGILITY_SDK_PATH}/build/native/include)
+target_link_libraries(${PROJECT_NAME} PRIVATE donut_app donut_render donut_engine donut_core
+    "${AFTERMATH_SDK_DIR}/lib/x64/GFSDK_Aftermath_Lib.x64.lib"
+)
+target_include_directories(${PROJECT_NAME} PRIVATE 
+    "${source_folder}/include"
+    "${DONUT_D3D_AGILITY_SDK_PATH}/build/native/include"
+    "${AFTERMATH_SDK_DIR}/include"
+)
+
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${AFTERMATH_SDK_DIR}/lib/x64/GFSDK_Aftermath_Lib.x64.dll"
+        "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+)
 set_target_properties(${PROJECT_NAME} PROPERTIES FOLDER ${PROJECT_NAME})
 

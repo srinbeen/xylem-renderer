@@ -12,7 +12,7 @@ cbuffer CB : register(b0)
     float3x4 _pad1;
 };
 
-#if PIPELINER_USE_STRUCTURED_BUFFER
+#if XYLEM_USE_STRUCTURED_BUFFER
 	struct RootConstant
 	{
 		uint instanceOffset;
@@ -34,11 +34,11 @@ void main_vs(
 	in float3 	i_bitangent : BITANGENT,
     in float2 	i_uv 		: UV,
 
-	in uint 	i_id 		: SV_InstanceID,
 
-	#if !PIPELINER_USE_STRUCTURED_BUFFER
+	#if !XYLEM_USE_STRUCTURED_BUFFER
 	in float4	im_model[4]	: MODEL_MATRIX,
 	in float3	im_norm[3]	: NORMAL_MATRIX,
+	in uint 	i_id 		: SV_InstanceID,
 	#endif
 
 	// outputs
@@ -56,7 +56,7 @@ void main_vs(
 	float4x4 model;
 	float3x3 normalMat;
 
-#if PIPELINER_USE_STRUCTURED_BUFFER
+#if XYLEM_USE_STRUCTURED_BUFFER
 	uint trueID = rootConstant.instanceOffset + i_id;
 	model = instanceBuffer[trueID].model;
 	normalMat = instanceBuffer[trueID].normal;

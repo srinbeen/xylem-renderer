@@ -11,12 +11,12 @@ using namespace Xylem;
 // ===========================================================================
 namespace {
 
-constexpr uint32_t kRelaxIterations = 15;
+constexpr uint32_t kRelaxIterations = 50;
 
 struct TreePlacement {
     dm::float2 pos;
     float      radius;
-    uint32_t   assetId;
+    size_t     assetId;
     float      rotY;
 };
 
@@ -59,17 +59,17 @@ uint32_t SceneRegistry::totalInstanceCount() const {
     return total;
 }
 
-TreeAssetDef* SceneRegistry::findAsset(uint32_t id) {
+TreeAssetDef* SceneRegistry::findAsset(size_t id) {
     auto it = m_AssetIdToIndex.find(id);
     return it != m_AssetIdToIndex.end() ? &m_Assets[it->second] : nullptr;
 }
 
-const TreeAssetDef* SceneRegistry::findAsset(uint32_t id) const {
+const TreeAssetDef* SceneRegistry::findAsset(size_t id) const {
     auto it = m_AssetIdToIndex.find(id);
     return it != m_AssetIdToIndex.end() ? &m_Assets[it->second] : nullptr;
 }
 
-size_t SceneRegistry::assetIndexById(uint32_t id) const {
+size_t SceneRegistry::assetIndexById(size_t id) const {
     auto it = m_AssetIdToIndex.find(id);
     return it != m_AssetIdToIndex.end() ? it->second : SIZE_MAX;
 }
@@ -82,7 +82,7 @@ void SceneRegistry::addLSystem(const std::string& name, std::unique_ptr<ProcGen:
     m_LSystems[name] = std::move(ls);
 }
 
-uint32_t SceneRegistry::addAsset(
+size_t SceneRegistry::addAsset(
     const std::string& name,
     const Scene::LSystemInstance& lsInstance,
     const ProcGen::TreeGenerator::Params& params,
@@ -102,14 +102,26 @@ uint32_t SceneRegistry::addAsset(
     return m_Assets.back().id;
 }
 
-void SceneRegistry::modifyAsset(uint32_t id, const ProcGen::TreeGenerator::Params& params) {
+void SceneRegistry::setAssetVisible(size_t id, bool visible) {
+    auto* asset = findAsset(id);
+    if (asset) asset->visible = visible;
+}
+
+void SceneRegistry::modifyAsset(size_t id, const ProcGen::TreeGenerator::Params& params) {
     auto* asset = findAsset(id);
     if (!asset) return;
     asset->genParams = params;
     asset->dirty = true;
+
+    // Bounding boxes are recomputed during asset rebuild, so any region
+    // containing this asset must also be rebuilt to update inst.bbox / cullBox.
+    for (auto& region : m_Regions) {
+        if (std::find(region.assetIds.begin(), region.assetIds.end(), id) != region.assetIds.end())
+            region.dirty = true;
+    }
 }
 
-void SceneRegistry::removeAsset(uint32_t id) {
+void SceneRegistry::removeAsset(size_t id) {
     auto it = m_AssetIdToIndex.find(id);
     if (it == m_AssetIdToIndex.end()) return;
 
@@ -129,7 +141,7 @@ void SceneRegistry::removeAsset(uint32_t id) {
 }
 
 void SceneRegistry::addRegion(const std::string& name, float density, const dm::box2& bounds,
-                              const std::vector<uint32_t>& assetIds) {
+                              const std::vector<size_t>& assetIds) {
     RegionDef def(name, density, bounds);
     def.assetIds = assetIds;
     def.dirty    = true;
@@ -144,6 +156,17 @@ void SceneRegistry::modifyRegion(size_t idx, float density, const dm::box2& boun
     float area = (bounds.m_maxs.x - bounds.m_mins.x) * (bounds.m_maxs.y - bounds.m_mins.y);
     r.instanceCount = std::max(1u, static_cast<uint32_t>(std::round(density * area)));
     r.dirty = true;
+}
+
+void SceneRegistry::modifyRegionAssets(size_t idx, const std::vector<size_t>& assetIds) {
+    if (idx >= m_Regions.size()) return;
+    m_Regions[idx].assetIds = assetIds;
+    m_Regions[idx].dirty    = true;
+}
+
+void SceneRegistry::setRegionAssetVisible(size_t regionIdx, size_t assetId, bool visible) {
+    if (regionIdx >= m_Regions.size()) return;
+    m_Regions[regionIdx].assetVisible[assetId] = visible;
 }
 
 void SceneRegistry::removeRegion(size_t idx) {
@@ -233,15 +256,15 @@ void SceneRegistry::_rebuildRegion(RegionDef& region) {
 
     if (region.assetIds.empty() || m_Assets.empty()) return;
 
-    const uint32_t seedPos = 0xDEADBEEF ^ static_cast<uint32_t>(&region - m_Regions.data());
-    const uint32_t seedRot = 0xFEEDBEEF ^ static_cast<uint32_t>(&region - m_Regions.data());
+    const uint32_t seedPos = g_MasterSeed ^ 0xBEEFDEAD ^ static_cast<uint32_t>(&region - m_Regions.data());
+    const uint32_t seedRot = g_MasterSeed ^ 0xFEEDBEEF ^ static_cast<uint32_t>(&region - m_Regions.data());
 
     const dm::float2 range = region.bounds.diagonal();
     const dm::affine3 xRotOnly = dm::rotation(dm::float3(1.f, 0.f, 0.f), -dm::PI_f / 2.0f);
 
     // Compute max radius for spatial grid cell size.
     float maxRadius = 0.f;
-    for (uint32_t aid : region.assetIds) {
+    for (size_t aid : region.assetIds) {
         const auto* asset = findAsset(aid);
         if (!asset || asset->lods.empty()) continue;
         dm::box3   rotatedBox = asset->lods[0].bbox * xRotOnly;
@@ -258,7 +281,7 @@ void SceneRegistry::_rebuildRegion(RegionDef& region) {
         float posZ = region.bounds.m_mins.y + hashToFloat(i * 2u + 1, seedPos) * range.y;
         float rotY = hashToFloat(i, seedRot) * dm::PI_f;
 
-        uint32_t assetId = region.assetIds[i % region.assetIds.size()];
+        size_t assetId = region.assetIds[i % region.assetIds.size()];
         const auto* asset = findAsset(assetId);
         float radius = asset && !asset->lods.empty()
             ? dm::length(asset->lods[0].bbox.diagonal()) * 0.5f : 1.f;
@@ -328,7 +351,7 @@ void SceneRegistry::_rebuildRegion(RegionDef& region) {
                                     dirZ = deltaZ / dist;
                                 }
 
-                                float push = overlap * 0.5f;
+                                float push = overlap * 0.4f;
 
                                 displacements[tI].x -= dirX * push;
                                 displacements[tI].y -= dirZ * push;

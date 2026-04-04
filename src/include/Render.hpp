@@ -60,6 +60,39 @@ struct InstanceReference {
     uint32_t lodID;
 };
 
+// GPU cull instance data — parallel to InstanceBufferEntry in gapped buffer layout.
+struct CullInstanceData {
+    dm::box3 bbox;
+    uint32_t   baseSlot;  // treeId * numLODs
+    uint32_t   active;    // 1 = live, 0 = dead capacity slot
+};
+
+// Extended constant buffer for compute cull pass.
+struct CullConstantBufferEntry {
+    // P0 fields (read by VS/PS)
+    dm::float4x4 view;
+    dm::float4x4 projection;
+    dm::float4x4 lightViewProj;
+    dm::float3   sunLightDir;
+    float        _pad0;
+    dm::float3x4 _pad1;
+
+    // Cull fields (read by CullCS)
+    dm::frustum  viewFrustum;              
+    dm::frustum  lightFrustum;    
+    dm::float3   cameraPos;
+    uint32_t     totalCapacity;
+    struct { float val; float _p[3]; } lodDistances[3];
+    uint32_t     numLods;
+    uint32_t     numSlots;
+    uint32_t     visBufferSize;
+    uint32_t     _pad2;
+};
+
+static constexpr size_t c_CullConstantBufferSize =
+    (sizeof(CullConstantBufferEntry) + (nvrhi::c_ConstantBufferOffsetSizeAlignment - 1))
+    & ~(nvrhi::c_ConstantBufferOffsetSizeAlignment - 1);
+
 } // namespace Xylem::Render
 
 #endif // XYLEM_RENDER_H

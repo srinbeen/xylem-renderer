@@ -4,8 +4,9 @@
 #include <cstdint>
 
 namespace Xylem {
+    inline const uint32_t g_MasterSeed = 0xDEADBEEF;
 
-    inline uint32_t hash(uint32_t x, uint32_t seed) {
+    inline uint32_t hash(uint32_t x, uint32_t seed = g_MasterSeed) {
         x ^= seed;
         x = ((x >> 16) ^ x) * 0x45d9f3b;
         x = ((x >> 16) ^ x) * 0x45d9f3b;

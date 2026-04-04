@@ -1,16 +1,16 @@
 {
   "sun": {
-    "direction": [-0.5, -1, 0.5]
+    "direction": [-0.4, -1.0, 0.6]
   },
   "camera": {
-    "position": [0, 8, -40],
-    "direction": [0, -0.5, 1],
-    "moveSpeed": 15.0,
+    "position": [0, 150, -500],
+    "direction": [0, -0.2, 1.0],
+    "moveSpeed": 150.0,
     "fov": 60.0
   },
   "lods": {
     "radialSegments": [16, 8, 4],
-    "distances": [16.0, 64.0, 256.0]
+    "distances": [30.0, 100.0, 400.0]
   },
   "lsystems": [
     {
@@ -43,6 +43,46 @@
       "rules": {
         "F": "FF[+>F-<F-F][^-F&F+F]"
       }
+    },
+    {
+      "name": "Spruce",
+      "axiom": "X",
+      "rules": {
+        "X": "F[+>X][-<X][^>X][&<X]FX",
+        "F": "FF"
+      }
+    },
+    {
+      "name": "Birch",
+      "axiom": "X",
+      "rules": {
+        "X": "F[-<&X][+>^X]FX",
+        "F": "FF"
+      }
+    },
+    {
+      "name": "Maple",
+      "axiom": "X",
+      "rules": {
+        "X": "F[+&>X][-^>X][+^<X][-&<X]FX",
+        "F": "FF"
+      }
+    },
+    {
+      "name": "Cypress",
+      "axiom": "X",
+      "rules": {
+        "X": "F[+>^X][->&X]FX",
+        "F": "FF"
+      }
+    },
+    {
+      "name": "Fern",
+      "axiom": "X",
+      "rules": {
+        "X": "F[->&X][+<^X]X",
+        "F": "FF"
+      }
     }
   ],
   "assets": [
@@ -55,6 +95,17 @@
       "stepRatio": 0.90,
       "stepLength": 1.2,
       "seed": 67,
+      "barkTexture": "japanese_hackberry_bark_1k"
+    },
+    {
+      "name": "OakAged",
+      "lsystem": "Oak",
+      "generation": 4,
+      "branchAngle": 28.0,
+      "taperRatio": 0.82,
+      "stepRatio": 0.88,
+      "stepLength": 1.4,
+      "seed": 123,
       "barkTexture": "japanese_hackberry_bark_1k"
     },
     {
@@ -73,7 +124,7 @@
       "lsystem": "Pine",
       "generation": 4,
       "branchAngle": 20.0,
-      "taperRatio": 0.9,
+      "taperRatio": 0.90,
       "stepRatio": 0.88,
       "stepLength": 1.0,
       "seed": 676767,
@@ -91,14 +142,124 @@
       "barkTexture": "japanese_hackberry_bark_1k"
     },
     {
+      "name": "PineSlender",
+      "lsystem": "Pine",
+      "generation": 4,
+      "branchAngle": 15.0,
+      "taperRatio": 0.92,
+      "stepRatio": 0.90,
+      "stepLength": 0.9,
+      "seed": 8080,
+      "barkTexture": "japanese_hackberry_bark_1k"
+    },
+    {
+      "name": "SpruceDense",
+      "lsystem": "Spruce",
+      "generation": 4,
+      "branchAngle": 22.0,
+      "taperRatio": 0.88,
+      "stepRatio": 0.86,
+      "stepLength": 0.9,
+      "seed": 1234,
+      "barkTexture": "japanese_hackberry_bark_1k"
+    },
+    {
+      "name": "SpruceYoung",
+      "lsystem": "Spruce",
+      "generation": 3,
+      "branchAngle": 18.0,
+      "taperRatio": 0.80,
+      "stepRatio": 0.90,
+      "stepLength": 0.7,
+      "seed": 5678,
+      "barkTexture": "japanese_hackberry_bark_1k"
+    },
+    {
+      "name": "BirchTall",
+      "lsystem": "Birch",
+      "generation": 4,
+      "branchAngle": 30.0,
+      "taperRatio": 0.90,
+      "stepRatio": 0.93,
+      "stepLength": 1.1,
+      "seed": 2345,
+      "barkTexture": "bark_willow_02_1k"
+    },
+    {
+      "name": "BirchYoung",
+      "lsystem": "Birch",
+      "generation": 3,
+      "branchAngle": 28.0,
+      "taperRatio": 0.85,
+      "stepRatio": 0.91,
+      "stepLength": 0.8,
+      "seed": 9012,
+      "barkTexture": "bark_willow_02_1k"
+    },
+    {
+      "name": "MapleWide",
+      "lsystem": "Maple",
+      "generation": 4,
+      "branchAngle": 40.0,
+      "taperRatio": 0.83,
+      "stepRatio": 0.88,
+      "stepLength": 1.0,
+      "seed": 3456,
+      "barkTexture": "japanese_hackberry_bark_1k"
+    },
+    {
+      "name": "MapleYoung",
+      "lsystem": "Maple",
+      "generation": 3,
+      "branchAngle": 38.0,
+      "taperRatio": 0.85,
+      "stepRatio": 0.90,
+      "stepLength": 0.8,
+      "seed": 7890,
+      "barkTexture": "bark_willow_02_1k"
+    },
+    {
+      "name": "CypressColumn",
+      "lsystem": "Cypress",
+      "generation": 4,
+      "branchAngle": 10.0,
+      "taperRatio": 0.92,
+      "stepRatio": 0.91,
+      "stepLength": 1.1,
+      "seed": 4321,
+      "barkTexture": "japanese_hackberry_bark_1k"
+    },
+    {
+      "name": "CypressSmall",
+      "lsystem": "Cypress",
+      "generation": 3,
+      "branchAngle": 12.0,
+      "taperRatio": 0.88,
+      "stepRatio": 0.93,
+      "stepLength": 0.8,
+      "seed": 8765,
+      "barkTexture": "japanese_hackberry_bark_1k"
+    },
+    {
       "name": "WillowLarge",
       "lsystem": "Willow",
       "generation": 3,
       "branchAngle": 37.5,
-      "taperRatio": 0.8,
+      "taperRatio": 0.80,
       "stepRatio": 0.91,
       "stepLength": 1.1,
       "seed": 69,
+      "barkTexture": "bark_willow_1k"
+    },
+    {
+      "name": "WillowSmall",
+      "lsystem": "Willow",
+      "generation": 3,
+      "branchAngle": 33.0,
+      "taperRatio": 0.78,
+      "stepRatio": 0.89,
+      "stepLength": 0.8,
+      "seed": 420,
       "barkTexture": "bark_willow_1k"
     },
     {
@@ -111,39 +272,139 @@
       "stepLength": 0.5,
       "seed": 6769,
       "barkTexture": "bark_willow_02_1k"
+    },
+    {
+      "name": "ShrubSparse",
+      "lsystem": "Shrub",
+      "generation": 2,
+      "branchAngle": 28.0,
+      "taperRatio": 0.72,
+      "stepRatio": 0.85,
+      "stepLength": 0.6,
+      "seed": 1111,
+      "barkTexture": "bark_willow_02_1k"
+    },
+    {
+      "name": "FernPatch",
+      "lsystem": "Fern",
+      "generation": 3,
+      "branchAngle": 45.0,
+      "taperRatio": 0.70,
+      "stepRatio": 0.80,
+      "stepLength": 0.4,
+      "seed": 2222,
+      "barkTexture": "bark_willow_02_1k"
     }
   ],
   "terrain": {
     "seed": 42,
-    "octaves": 4,
-    "frequency": 0.05,
-    "amplitude": 8.0,
-    "gridSpacing": 0.5
+    "octaves": 5,
+    "frequency": 0.02,
+    "amplitude": 15.0,
+    "gridSpacing": 1.0
   },
   "regions": [
     {
-      "name": "OakGrove",
+      "name": "OakForest",
       "density": 0.022,
-      "boundsMinX": -40, "boundsMinY": -40, "boundsMaxX": -10, "boundsMaxY": -10,
-      "assets": ["OakMature", "OakSapling"]
+      "boundsMinX": -150, "boundsMinY": -150, "boundsMaxX": -50, "boundsMaxY": -50,
+      "assets": ["OakMature", "OakAged", "OakSapling"]
     },
     {
-      "name": "PineStand",
-      "density": 0.028,
-      "boundsMinX": 10, "boundsMinY": -40, "boundsMaxX": 40, "boundsMaxY": -10,
-      "assets": ["PineTall", "PineSmall"]
+      "name": "MapleGrove",
+      "density": 0.018,
+      "boundsMinX": 50, "boundsMinY": -50, "boundsMaxX": 150, "boundsMaxY": 50,
+      "assets": ["MapleWide", "MapleYoung"]
     },
     {
-      "name": "WillowGlade",
-      "density": 0.013,
-      "boundsMinX": -15, "boundsMinY": 10, "boundsMaxX": 15, "boundsMaxY": 40,
-      "assets": ["WillowLarge"]
+      "name": "WillowWetland",
+      "density": 0.015,
+      "boundsMinX": -150, "boundsMinY": 50, "boundsMaxX": -50, "boundsMaxY": 150,
+      "assets": ["WillowLarge", "WillowSmall"]
     },
     {
-      "name": "Undergrowth",
+      "name": "CypressStand",
+      "density": 0.020,
+      "boundsMinX": -50, "boundsMinY": 50, "boundsMaxX": 50, "boundsMaxY": 150,
+      "assets": ["CypressColumn", "CypressSmall"]
+    },
+    {
+      "name": "OpenShrubland",
+      "density": 0.035,
+      "boundsMinX": 50, "boundsMinY": 50, "boundsMaxX": 150, "boundsMaxY": 150,
+      "assets": ["ShrubDense", "ShrubSparse", "FernPatch"]
+    },
+    {
+      "name": "FarNorthOak",
+      "density": 0.022,
+      "boundsMinX": -475, "boundsMinY": -475, "boundsMaxX": -150, "boundsMaxY": -150,
+      "assets": ["OakMature", "OakAged", "OakSapling"]
+    },
+    {
+      "name": "FarNorthPine",
       "density": 0.025,
-      "boundsMinX": -40, "boundsMinY": -10, "boundsMaxX": 40, "boundsMaxY": 10,
-      "assets": ["ShrubDense", "OakSapling", "PineSmall"]
+      "boundsMinX": -150, "boundsMinY": -475, "boundsMaxX": 150, "boundsMaxY": -150,
+      "assets": ["PineTall", "PineSmall", "PineSlender"]
+    },
+    {
+      "name": "FarNorthSpruce",
+      "density": 0.022,
+      "boundsMinX": 150, "boundsMinY": -475, "boundsMaxX": 475, "boundsMaxY": -150,
+      "assets": ["SpruceDense", "SpruceYoung"]
+    },
+    {
+      "name": "FarWestBirch",
+      "density": 0.020,
+      "boundsMinX": -475, "boundsMinY": -150, "boundsMaxX": -150, "boundsMaxY": 150,
+      "assets": ["BirchTall", "BirchYoung", "WillowSmall"]
+    },
+    {
+      "name": "FarEastMaple",
+      "density": 0.018,
+      "boundsMinX": 150, "boundsMinY": -150, "boundsMaxX": 475, "boundsMaxY": 150,
+      "assets": ["MapleWide", "MapleYoung", "CypressSmall"]
+    },
+    {
+      "name": "FarSouthWillow",
+      "density": 0.016,
+      "boundsMinX": -475, "boundsMinY": 150, "boundsMaxX": -150, "boundsMaxY": 475,
+      "assets": ["WillowLarge", "WillowSmall", "ShrubDense"]
+    },
+    {
+      "name": "FarSouthCypress",
+      "density": 0.020,
+      "boundsMinX": -150, "boundsMinY": 150, "boundsMaxX": 150, "boundsMaxY": 475,
+      "assets": ["CypressColumn", "CypressSmall", "ShrubSparse"]
+    },
+    {
+      "name": "NorthPineStrip",
+      "density": 0.024,
+      "boundsMinX": -50, "boundsMinY": -150, "boundsMaxX": 50, "boundsMaxY": -50,
+      "assets": ["PineTall", "PineSlender", "SpruceYoung"]
+    },
+    {
+      "name": "NorthEastSpruce",
+      "density": 0.022,
+      "boundsMinX": 50, "boundsMinY": -150, "boundsMaxX": 150, "boundsMaxY": -50,
+      "assets": ["SpruceDense", "SpruceYoung", "PineSmall"]
+    },
+    {
+      "name": "WestBirchGlade",
+      "density": 0.020,
+      "boundsMinX": -150, "boundsMinY": -50, "boundsMaxX": -50, "boundsMaxY": 50,
+      "assets": ["BirchTall", "BirchYoung", "OakSapling"]
+    },
+    {
+      "name": "FarSouthEastMixed",
+      "density": 0.020,
+      "boundsMinX": 150, "boundsMinY": 150, "boundsMaxX": 475, "boundsMaxY": 475,
+      "assets": ["MapleWide", "MapleYoung", "SpruceDense", "BirchTall"]
+    },
+    {
+      "name": "CentralMixed",
+      "density": 0.018,
+      "boundsMinX": -50, "boundsMinY": -50, "boundsMaxX": 50, "boundsMaxY": 50,
+      "assets": ["OakMature", "MapleWide", "BirchTall", "WillowSmall"]
     }
   ]
 }

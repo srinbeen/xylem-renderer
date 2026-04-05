@@ -1,8 +1,6 @@
-#include "include/TraditionalRenderPass.hpp"
-#include "include/ComputeCullRenderPass.hpp"
+#include "include/RenderOrchestrator.hpp"
 #include "include/Globals.hpp"
 #include "include/SceneLoader.hpp"
-#include "include/UIRenderer.hpp"
 
 #include <GFSDK_Aftermath.h>
 #include <GFSDK_Aftermath_GpuCrashDump.h>
@@ -44,11 +42,11 @@ std::shared_ptr<engine::ShaderFactory> createShaderFactory(app::DeviceManager* d
     std::filesystem::path appShaderPath =
         g_BinDirectory / "shaders/custom" /
         app::GetShaderTypeName(deviceManager->GetDevice()->getGraphicsAPI());
-    
+
     auto rootFS = std::make_shared<vfs::RootFileSystem>();
     rootFS->mount("/shaders/donut", fwShaderPath);
     rootFS->mount("/shaders/app",   appShaderPath);
-    
+
     return std::make_shared<engine::ShaderFactory>(
         deviceManager->GetDevice(), rootFS, "/shaders"
     );
@@ -77,12 +75,12 @@ int main(int __argc, const char** __argv)
     app::DeviceManager* deviceManager = app::DeviceManager::Create(api);
 
     app::DeviceCreationParameters deviceParams;
-    
+
     #ifdef _DEBUG
         deviceParams.enableDebugRuntime         = true;
         deviceParams.enableNvrhiValidationLayer = true;
     #endif
-    
+
     deviceParams.depthBufferFormat = nvrhi::Format::D16;
 
     if (!deviceManager->CreateWindowDeviceAndSwapChain(deviceParams, g_WindowTitle)) {
@@ -110,24 +108,18 @@ int main(int __argc, const char** __argv)
     {
         UIData uiData;
         SceneRegistry registry;
-        if (!SceneLoader::Load(g_SceneConfigDirectory, registry)) 
+        if (!SceneLoader::Load(g_SceneConfigDirectory, registry))
             log::error("Error in scene loading");
 
-        // TraditionalRenderPass renderPass(deviceManager, registry, uiData);
-        ComputeCullRenderPass renderPass(deviceManager, registry, uiData);
-
         auto shaderFactory = createShaderFactory(deviceManager);
-        renderPass.SetShaderFactory(shaderFactory);
 
-        if (renderPass.Init()) {
-            UIRenderer uiPass(deviceManager, &registry, uiData);
-            uiPass.Init(shaderFactory);
+        RenderOrchestrator orchestrator(deviceManager, registry, uiData);
+        orchestrator.SetShaderFactory(shaderFactory);
 
-            deviceManager->AddRenderPassToBack(&renderPass);
-            deviceManager->AddRenderPassToBack(&uiPass);
+        if (orchestrator.Init()) {
+            deviceManager->AddRenderPassToBack(&orchestrator);
             deviceManager->RunMessageLoop();
-            deviceManager->RemoveRenderPass(&uiPass);
-            deviceManager->RemoveRenderPass(&renderPass);
+            deviceManager->RemoveRenderPass(&orchestrator);
         }
     }
 

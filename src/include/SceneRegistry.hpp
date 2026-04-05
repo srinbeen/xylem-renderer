@@ -126,6 +126,7 @@ public:
     std::vector<size_t> getDirtyRegionIndices() const;
 
     void clearDirtyFlags();
+    void markAllDirty();
 
     // -------------------------------------------------------------------
     // Rebuild — regenerates CPU data for dirty items

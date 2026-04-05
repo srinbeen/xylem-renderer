@@ -16,6 +16,7 @@
 #include "SceneRegistry.hpp"
 #include "Render.hpp"
 #include "UIData.hpp"
+#include "ViewHandler.hpp"
 
 namespace Xylem {
 
@@ -27,8 +28,8 @@ public:
     static constexpr uint32_t k_ShadowRes     = 2048;
     static constexpr float    k_CapacitySlack = 1.5f;
 
-    ComputeCullRenderPass(app::DeviceManager* dm, SceneRegistry& registry, UIData& ui)
-        : IRenderPass{dm}, m_Registry{registry}, m_UI{ui} {}
+    ComputeCullRenderPass(app::DeviceManager* dm, SceneRegistry& registry, UIData& ui, ViewHandler& vh)
+        : IRenderPass{dm}, m_Registry{registry}, m_UI{ui}, m_ViewHandler{vh} {}
 
     void SetShaderFactory(std::shared_ptr<engine::ShaderFactory> sf) { m_ShaderFactory = std::move(sf); }
 
@@ -38,26 +39,10 @@ public:
     void BackBufferResizing() override;
     void Render(nvrhi::IFramebuffer* framebuffer) override;
 
-    bool KeyboardUpdate(int key, int scancode, int action, int mods) override;
-    bool MousePosUpdate(double xpos, double ypos) override;
-    bool MouseScrollUpdate(double xoffset, double yoffset) override;
-    bool MouseButtonUpdate(int button, int action, int mods) override;
-    bool JoystickButtonUpdate(int button, bool pressed) override;
-    bool JoystickAxisUpdate(int axis, float value) override;
-
     void onAssetsDirty(const std::vector<size_t>& dirtyAssetIndices);
     void onRegionsDirty(const std::vector<size_t>& dirtyRegionIndices);
 
 private:
-    struct ViewHandler {
-        app::FirstPersonCamera camera;
-        engine::PlanarView     view;
-        dm::affine3            worldToLight;
-        dm::box3               shadowCasterBboxLS;
-
-        void updateShadowVolume(const dm::box3& sceneBbox, dm::float3 sunDirection);
-    };
-
     struct TextureSet {
         nvrhi::TextureHandle diffuse;
         nvrhi::TextureHandle normalMap;
@@ -95,8 +80,9 @@ private:
         nvrhi::BufferHandle              slotOffsetBuffer;     // SRV uint32[numSlots]
         nvrhi::BufferHandle              countBuffer;          // UAV uint32[numSlots]
         nvrhi::BufferHandle              visibilityBuffer;     // UAV uint32[visBufferSize]
-        nvrhi::BufferHandle              shadowCountBuffer;    // UAV uint32[1]
-        nvrhi::BufferHandle              shadowVisBuffer;      // UAV uint32[totalCapacity]
+        nvrhi::BufferHandle              shadowCountBuffer;      // UAV uint32[numAssets]
+        nvrhi::BufferHandle              shadowVisBuffer;        // UAV uint32[shadowVisBufferSize]
+        nvrhi::BufferHandle              shadowSlotOffsetBuffer; // SRV uint32[numAssets]
     };
 
     // Tree draw pass — uses visibility indirection via structured buffers
@@ -158,7 +144,7 @@ private:
 
     nvrhi::CommandListHandle                           m_CommandList;
     GFSDK_Aftermath_ContextHandle                      m_AftermathContext = nullptr;
-    std::unique_ptr<ViewHandler>                       m_ViewHandler;
+    ViewHandler&                                       m_ViewHandler;
     std::shared_ptr<engine::ShaderFactory>             m_ShaderFactory;
 
     // nvrhi::TimerQueryHandle                            m_GpuTimers[k_QueuedFrames];
@@ -177,11 +163,15 @@ private:
     std::vector<Render::InstanceBufferEntry>           m_InstanceStaging;
     std::vector<Render::CullInstanceData>              m_CullDataStaging;
 
-    // Slot layout
+    // Slot layout (main pass: numAssets × numLods slots)
     uint32_t                                           m_NumSlots = 0;
-    std::vector<uint32_t>                              m_SlotOffsets;     // prefix sums
-    std::vector<uint32_t>                              m_MaxSlotCounts;   // max instances per slot
+    std::vector<uint32_t>                              m_SlotOffsets;       // prefix sums [numSlots]
+    std::vector<uint32_t>                              m_MaxSlotCounts;     // max instances per slot [numSlots]
     uint32_t                                           m_VisBufferSize = 0;
+
+    // Shadow slot layout (per-asset, no LOD axis)
+    std::vector<uint32_t>                              m_ShadowSlotOffsets; // prefix sums [numAssets]
+    uint32_t                                           m_ShadowVisBufferSize = 0;
 
     // -----------------------------------------------------------------------
     // Init helpers
@@ -192,7 +182,6 @@ private:
     bool _InitShadowPass();
     bool _InitTerrainPass(nvrhi::ICommandList* initCL);
     bool _InitSkyPass();
-    bool _InitViewHandler();
     // bool _InitTimerQueries();
 
     void _UploadAllAssets(nvrhi::IDevice* device, nvrhi::ICommandList* commandList);

@@ -146,8 +146,7 @@ void ComputeCullRenderPass::_BuildSlotLayout() {
         for (uint32_t i = 0; i < win.count; i++) {
             uint32_t idx = win.offset + i;
             uint32_t treeId = m_InstanceStaging[idx].treeId;
-            if (treeId < numAssets)
-                livePerAsset[treeId]++;
+            livePerAsset[treeId]++;
         }
     }
 
@@ -168,6 +167,15 @@ void ComputeCullRenderPass::_BuildSlotLayout() {
     }
 
     m_VisBufferSize = std::max(1u, m_VisBufferSize);
+
+    // Shadow slot layout — one slot per asset (no LOD axis)
+    m_ShadowSlotOffsets.resize(numAssets);
+    m_ShadowVisBufferSize = 0;
+    for (uint32_t ai = 0; ai < numAssets; ai++) {
+        m_ShadowSlotOffsets[ai] = m_ShadowVisBufferSize;
+        m_ShadowVisBufferSize  += livePerAsset[ai];
+    }
+    m_ShadowVisBufferSize = std::max(1u, m_ShadowVisBufferSize);
 }
 
 // ===========================================================================
@@ -242,25 +250,42 @@ void ComputeCullRenderPass::_UploadCullBuffers(nvrhi::ICommandList* commandList)
             .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess)
     );
 
-    // ShadowCountBuffer — UAV, single uint32 (written by CS, read as SRV by shadow draw)
+    const uint32_t numAssets = static_cast<uint32_t>(m_GPUAssets.size());
+
+    // ShadowCountBuffer — UAV uint32[numAssets], one counter per asset
     m_CullPass.shadowCountBuffer = device->createBuffer(
         nvrhi::BufferDesc()
-            .setByteSize(sizeof(uint32_t))
+            .setByteSize(std::max(1u, numAssets) * sizeof(uint32_t))
             .setStructStride(sizeof(uint32_t))
             .setDebugName("ShadowCountBuffer")
             .setCanHaveUAVs(true)
             .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess)
     );
 
-    // ShadowVisBuffer — UAV structured buffer (written by CS, read as SRV by shadow draw)
+    // ShadowVisBuffer — UAV uint32[shadowVisBufferSize], per-asset windows
     m_CullPass.shadowVisBuffer = device->createBuffer(
         nvrhi::BufferDesc()
-            .setByteSize(m_TotalCapacity * sizeof(uint32_t))
+            .setByteSize(m_ShadowVisBufferSize * sizeof(uint32_t))
             .setStructStride(sizeof(uint32_t))
             .setDebugName("ShadowVisBuffer")
             .setCanHaveUAVs(true)
             .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess)
     );
+
+    // ShadowSlotOffsetBuffer — SRV uint32[numAssets], prefix sums into ShadowVisBuffer
+    m_CullPass.shadowSlotOffsetBuffer = device->createBuffer(
+        nvrhi::BufferDesc()
+            .setByteSize(std::max(1u, numAssets) * sizeof(uint32_t))
+            .setStructStride(sizeof(uint32_t))
+            .setDebugName("ShadowSlotOffsetBuffer")
+            .setCanHaveUAVs(false)
+            .setInitialState(nvrhi::ResourceStates::CopyDest)
+    );
+    commandList->beginTrackingBufferState(m_CullPass.shadowSlotOffsetBuffer, nvrhi::ResourceStates::CopyDest);
+    if (numAssets > 0)
+        commandList->writeBuffer(m_CullPass.shadowSlotOffsetBuffer,
+            m_ShadowSlotOffsets.data(), numAssets * sizeof(uint32_t));
+    commandList->setPermanentBufferState(m_CullPass.shadowSlotOffsetBuffer, nvrhi::ResourceStates::ShaderResource);
 }
 
 // ===========================================================================
@@ -277,6 +302,7 @@ void ComputeCullRenderPass::_RebuildCullBindings() {
             nvrhi::BufferRange(0, Render::c_CullConstantBufferSize)),
         nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_CullPass.cullDataBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_CullPass.slotOffsetBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_CullPass.shadowSlotOffsetBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_UAV(0, m_CullPass.countBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_UAV(1, m_CullPass.visibilityBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_UAV(2, m_CullPass.shadowCountBuffer),
@@ -305,7 +331,7 @@ void ComputeCullRenderPass::_RebuildCullBindings() {
         m_TreePass.bindingSets[i] = device->createBindingSet(bsd, m_TreePass.bindingLayout);
     }
 
-    // Shadow pass binding set — needs shadow visibility SRVs + instance buffer
+    // Shadow pass binding set
     nvrhi::BindingSetDesc shadowBSD;
     shadowBSD.bindings = {
         nvrhi::BindingSetItem::ConstantBuffer(0, m_Shared.constantBuffer,
@@ -313,6 +339,8 @@ void ComputeCullRenderPass::_RebuildCullBindings() {
         nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_CullPass.shadowVisBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_CullPass.persistentInstBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_CullPass.shadowCountBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(3, m_CullPass.shadowSlotOffsetBuffer),
+        nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t)),
     };
     m_ShadowPass.bindingSet = device->createBindingSet(shadowBSD, m_ShadowPass.bindingLayout);
 }
@@ -346,7 +374,6 @@ bool ComputeCullRenderPass::Init() {
         if (!_InitTreePass(initCL, commonPasses))          return false;
         if (!_InitTerrainPass(initCL))                     return false;
         if (!_InitSkyPass())                               return false;
-        if (!_InitViewHandler())                           return false;
 
         _BuildRegionWindows();
         _BuildSlotLayout();
@@ -380,7 +407,6 @@ bool ComputeCullRenderPass::Init() {
 // ===========================================================================
 
 void ComputeCullRenderPass::Animate(float seconds) {
-    m_ViewHandler->camera.Animate(seconds);
     GetDeviceManager()->SetInformativeWindowTitle(g_WindowTitle);
 
     if (!m_Registry.anyDirty()) return;
@@ -414,16 +440,23 @@ void ComputeCullRenderPass::onAssetsDirty(const std::vector<size_t>& dirtyAssetI
     cl->open();
 
     const auto& assets = m_Registry.getAssets();
-    for (size_t idx : dirtyAssetIndices) {
-        const auto& assetDef = assets[idx];
-        auto it = m_AssetIdToGPUIndex.find(assetDef.id);
-        if (it != m_AssetIdToGPUIndex.end()) {
-            _UploadAsset(assetDef, m_GPUAssets[it->second], GetDevice(), cl);
-        } else {
-            GPUTreeAsset gpuAsset;
-            _UploadAsset(assetDef, gpuAsset, GetDevice(), cl);
-            m_AssetIdToGPUIndex[assetDef.id] = m_GPUAssets.size();
-            m_GPUAssets.push_back(std::move(gpuAsset));
+
+    // If the GPU asset count doesn't match the registry (asset was removed),
+    // re-upload everything from scratch so phantom entries are cleared.
+    if (m_GPUAssets.size() != assets.size()) {
+        _UploadAllAssets(GetDevice(), cl);
+    } else {
+        for (size_t idx : dirtyAssetIndices) {
+            const auto& assetDef = assets[idx];
+            auto it = m_AssetIdToGPUIndex.find(assetDef.id);
+            if (it != m_AssetIdToGPUIndex.end()) {
+                _UploadAsset(assetDef, m_GPUAssets[it->second], GetDevice(), cl);
+            } else {
+                GPUTreeAsset gpuAsset;
+                _UploadAsset(assetDef, gpuAsset, GetDevice(), cl);
+                m_AssetIdToGPUIndex[assetDef.id] = m_GPUAssets.size();
+                m_GPUAssets.push_back(std::move(gpuAsset));
+            }
         }
     }
 
@@ -463,8 +496,8 @@ void ComputeCullRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     const nvrhi::FramebufferInfoEx& fbinfo = framebuffer->getFramebufferInfo();
 
     if (!m_TreePass.pipeline) {
-        m_ViewHandler->view.SetViewport({ float(fbinfo.width), float(fbinfo.height) });
-        m_ViewHandler->view.SetProjectionMatrix(
+        m_ViewHandler.view.SetViewport({ float(fbinfo.width), float(fbinfo.height) });
+        m_ViewHandler.view.SetProjectionMatrix(
         #if XYLEM_USE_REVERSE_Z
             dm::perspProjD3DStyleReverse(
                 dm::radians(60.f),
@@ -487,15 +520,15 @@ void ComputeCullRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
 
     GFSDK_Aftermath_SetEventMarker(m_AftermathContext, "Frame::Begin", 0);
 
-    m_ViewHandler->view.SetViewMatrix(m_ViewHandler->camera.GetWorldToViewMatrix());
-    m_ViewHandler->view.UpdateCache();
+    m_ViewHandler.view.SetViewMatrix(m_ViewHandler.camera.GetWorldToViewMatrix());
+    m_ViewHandler.view.UpdateCache();
 
     nvrhi::utils::ClearColorAttachment(m_CommandList, framebuffer, 0, nvrhi::Color(0.f));
     #if XYLEM_USE_REVERSE_Z
     nvrhi::utils::ClearDepthStencilAttachment(m_CommandList, framebuffer, 0.f, 0);
     #else
     nvrhi::utils::ClearDepthStencilAttachment(m_CommandList, framebuffer,
-        m_ViewHandler->view.GetViewFrustum().farPlane().distance, 0);
+        m_ViewHandler.view.GetViewFrustum().farPlane().distance, 0);
     #endif
 
     dm::box3 sceneBbox = dm::box3::empty();
@@ -505,9 +538,9 @@ void ComputeCullRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     if (terrain)
         sceneBbox |= terrain->getBbox();
 
-    m_ViewHandler->updateShadowVolume(sceneBbox, m_Registry.getSunDirection());
+    m_ViewHandler.updateShadowVolume(sceneBbox, m_Registry.getSunDirection());
 
-    const dm::box3& shadowCasterBboxLS = m_ViewHandler->shadowCasterBboxLS;
+    const dm::box3& shadowCasterBboxLS = m_ViewHandler.shadowCasterBboxLS;
     float maxXY = dm::max(shadowCasterBboxLS.diagonal().x, shadowCasterBboxLS.diagonal().y);
     dm::float3 grow = 0.5f * (dm::float3(maxXY, maxXY, shadowCasterBboxLS.diagonal().z)
                                - shadowCasterBboxLS.diagonal());
@@ -518,28 +551,29 @@ void ComputeCullRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         orthoBox.m_mins.y, orthoBox.m_maxs.y,
         orthoBox.m_mins.z, orthoBox.m_maxs.z);
 
-    dm::float4x4 lightViewProj = dm::affineToHomogeneous(m_ViewHandler->worldToLight) * lightProj;
+    dm::float4x4 lightViewProj = dm::affineToHomogeneous(m_ViewHandler.worldToLight) * lightProj;
 
     // --- Fill CullConstantBufferEntry ---
     Render::CullConstantBufferEntry constants{};
-    constants.view          = dm::affineToHomogeneous(m_ViewHandler->view.GetViewMatrix());
-    constants.projection    = m_ViewHandler->view.GetProjectionMatrix();
+    constants.view          = dm::affineToHomogeneous(m_ViewHandler.view.GetViewMatrix());
+    constants.projection    = m_ViewHandler.view.GetProjectionMatrix();
     constants.lightViewProj = lightViewProj;
     constants.sunLightDir   = m_Registry.getSunDirection();
 
-    constants.viewFrustum = m_ViewHandler->view.GetViewFrustum();
+    constants.viewFrustum = m_ViewHandler.view.GetViewFrustum();
     constants.lightFrustum = dm::frustum(lightViewProj, false);
 
-    constants.cameraPos     = m_ViewHandler->camera.GetPosition();
+    constants.cameraPos     = m_ViewHandler.camera.GetPosition();
     constants.totalCapacity = m_TotalCapacity;
 
     const auto& lodDistances = m_Registry.getLodDistances();
     constants.numLods = static_cast<uint32_t>(m_Registry.getLodSegments().size());
     for (uint32_t i = 0; i < constants.numLods; i++)
-        constants.lodDistances[i].val = lodDistances[i];
+        constants.lodDistances[i].x = lodDistances[i];
 
     constants.numSlots      = m_NumSlots;
     constants.visBufferSize = m_VisBufferSize;
+    constants.numAssets     = static_cast<uint32_t>(m_GPUAssets.size());
 
     m_CommandList->writeBuffer(m_Shared.constantBuffer, &constants, Render::c_CullConstantBufferSize);
 
@@ -622,10 +656,10 @@ void ComputeCullRenderPass::_RenderSkyPass(nvrhi::IFramebuffer* framebuffer) {
             pso, framebuffer->getFramebufferInfo());
     }
 
-    dm::affine3 viewToWorld = dm::affine3(m_ViewHandler->view.GetInverseViewMatrix());
+    dm::affine3 viewToWorld = dm::affine3(m_ViewHandler.view.GetInverseViewMatrix());
     viewToWorld.m_translation = 0.f;
     dm::float4x4 clipToTranslatedWorld =
-        m_ViewHandler->view.GetInverseProjectionMatrix(true) * dm::affineToHomogeneous(viewToWorld);
+        m_ViewHandler.view.GetInverseProjectionMatrix(true) * dm::affineToHomogeneous(viewToWorld);
 
     SkyConstants skyConstants{};
     skyConstants.matClipToTranslatedWorld = clipToTranslatedWorld;
@@ -648,7 +682,7 @@ void ComputeCullRenderPass::_RenderSkyPass(nvrhi::IFramebuffer* framebuffer) {
     nvrhi::GraphicsState skyState;
     skyState.pipeline    = m_SkyPass.pipeline;
     skyState.framebuffer = framebuffer;
-    skyState.viewport    = m_ViewHandler->view.GetViewportState();
+    skyState.viewport    = m_ViewHandler.view.GetViewportState();
     skyState.bindings    = { m_SkyPass.bindingSet };
     m_CommandList->setGraphicsState(skyState);
     m_CommandList->draw(nvrhi::DrawArguments().setVertexCount(4));
@@ -659,7 +693,7 @@ void ComputeCullRenderPass::_RenderSkyPass(nvrhi::IFramebuffer* framebuffer) {
 // ===========================================================================
 
 void ComputeCullRenderPass::_RenderShadowPass() {
-    if (m_ViewHandler->shadowCasterBboxLS.isempty())
+    if (m_ViewHandler.shadowCasterBboxLS.isempty())
         return;
 
     if (!m_ShadowPass.treePipeline) {
@@ -696,13 +730,11 @@ void ComputeCullRenderPass::_RenderShadowPass() {
     nvrhi::ViewportState shadowVPState;
     shadowVPState.addViewportAndScissorRect(shadowVP);
 
-    // Draw all shadow-visible trees using the lowest LOD for each asset
-    // Shadow cull wrote flat indices into shadowVisBuf — all visible instances regardless of asset.
-    // We draw one call per asset (lowest LOD), with maxSlotCount = total live instances.
-    // The VS discards excess via shadowCount[0] check.
-    const uint32_t numLods = static_cast<uint32_t>(m_Registry.getLodSegments().size());
-    uint32_t totalLive = m_Registry.totalInstanceCount();
-    uint32_t lowestLOD = numLods > 0 ? numLods - 1 : 0;
+    // One draw call per asset using lowest LOD. The VS reads from the asset's
+    // per-slot window in shadowVisBuf via shadowSlotOffsets[ai], drawing only
+    // shadowCount[ai] instances — no cross-asset bleed.
+    const uint32_t numLods   = static_cast<uint32_t>(m_Registry.getLodSegments().size());
+    const uint32_t lowestLOD = numLods > 0 ? numLods - 1 : 0;
 
     nvrhi::GraphicsState shadowState;
     shadowState.pipeline    = m_ShadowPass.treePipeline;
@@ -711,25 +743,29 @@ void ComputeCullRenderPass::_RenderShadowPass() {
     shadowState.bindings    = { m_ShadowPass.bindingSet };
 
     for (uint32_t ai = 0; ai < m_GPUAssets.size(); ai++) {
-        if (lowestLOD >= m_GPUAssets[ai].lods.size()) continue;
+        uint32_t maxCount = m_MaxSlotCounts[ai * numLods];  // livePerAsset[ai]
+        if (maxCount == 0) continue;
+
         const auto& lod = m_GPUAssets[ai].lods[lowestLOD];
 
         shadowState.vertexBuffers = { { lod.vertexBuffer, 0, 0 } };
         shadowState.indexBuffer   = { lod.indexBuffer, nvrhi::Format::R32_UINT, 0 };
         m_CommandList->setGraphicsState(shadowState);
+        
+        m_CommandList->setPushConstants(&ai, sizeof(ai));
 
-        // Issue totalLive instances — VS discards excess via shadowCount[0]
         m_CommandList->drawIndexed(
             nvrhi::DrawArguments()
                 .setVertexCount(lod.indexCount)
-                .setInstanceCount(totalLive));
+                .setInstanceCount(maxCount)
+        );
     }
 
     // Terrain shadow (unchanged — no instancing)
     const auto* terrainPtr = m_Registry.getTerrain();
-    if (m_TerrainPass.indexCount > 0 && terrainPtr
-        && (terrainPtr->getBbox() * m_ViewHandler->worldToLight)
-            .intersects(m_ViewHandler->shadowCasterBboxLS)) {
+    if (m_TerrainPass.indexCount > 0 && terrainPtr && 
+        (terrainPtr->getBbox() * m_ViewHandler.worldToLight)
+            .intersects(m_ViewHandler.shadowCasterBboxLS)) {
         nvrhi::GraphicsState terrShadow;
         terrShadow.pipeline    = m_ShadowPass.terrainPipeline;
         terrShadow.framebuffer = m_ShadowPass.framebuffer;
@@ -738,9 +774,15 @@ void ComputeCullRenderPass::_RenderShadowPass() {
         terrShadow.vertexBuffers = { { m_TerrainPass.vertexBuffer, 0, 0 } };
         terrShadow.indexBuffer   = { m_TerrainPass.indexBuffer, nvrhi::Format::R32_UINT, 0 };
         m_CommandList->setGraphicsState(terrShadow);
+        
+        // terrain does not se push constant but needs it for root signature
+        uint32_t c = 0;
+        m_CommandList->setPushConstants(&c, sizeof(c));
 
         m_CommandList->drawIndexed(
-            nvrhi::DrawArguments().setVertexCount(m_TerrainPass.indexCount));
+            nvrhi::DrawArguments()
+                .setVertexCount(m_TerrainPass.indexCount)
+        );
     }
 }
 
@@ -770,16 +812,14 @@ void ComputeCullRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
     nvrhi::GraphicsState state;
     state.pipeline   = m_TreePass.pipeline;
     state.framebuffer = framebuffer;
-    state.viewport   = m_ViewHandler->view.GetViewportState();
+    state.viewport   = m_ViewHandler.view.GetViewportState();
 
     // Draw one call per slot (asset × LOD), using maxSlotCount instances.
     // VS discards excess via countBuffer[slot] check.
     for (uint32_t ai = 0; ai < m_GPUAssets.size(); ai++) {
         for (uint32_t li = 0; li < numLods; li++) {
             uint32_t slot = ai * numLods + li;
-            // if (slot >= m_NumSlots) break;
             if (m_MaxSlotCounts[slot] == 0) continue;
-            if (li >= m_GPUAssets[ai].lods.size()) continue;
 
             const auto& lod = m_GPUAssets[ai].lods[li];
 
@@ -787,13 +827,14 @@ void ComputeCullRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
             state.vertexBuffers = { { lod.vertexBuffer, 0, 0 } };
             state.indexBuffer   = { lod.indexBuffer, nvrhi::Format::R32_UINT, 0 };
             m_CommandList->setGraphicsState(state);
-
+            
             m_CommandList->setPushConstants(&slot, sizeof(slot));
 
             m_CommandList->drawIndexed(
                 nvrhi::DrawArguments()
                     .setVertexCount(lod.indexCount)
-                    .setInstanceCount(m_MaxSlotCounts[slot]));
+                    .setInstanceCount(m_MaxSlotCounts[slot])
+            );
         }
     }
 
@@ -818,7 +859,7 @@ void ComputeCullRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
         nvrhi::GraphicsState terrainState;
         terrainState.pipeline   = m_TerrainPass.pipeline;
         terrainState.framebuffer = framebuffer;
-        terrainState.viewport   = m_ViewHandler->view.GetViewportState();
+        terrainState.viewport   = m_ViewHandler.view.GetViewportState();
         terrainState.bindings   = { m_TerrainPass.bindingSet };
         terrainState.vertexBuffers = { { m_TerrainPass.vertexBuffer, 0, 0 } };
         terrainState.indexBuffer   = { m_TerrainPass.indexBuffer, nvrhi::Format::R32_UINT, 0 };
@@ -826,39 +867,9 @@ void ComputeCullRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
         
         m_CommandList->drawIndexed(
             nvrhi::DrawArguments()
-                .setVertexCount(m_TerrainPass.indexCount));
+                .setVertexCount(m_TerrainPass.indexCount)
+        );
     }
-}
-
-// ===========================================================================
-// Input handling (identical to P0)
-// ===========================================================================
-
-bool ComputeCullRenderPass::KeyboardUpdate(int key, int scancode, int action, int mods) {
-    if (ImGui::GetIO().WantCaptureKeyboard) return false;
-    m_ViewHandler->camera.KeyboardUpdate(key, scancode, action, mods);
-    return true;
-}
-bool ComputeCullRenderPass::MousePosUpdate(double xpos, double ypos) {
-    if (ImGui::GetIO().WantCaptureMouse) return false;
-    m_ViewHandler->camera.MousePosUpdate(xpos, ypos);
-    return true;
-}
-bool ComputeCullRenderPass::MouseScrollUpdate(double xoffset, double yoffset) {
-    if (ImGui::GetIO().WantCaptureMouse) return false;
-    m_ViewHandler->camera.MouseScrollUpdate(xoffset, yoffset);
-    return true;
-}
-bool ComputeCullRenderPass::MouseButtonUpdate(int button, int action, int mods) {
-    if (ImGui::GetIO().WantCaptureMouse) return false;
-    m_ViewHandler->camera.MouseButtonUpdate(button, action, mods);
-    return true;
-}
-bool ComputeCullRenderPass::JoystickButtonUpdate(int button, bool pressed) {
-    m_ViewHandler->camera.JoystickButtonUpdate(button, pressed); return true;
-}
-bool ComputeCullRenderPass::JoystickAxisUpdate(int axis, float value) {
-    m_ViewHandler->camera.JoystickUpdate(axis, value); return true;
 }
 
 // ===========================================================================
@@ -891,6 +902,7 @@ bool ComputeCullRenderPass::_InitCullPass(nvrhi::ICommandList* /*initCL*/) {
         nvrhi::BindingLayoutItem::ConstantBuffer(0),
         nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0),  // cullData
         nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1),  // slotOffsets
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2),  // shadowSlotOffsets
         nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0),  // countBuffer
         nvrhi::BindingLayoutItem::StructuredBuffer_UAV(1),  // visibilityBuffer
         nvrhi::BindingLayoutItem::StructuredBuffer_UAV(2),  // shadowCountBuffer
@@ -1017,42 +1029,6 @@ bool ComputeCullRenderPass::_InitTreePass(nvrhi::ICommandList* initCL, engine::C
     return true;
 }
 
-bool ComputeCullRenderPass::_InitViewHandler() {
-    m_ViewHandler = std::make_unique<ViewHandler>();
-    const SceneRegistry::CameraInit& cameraInit = m_Registry.getCameraInit();
-    m_ViewHandler->camera.LookTo(cameraInit.pos, cameraInit.cameraDir);
-    m_ViewHandler->camera.SetMoveSpeed(cameraInit.moveSpeed);
-    return !!m_ViewHandler;
-}
-
-void ComputeCullRenderPass::ViewHandler::updateShadowVolume(const dm::box3& sceneBbox, dm::float3 sunDirection) {
-    worldToLight = dm::lookatZ(sunDirection) * dm::scaling(dm::float3(1.f, 1.f, -1.f));
-    dm::box3 sceneBoundsLS = sceneBbox * worldToLight;
-
-    const dm::float3& camPos = camera.GetPosition();
-    float maxShadowDist = 0.f;
-    for (int i = 0; i < dm::box3::numCorners; i++) {
-        maxShadowDist = dm::max(
-            maxShadowDist,
-            dm::length(sceneBbox.getCorner(i) - camPos)
-        );
-    }
-
-    const nvrhi::Viewport& vp = view.GetViewport();
-    dm::float4x4 finiteProj = dm::perspProjD3DStyle(
-        dm::radians(60.f), vp.width() / vp.height(), 0.1f, maxShadowDist);
-
-    dm::frustum camFrustum(
-        dm::affineToHomogeneous(view.GetViewMatrix()) * finiteProj, false);
-
-    dm::box3 frustumLS = dm::box3::empty();
-    for (int i = 0; i < dm::frustum::numCorners; i++)
-        frustumLS |= worldToLight.transformPoint(camFrustum.getCorner(i));
-
-    frustumLS.m_mins.z = sceneBoundsLS.m_mins.z;
-    shadowCasterBboxLS = frustumLS & sceneBoundsLS;
-}
-
 // bool ComputeCullRenderPass::_InitTimerQueries() {
 //     for (uint32_t i = 0; i < k_QueuedFrames; i++)
 //         m_GpuTimers[i] = GetDevice()->createTimerQuery();
@@ -1120,7 +1096,7 @@ bool ComputeCullRenderPass::_InitShadowPass() {
     );
     if (!m_ShadowPass.comparisonSampler) return false;
 
-    // Shadow binding layout — with push constants for root signature consistency
+    // Shadow binding layout
     nvrhi::BindingLayoutDesc shadowLayoutDesc;
     shadowLayoutDesc.visibility = nvrhi::ShaderType::All;
     shadowLayoutDesc.bindings = {
@@ -1128,6 +1104,8 @@ bool ComputeCullRenderPass::_InitShadowPass() {
         nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0),  // shadowVisBuf
         nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1),  // instanceBuffer
         nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2),  // shadowCount
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3),  // shadowSlotOffsets
+        nvrhi::BindingLayoutItem::PushConstants(1, sizeof(uint32_t)),  // assetIndex
     };
     m_ShadowPass.bindingLayout = GetDevice()->createBindingLayout(shadowLayoutDesc);
     if (!m_ShadowPass.bindingLayout) return false;

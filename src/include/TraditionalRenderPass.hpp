@@ -16,6 +16,7 @@
 #include "SceneRegistry.hpp"
 #include "Render.hpp"
 #include "UIData.hpp"
+#include "ViewHandler.hpp"
 
 namespace Xylem {
 
@@ -26,8 +27,8 @@ public:
     static constexpr uint32_t m_QueuedFrames = 4;
     static constexpr uint32_t m_ShadowRes = 2048;
 
-    TraditionalRenderPass(app::DeviceManager* dm, SceneRegistry& registry, UIData& ui)
-        : IRenderPass{dm}, m_Registry{registry}, m_UI{ui} {}
+    TraditionalRenderPass(app::DeviceManager* dm, SceneRegistry& registry, UIData& ui, ViewHandler& vh)
+        : IRenderPass{dm}, m_Registry{registry}, m_UI{ui}, m_ViewHandler{vh} {}
 
     void SetShaderFactory(std::shared_ptr<engine::ShaderFactory> sf) { m_ShaderFactory = std::move(sf); }
 
@@ -36,34 +37,11 @@ public:
     void BackBufferResizing() override { m_TreePass.pipeline = nullptr; m_TerrainPass.pipeline = nullptr; m_ShadowPass.treePipeline = nullptr; m_ShadowPass.terrainPipeline = nullptr; m_SkyPass.pipeline = nullptr; }
     void Render(nvrhi::IFramebuffer* framebuffer) override;
 
-    // Input overrides
-    bool KeyboardUpdate(int key, int scancode, int action, int mods) override;
-    bool MousePosUpdate(double xpos, double ypos) override;
-    bool MouseScrollUpdate(double xoffset, double yoffset) override;
-    bool MouseButtonUpdate(int button, int action, int mods) override;
-    bool JoystickButtonUpdate(int button, bool pressed) override;
-    bool JoystickAxisUpdate(int axis, float value) override;
-
     // Hot-reload callbacks
     void onAssetsDirty(const std::vector<size_t>& dirtyAssetIndices);
     void onRegionsDirty(const std::vector<size_t>& dirtyRegionIndices);
 
 private:
-    struct ViewHandler {
-        app::FirstPersonCamera camera;
-        engine::PlanarView     view;
-        dm::affine3            worldToLight;
-        dm::box3               shadowCasterBboxLS;
-
-        void updateShadowVolume(const dm::box3& sceneBbox, dm::float3 sunDirection);
-
-        uint32_t distToLOD(float value, const std::vector<float>& arr) {
-            auto it = std::lower_bound(arr.begin(), arr.end(), value);
-            if (it == arr.end()) return static_cast<uint32_t>(arr.size() - 1);
-            return static_cast<uint32_t>(std::distance(arr.begin(), it));
-        }
-    };
-
     struct TextureSet {
         nvrhi::TextureHandle      diffuse;
         nvrhi::TextureHandle      normalMap;
@@ -139,7 +117,7 @@ private:
     SkyPassResources                                   m_SkyPass;
 
     nvrhi::CommandListHandle                           m_CommandList;
-    std::unique_ptr<ViewHandler>                       m_ViewHandler;
+    ViewHandler&                                       m_ViewHandler;
     std::shared_ptr<engine::ShaderFactory>             m_ShaderFactory;
 
     // nvrhi::TimerQueryHandle                            m_GpuTimers[m_QueuedFrames];
@@ -169,7 +147,6 @@ private:
     bool _InitShadowPass();
     bool _InitTerrainPass(nvrhi::ICommandList* initCL);
     bool _InitSkyPass();
-    bool _InitViewHandler();
     // bool _InitTimerQueries();
 
     void _UploadAllAssets(nvrhi::IDevice* device, nvrhi::ICommandList* commandList);

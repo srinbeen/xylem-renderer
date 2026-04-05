@@ -138,6 +138,12 @@ void SceneRegistry::removeAsset(size_t id) {
             region.dirty = true;
         }
     }
+
+    // Mark all remaining assets dirty so onAssetsDirty fires and detects the count change.
+    for (auto& a : m_Assets) a.dirty = true;
+    // Affected regions are already marked dirty above; mark the rest too so the
+    // gapped buffer layout (which spans all regions) gets fully rebuilt.
+    for (auto& r : m_Regions) r.dirty = true;
 }
 
 void SceneRegistry::addRegion(const std::string& name, float density, const dm::box2& bounds,
@@ -172,6 +178,9 @@ void SceneRegistry::setRegionAssetVisible(size_t regionIdx, size_t assetId, bool
 void SceneRegistry::removeRegion(size_t idx) {
     if (idx >= m_Regions.size()) return;
     m_Regions.erase(m_Regions.begin() + idx);
+    // Mark all remaining regions dirty so onRegionsDirty fires and rebuilds
+    // the gapped buffer layout (offsets shift after removal).
+    for (auto& r : m_Regions) r.dirty = true;
 }
 
 // ===========================================================================
@@ -205,6 +214,11 @@ std::vector<size_t> SceneRegistry::getDirtyRegionIndices() const {
 void SceneRegistry::clearDirtyFlags() {
     for (auto& a : m_Assets) a.dirty = false;
     for (auto& r : m_Regions) r.dirty = false;
+}
+
+void SceneRegistry::markAllDirty() {
+    for (auto& a : m_Assets) a.dirty = true;
+    for (auto& r : m_Regions) r.dirty = true;
 }
 
 // ===========================================================================

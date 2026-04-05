@@ -24,15 +24,7 @@ cbuffer CullCB : register(b0)
     float    _pad0;
     float3x4 _pad1;
 
-    // Cull fields
-    frustum   viewFrustum;
-    frustum   lightFrustum;
-    float3   cameraPos;
-    uint     totalCapacity;
-    struct { float val; float _p[3]; } lodDistances[3];
-    uint     numLods;
-    uint     numSlots;
-    uint2    _pad2;
+    // did not specify the cull fields
 };
 
 // ---------------------------------------------------------------------------

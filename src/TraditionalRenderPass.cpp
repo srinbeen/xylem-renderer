@@ -156,7 +156,6 @@ bool TraditionalRenderPass::Init() {
         if (!_InitTreePass(initCL, commonPasses))          return false;
         if (!_InitTerrainPass(initCL))                     return false;
         if (!_InitSkyPass())                               return false;
-        if (!_InitViewHandler())                           return false;
 
         initCL->close();
         GetDevice()->executeCommandList(initCL);
@@ -192,7 +191,6 @@ bool TraditionalRenderPass::Init() {
 // ===========================================================================
 
 void TraditionalRenderPass::Animate(float seconds) {
-    m_ViewHandler->camera.Animate(seconds);
     GetDeviceManager()->SetInformativeWindowTitle(g_WindowTitle);
 
     // Hot-reload cycle
@@ -219,18 +217,23 @@ void TraditionalRenderPass::onAssetsDirty(const std::vector<size_t>& dirtyAssetI
     cl->open();
 
     const auto& assets = m_Registry.getAssets();
-    for (size_t idx : dirtyAssetIndices) {
-        const auto& assetDef = assets[idx];
-        auto it = m_AssetIdToGPUIndex.find(assetDef.id);
-        if (it != m_AssetIdToGPUIndex.end()) {
-            // Re-upload existing asset slot
-            _UploadAsset(assetDef, m_GPUAssets[it->second], GetDevice(), cl);
-        } else {
-            // New asset — append
-            GPUTreeAsset gpuAsset;
-            _UploadAsset(assetDef, gpuAsset, GetDevice(), cl);
-            m_AssetIdToGPUIndex[assetDef.id] = m_GPUAssets.size();
-            m_GPUAssets.push_back(std::move(gpuAsset));
+
+    // If the GPU asset count doesn't match the registry (asset was removed),
+    // re-upload everything from scratch so phantom entries are cleared.
+    if (m_GPUAssets.size() != assets.size()) {
+        _UploadAllAssets(GetDevice(), cl);
+    } else {
+        for (size_t idx : dirtyAssetIndices) {
+            const auto& assetDef = assets[idx];
+            auto it = m_AssetIdToGPUIndex.find(assetDef.id);
+            if (it != m_AssetIdToGPUIndex.end()) {
+                _UploadAsset(assetDef, m_GPUAssets[it->second], GetDevice(), cl);
+            } else {
+                GPUTreeAsset gpuAsset;
+                _UploadAsset(assetDef, gpuAsset, GetDevice(), cl);
+                m_AssetIdToGPUIndex[assetDef.id] = m_GPUAssets.size();
+                m_GPUAssets.push_back(std::move(gpuAsset));
+            }
         }
     }
 
@@ -265,8 +268,8 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
 
     // when window changes size
     if (!m_TreePass.pipeline) {
-        m_ViewHandler->view.SetViewport({ float(fbinfo.width), float(fbinfo.height) });
-        m_ViewHandler->view.SetProjectionMatrix(
+        m_ViewHandler.view.SetViewport({ float(fbinfo.width), float(fbinfo.height) });
+        m_ViewHandler.view.SetProjectionMatrix(
         #if XYLEM_USE_REVERSE_Z
             dm::perspProjD3DStyleReverse(
                 dm::radians(60.f),
@@ -288,15 +291,15 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
 
     // m_CommandList->beginTimerQuery(m_GpuTimers[m_NextTimerIdx]);
 
-    m_ViewHandler->view.SetViewMatrix(m_ViewHandler->camera.GetWorldToViewMatrix());
-    m_ViewHandler->view.UpdateCache();
+    m_ViewHandler.view.SetViewMatrix(m_ViewHandler.camera.GetWorldToViewMatrix());
+    m_ViewHandler.view.UpdateCache();
 
     nvrhi::utils::ClearColorAttachment(m_CommandList, framebuffer, 0, nvrhi::Color(0.f));
     #if XYLEM_USE_REVERSE_Z
     nvrhi::utils::ClearDepthStencilAttachment(m_CommandList, framebuffer, 0.f, 0);
     #else
     nvrhi::utils::ClearDepthStencilAttachment(m_CommandList, framebuffer,
-        m_ViewHandler->view.GetViewFrustum().farPlane().distance, 0);
+        m_ViewHandler.view.GetViewFrustum().farPlane().distance, 0);
     #endif
 
     dm::box3 sceneBbox = dm::box3::empty();
@@ -306,9 +309,9 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     if (terrain)
         sceneBbox |= terrain->getBbox();
 
-    m_ViewHandler->updateShadowVolume(sceneBbox, m_Registry.getSunDirection());
+    m_ViewHandler.updateShadowVolume(sceneBbox, m_Registry.getSunDirection());
 
-    const dm::box3& shadowCasterBboxLS = m_ViewHandler->shadowCasterBboxLS;
+    const dm::box3& shadowCasterBboxLS = m_ViewHandler.shadowCasterBboxLS;
     float maxXY = dm::max(shadowCasterBboxLS.diagonal().x, shadowCasterBboxLS.diagonal().y);
     dm::float3 grow = 0.5f * (dm::float3(maxXY, maxXY, shadowCasterBboxLS.diagonal().z)
                                - shadowCasterBboxLS.diagonal());
@@ -319,11 +322,11 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         orthoBox.m_mins.y, orthoBox.m_maxs.y,
         orthoBox.m_mins.z, orthoBox.m_maxs.z);
 
-    dm::float4x4 lightViewProj = dm::affineToHomogeneous(m_ViewHandler->worldToLight) * lightProj;
+    dm::float4x4 lightViewProj = dm::affineToHomogeneous(m_ViewHandler.worldToLight) * lightProj;
 
     Render::ConstantBufferEntry constants{};
-    constants.view          = dm::affineToHomogeneous(m_ViewHandler->view.GetViewMatrix());
-    constants.projection    = m_ViewHandler->view.GetProjectionMatrix();
+    constants.view          = dm::affineToHomogeneous(m_ViewHandler.view.GetViewMatrix());
+    constants.projection    = m_ViewHandler.view.GetProjectionMatrix();
     constants.lightViewProj = lightViewProj;
     constants.sunLightDir   = m_Registry.getSunDirection();
     m_CommandList->writeBuffer(m_Shared.constantBuffer, &constants, Render::c_ConstantBufferSize);
@@ -377,10 +380,10 @@ void TraditionalRenderPass::_RenderSkyPass(nvrhi::IFramebuffer* framebuffer) {
             pso, framebuffer->getFramebufferInfo());
     }
 
-    dm::affine3 viewToWorld = dm::affine3(m_ViewHandler->view.GetInverseViewMatrix());
+    dm::affine3 viewToWorld = dm::affine3(m_ViewHandler.view.GetInverseViewMatrix());
     viewToWorld.m_translation = 0.f;
     dm::float4x4 clipToTranslatedWorld =
-        m_ViewHandler->view.GetInverseProjectionMatrix(true) * dm::affineToHomogeneous(viewToWorld);
+        m_ViewHandler.view.GetInverseProjectionMatrix(true) * dm::affineToHomogeneous(viewToWorld);
 
     SkyConstants skyConstants{};
     skyConstants.matClipToTranslatedWorld = clipToTranslatedWorld;
@@ -403,14 +406,14 @@ void TraditionalRenderPass::_RenderSkyPass(nvrhi::IFramebuffer* framebuffer) {
     nvrhi::GraphicsState skyState;
     skyState.pipeline    = m_SkyPass.pipeline;
     skyState.framebuffer = framebuffer;
-    skyState.viewport    = m_ViewHandler->view.GetViewportState();
+    skyState.viewport    = m_ViewHandler.view.GetViewportState();
     skyState.bindings    = { m_SkyPass.bindingSet };
     m_CommandList->setGraphicsState(skyState);
     m_CommandList->draw(nvrhi::DrawArguments().setVertexCount(4));
 }
 
 void TraditionalRenderPass::_RenderShadowPass() {
-    const dm::affine3& worldToLight = m_ViewHandler->worldToLight;
+    const dm::affine3& worldToLight = m_ViewHandler.worldToLight;
     const auto& lodSegments = m_Registry.getLodSegments();
     uint32_t lodIndex = static_cast<uint32_t>(lodSegments.size() - 1);
 
@@ -420,7 +423,7 @@ void TraditionalRenderPass::_RenderShadowPass() {
     std::vector<uint32_t> shadowCounts(m_GPUAssets.size(), 0);
     m_ShadowDrawCmds.clear();
     
-    if (m_ViewHandler->shadowCasterBboxLS.isempty()) {
+    if (m_ViewHandler.shadowCasterBboxLS.isempty()) {
         return;
     }
     
@@ -429,7 +432,7 @@ void TraditionalRenderPass::_RenderShadowPass() {
         const auto& region = regions[ri];
 
         dm::box3 regionLS = region.cullBox * worldToLight;
-        if (!regionLS.intersects(m_ViewHandler->shadowCasterBboxLS))
+        if (!regionLS.intersects(m_ViewHandler.shadowCasterBboxLS))
             continue;
 
         for (uint32_t ii = 0; ii < region.instances.size(); ii++) {
@@ -444,7 +447,7 @@ void TraditionalRenderPass::_RenderShadowPass() {
             if (visIt != region.assetVisible.end() && !visIt->second) continue;
 
             dm::box3 instanceLS = inst.bbox * worldToLight;
-            if (!instanceLS.intersects(m_ViewHandler->shadowCasterBboxLS))
+            if (!instanceLS.intersects(m_ViewHandler.shadowCasterBboxLS))
                 continue;
 
             auto it = m_AssetIdToGPUIndex.find(inst.assetId);
@@ -554,7 +557,7 @@ void TraditionalRenderPass::_RenderShadowPass() {
     // Draw terrain into shadow map
     const auto* terrainPtr = m_Registry.getTerrain();
     if (m_TerrainPass.indexCount > 0 && terrainPtr
-        && (terrainPtr->getBbox() * worldToLight).intersects(m_ViewHandler->shadowCasterBboxLS)) {
+        && (terrainPtr->getBbox() * worldToLight).intersects(m_ViewHandler.shadowCasterBboxLS)) {
         nvrhi::GraphicsState terrShadow;
         terrShadow.pipeline    = m_ShadowPass.terrainPipeline;
         terrShadow.framebuffer = m_ShadowPass.framebuffer;
@@ -596,7 +599,7 @@ void TraditionalRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
 
     for (uint32_t ri = 0; ri < regions.size(); ri++) {
         const auto& region = regions[ri];
-        if (!region.cullBox.isempty() && !m_ViewHandler->view.IsBoxVisible(region.cullBox))
+        if (!region.cullBox.isempty() && !m_ViewHandler.view.IsBoxVisible(region.cullBox))
             continue;
         for (uint32_t ii = 0; ii < region.instances.size(); ii++) {
             const auto& inst = region.instances[ii];
@@ -609,9 +612,9 @@ void TraditionalRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
             auto visIt = region.assetVisible.find(inst.assetId);
             if (visIt != region.assetVisible.end() && !visIt->second) continue;
 
-            if (!m_ViewHandler->view.IsBoxVisible(inst.bbox)) continue;
-            float dist = dm::distance(m_ViewHandler->camera.GetPosition(), inst.bbox);
-            uint32_t lod = m_ViewHandler->distToLOD(dist, lodDistances);
+            if (!m_ViewHandler.view.IsBoxVisible(inst.bbox)) continue;
+            float dist = dm::distance(m_ViewHandler.camera.GetPosition(), inst.bbox);
+            uint32_t lod = m_ViewHandler.distToLOD(dist, lodDistances);
 
             auto it = m_AssetIdToGPUIndex.find(inst.assetId);
             if (it == m_AssetIdToGPUIndex.end()) continue;
@@ -662,7 +665,7 @@ void TraditionalRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
     nvrhi::GraphicsState state;
     state.pipeline   = m_TreePass.pipeline;
     state.framebuffer = framebuffer;
-    state.viewport   = m_ViewHandler->view.GetViewportState();
+    state.viewport   = m_ViewHandler.view.GetViewportState();
 
     for (const auto& cmd : m_DrawCmds) {
         state.bindings = { m_TreePass.bindingSets[cmd.textureSetIdx] };
@@ -713,7 +716,7 @@ void TraditionalRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
         nvrhi::GraphicsState terrainState;
         terrainState.pipeline   = m_TerrainPass.pipeline;
         terrainState.framebuffer = framebuffer;
-        terrainState.viewport   = m_ViewHandler->view.GetViewportState();
+        terrainState.viewport   = m_ViewHandler.view.GetViewportState();
         terrainState.bindings   = { m_TerrainPass.bindingSet };
         terrainState.vertexBuffers = { { m_TerrainPass.vertexBuffer, 0, 0 } };
         terrainState.indexBuffer   = { m_TerrainPass.indexBuffer, nvrhi::Format::R32_UINT, 0 };
@@ -722,34 +725,6 @@ void TraditionalRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
             nvrhi::DrawArguments()
                 .setVertexCount(m_TerrainPass.indexCount));
     }
-}
-
-// input handling
-bool TraditionalRenderPass::KeyboardUpdate(int key, int scancode, int action, int mods) {
-    if (ImGui::GetIO().WantCaptureKeyboard) return false;
-    m_ViewHandler->camera.KeyboardUpdate(key, scancode, action, mods);
-    return true;
-}
-bool TraditionalRenderPass::MousePosUpdate(double xpos, double ypos) {
-    if (ImGui::GetIO().WantCaptureMouse) return false;
-    m_ViewHandler->camera.MousePosUpdate(xpos, ypos);
-    return true;
-}
-bool TraditionalRenderPass::MouseScrollUpdate(double xoffset, double yoffset) {
-    if (ImGui::GetIO().WantCaptureMouse) return false;
-    m_ViewHandler->camera.MouseScrollUpdate(xoffset, yoffset);
-    return true;
-}
-bool TraditionalRenderPass::MouseButtonUpdate(int button, int action, int mods) {
-    if (ImGui::GetIO().WantCaptureMouse) return false;
-    m_ViewHandler->camera.MouseButtonUpdate(button, action, mods);
-    return true;
-}
-bool TraditionalRenderPass::JoystickButtonUpdate(int button, bool pressed) {
-    m_ViewHandler->camera.JoystickButtonUpdate(button, pressed); return true;
-}
-bool TraditionalRenderPass::JoystickAxisUpdate(int axis, float value) {
-    m_ViewHandler->camera.JoystickUpdate(axis, value); return true;
 }
 
 bool TraditionalRenderPass::_InitShared() {
@@ -957,44 +932,6 @@ bool TraditionalRenderPass::_InitTreePass(nvrhi::ICommandList* initCL, engine::C
     }
 
     return !!m_TreePass.bindingLayout;
-}
-
-bool TraditionalRenderPass::_InitViewHandler() {
-    m_ViewHandler = std::make_unique<ViewHandler>();
-    const SceneRegistry::CameraInit& cameraInit = m_Registry.getCameraInit();
-    m_ViewHandler->camera.LookTo(cameraInit.pos, cameraInit.cameraDir);
-    m_ViewHandler->camera.SetMoveSpeed(cameraInit.moveSpeed);
-    return !!m_ViewHandler;
-}
-
-void TraditionalRenderPass::ViewHandler::updateShadowVolume(const dm::box3& sceneBbox, dm::float3 sunDirection)
-{
-    worldToLight = dm::lookatZ(sunDirection) * dm::scaling(dm::float3(1.f, 1.f, -1.f));
-    dm::box3 sceneBoundsLS = sceneBbox * worldToLight;
-
-    const dm::float3& camPos = camera.GetPosition();
-    float maxShadowDist = 0.f;
-    for (int i = 0; i < dm::box3::numCorners; i++) {
-        maxShadowDist = dm::max(
-            maxShadowDist,
-            dm::length(sceneBbox.getCorner(i) - camPos)
-        );
-    }
-
-    const nvrhi::Viewport& vp = view.GetViewport();
-    dm::float4x4 finiteProj = dm::perspProjD3DStyle(
-        dm::radians(60.f), vp.width() / vp.height(), 0.1f, maxShadowDist);
-
-    dm::frustum camFrustum(
-        dm::affineToHomogeneous(view.GetViewMatrix()) * finiteProj, false);
-
-    dm::box3 frustumLS = dm::box3::empty();
-    for (int i = 0; i < dm::frustum::numCorners; i++)
-        frustumLS |= worldToLight.transformPoint(camFrustum.getCorner(i));
-
-    frustumLS.m_mins.z = sceneBoundsLS.m_mins.z;
-
-    shadowCasterBboxLS = frustumLS & sceneBoundsLS;
 }
 
 // bool TraditionalRenderPass::_InitTimerQueries() {

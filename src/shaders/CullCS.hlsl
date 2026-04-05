@@ -30,11 +30,11 @@ cbuffer CullCB : register(b0)
     frustum   lightFrustum;
     float3   cameraPos;
     uint     totalCapacity;
-    float4   lodDistances[3];   // .x = distance threshold; .yzw unused
+    float4   lodDistances[3];
     uint     numLods;
     uint     numSlots;
     uint     visBufferSize;
-    uint     _pad2;
+    uint     numAssets;
 };
 
 // ---------------------------------------------------------------------------
@@ -47,13 +47,14 @@ struct CullInstanceData
     uint   active;     // 1 = live, 0 = dead
 };
 
-StructuredBuffer<CullInstanceData> cullData       : register(t0);
-StructuredBuffer<uint>             slotOffsets    : register(t1);
+StructuredBuffer<CullInstanceData> cullData             : register(t0);
+StructuredBuffer<uint>             slotOffsets          : register(t1);
+StructuredBuffer<uint>             shadowSlotOffsets    : register(t2);
 
 RWStructuredBuffer<uint>           countBuffer    : register(u0);  // [numSlots]
 RWStructuredBuffer<uint>           visibilityBuf  : register(u1);  // [visBufferSize]
-RWStructuredBuffer<uint>           shadowCount    : register(u2);  // [1]
-RWStructuredBuffer<uint>           shadowVisBuf   : register(u3);  // [totalCapacity]
+RWStructuredBuffer<uint>           shadowCount    : register(u2);  // [numAssets]
+RWStructuredBuffer<uint>           shadowVisBuf   : register(u3);  // [shadowVisBufferSize]
 
 bool FrustumCullAABB(box3 bbox, frustum f);
 uint SelectLOD(box3 bbox);
@@ -85,7 +86,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
 }
 
 // ---------------------------------------------------------------------------
-// CSShadow — shadow frustum cull (lowest LOD only, no LOD selection)
+// CSShadow — shadow frustum cull (lowest LOD only, per-asset slots)
 // ---------------------------------------------------------------------------
 [numthreads(64, 1, 1)]
 void CSShadow(uint3 dtid : SV_DispatchThreadID)
@@ -98,13 +99,16 @@ void CSShadow(uint3 dtid : SV_DispatchThreadID)
 
     if (!FrustumCullAABB(inst.bbox, lightFrustum)) return;
 
+    uint ai = inst.baseSlot / numLods;
+    if (ai >= numAssets) return;
+
     uint writeIdx;
-    InterlockedAdd(shadowCount[0], 1, writeIdx);
-    shadowVisBuf[writeIdx] = idx;
+    InterlockedAdd(shadowCount[ai], 1, writeIdx);
+    shadowVisBuf[shadowSlotOffsets[ai] + writeIdx] = idx;
 }
 
 // ---------------------------------------------------------------------------
-// AABB frustum test — p-vertex method
+// AABB frustum test — n-vertex method
 // ---------------------------------------------------------------------------
 bool FrustumCullAABB(box3 bbox, frustum f)
 {

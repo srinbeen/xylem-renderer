@@ -82,11 +82,11 @@ struct CullConstantBufferEntry {
     dm::frustum  lightFrustum;    
     dm::float3   cameraPos;
     uint32_t     totalCapacity;
-    struct { float val; float _p[3]; } lodDistances[3];
+    dm::float4   lodDistances[3];
     uint32_t     numLods;
     uint32_t     numSlots;
     uint32_t     visBufferSize;
-    uint32_t     _pad2;
+    uint32_t     numAssets;
 };
 
 static constexpr size_t c_CullConstantBufferSize =

@@ -5,8 +5,13 @@
 
 namespace Xylem {
 
+enum class Pipeline { Traditional = 0, ComputeCull = 1 };
+
 struct UIData {
     bool ShowUI = true;
+
+    Pipeline activePipeline    = Pipeline::ComputeCull;
+    Pipeline requestedPipeline = Pipeline::ComputeCull;
 
     float    gpuFrameTimeMs       = -1.0f; // -1 = not yet available
     float    cpuRenderTimeMs      = 0.0f;

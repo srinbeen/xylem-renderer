@@ -24,7 +24,7 @@ bool RenderOrchestrator::Init()
         return false;
     }
 
-    m_UI.activePipeline = m_UI.requestedPipeline = Pipeline::Traditional;
+    m_UI.activePipeline = m_UI.requestedPipeline = Pipeline::ComputeCull;
     m_UIPass.Init(m_ShaderFactory);
     return true;
 }

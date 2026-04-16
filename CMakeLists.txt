@@ -16,7 +16,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/bin")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/debug")
 # set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/release")
-# set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/relDeb")
 set(DONUT_SHADERS_OUTPUT_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${DONUT_SHADERS_OUTPUT_SUBDIR}")
 
 # Set Donut options before adding the subdirectory
@@ -27,9 +27,11 @@ set(DONUT_WITH_VULKAN OFF CACHE BOOL "" FORCE)
 
 set(DONUT_FORCE_DISCRETE_GPU ON CACHE BOOL "" FORCE)
 
-set(DONUT_WITH_AFTERMATH ON CACHE BOOL "" FORCE)
-set(AFTERMATH_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build/_deps/aftermath-src")
+set(DONUT_WITH_AFTERMATH OFF CACHE BOOL "" FORCE)
 
+if (DONUT_WITH_AFTERMATH)
+    set(AFTERMATH_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build/_deps/aftermath-src")
+endif()
 
 if (NVRHI_WITH_DX12)
     set(DONUT_D3D_AGILITY_SDK_URL "https://www.nuget.org/api/v2/package/Microsoft.Direct3D.D3D12/1.717.1-preview")
@@ -75,19 +77,29 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
 endif()
 
 add_dependencies(${PROJECT_NAME} ${PROJECT_NAME}_shaders)
-target_link_libraries(${PROJECT_NAME} PRIVATE donut_app donut_render donut_engine donut_core
-    "${AFTERMATH_SDK_DIR}/lib/x64/GFSDK_Aftermath_Lib.x64.lib"
-)
+target_link_libraries(${PROJECT_NAME} PRIVATE donut_app donut_render donut_engine donut_core)
+if (DONUT_WITH_AFTERMATH)
+    target_link_libraries(${PROJECT_NAME} PRIVATE
+        "${AFTERMATH_SDK_DIR}/lib/x64/GFSDK_Aftermath_Lib.x64.lib"
+    )
+endif()
+
 target_include_directories(${PROJECT_NAME} PRIVATE 
     "${source_folder}/include"
     "${DONUT_D3D_AGILITY_SDK_PATH}/build/native/include"
-    "${AFTERMATH_SDK_DIR}/include"
 )
+if (DONUT_WITH_AFTERMATH)
+    target_include_directories(${PROJECT_NAME} PRIVATE
+        "${AFTERMATH_SDK_DIR}/include"
+    )
+endif()
 
-add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${AFTERMATH_SDK_DIR}/lib/x64/GFSDK_Aftermath_Lib.x64.dll"
-        "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
-)
+if (DONUT_WITH_AFTERMATH)
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${AFTERMATH_SDK_DIR}/lib/x64/GFSDK_Aftermath_Lib.x64.dll"
+            "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+    )
+endif()
 set_target_properties(${PROJECT_NAME} PROPERTIES FOLDER ${PROJECT_NAME})
 

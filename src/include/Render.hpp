@@ -6,6 +6,8 @@
 
 namespace Xylem::Render {
 
+static constexpr uint32_t c_NumCascades = 4;
+
 struct InstanceBufferEntry {
     dm::float4x4 model;
     dm::float3x3 normal;
@@ -15,40 +17,49 @@ struct InstanceBufferEntry {
         : model{m}, normal{n}, treeId{t} {}
     InstanceBufferEntry(const dm::affine3& m, const dm::float3x3& n, uint32_t t)
         : InstanceBufferEntry(
-            dm::affineToHomogeneous(m), 
-            n, 
+            dm::affineToHomogeneous(m),
+            n,
             t
         ) {}
     InstanceBufferEntry()
         : InstanceBufferEntry(
-            dm::float4x4::identity(), 
-            dm::float3x3::identity(), 
+            dm::float4x4::identity(),
+            dm::float3x3::identity(),
             static_cast<uint32_t>(-1)
         ) {}
-    
+
     ~InstanceBufferEntry() = default;
 };
 
 struct ConstantBufferEntry {
-    dm::float4x4 view;
-    dm::float4x4 projection;
-    dm::float4x4 lightViewProj;
+    dm::float4x4 viewProj;
+    dm::float4x4 viewMatrix;
+    dm::float4x4 lightViewProj[c_NumCascades];
     dm::float3   sunLightDir;
     float        _pad0;
-    dm::float3x4 _pad1;
+    dm::float4   cascadeSplits;
+    dm::float4   _pad1[6];
 };
 
 static constexpr size_t c_ConstantBufferSize = (sizeof(ConstantBufferEntry) + (nvrhi::c_ConstantBufferOffsetSizeAlignment - 1)) & ~(nvrhi::c_ConstantBufferOffsetSizeAlignment - 1);
 
+struct VertexBufferSet {
+    nvrhi::BufferHandle position;
+    nvrhi::BufferHandle normal;
+    nvrhi::BufferHandle tangent;
+    nvrhi::BufferHandle bitangent;
+    nvrhi::BufferHandle uv;
+};
+
 struct DrawCmd {
-    nvrhi::BufferHandle  vertexBuffer;
+    VertexBufferSet      vertexBuffers;
     nvrhi::BufferHandle  indexBuffer;
     nvrhi::DrawArguments drawArgs;
     uint32_t             textureSetIdx;
 };
 
 struct ShadowDrawCmd {
-    nvrhi::BufferHandle  vertexBuffer;
+    nvrhi::BufferHandle  positionBuffer;
     nvrhi::BufferHandle  indexBuffer;
     nvrhi::DrawArguments drawArgs;
 };
@@ -74,9 +85,7 @@ struct CullRegionData {
 
 // Extended constant buffer for compute cull pass.
 struct CullConstantBufferEntry {
-    // P0 fields (read by VS/PS)
-    dm::float4x4 view;
-    dm::float4x4 projection;
+    dm::float4x4 viewProj;
     dm::float4x4 lightViewProj;
     dm::float3   sunLightDir;
     float        _pad0;
@@ -93,7 +102,14 @@ struct CullConstantBufferEntry {
     uint32_t     totalCapacity;
     dm::float4   lodDistances[3];
     uint32_t     numLods;
-    float        _pad3[3];
+    float        _pad3a;
+    float        _pad3b;
+    float        _pad3c;
+
+    // Hi-Z fields (read by CullCS for occlusion test)
+    dm::float2   hizDimensions;    // mip 0 width, height
+    float        maxHiZMip;        // numMips - 1
+    uint32_t     hizEnabled;      // 0 = skip Hi-Z test, 1 = enabled
 };
 
 static constexpr size_t c_CullConstantBufferSize =

@@ -22,7 +22,11 @@ void LSystem::generate(uint32_t iterations) {
 }
 
 void TreeGenerator::generateVertexAndIndexBuffers(const lstring_t& lSystemString, Buffers& buffers) {
-    buffers.vertices.clear();
+    buffers.positions.clear();
+    buffers.normals.clear();
+    buffers.tangents.clear();
+    buffers.bitangents.clear();
+    buffers.uvs.clear();
     buffers.indices.clear();
     buffers.bbox = dm::box3::empty();
     m_branchCounter = 0;
@@ -76,7 +80,7 @@ uint32_t TreeGenerator::createRing(const TurtleState& state, Buffers& buffers) {
     const dm::float3 right   = dm::applyQuat(state.orientation, unit_i);
     const dm::float3 up      = dm::cross(forward, right);
 
-    uint32_t nextRingIndex = static_cast<uint32_t>(buffers.vertices.size());
+    uint32_t nextRingIndex = static_cast<uint32_t>(buffers.positions.size());
     uint32_t segs          = params.radialSegments;
 
     float firstRJitter = 0.f, firstNJitter = 0.f;
@@ -102,7 +106,11 @@ uint32_t TreeGenerator::createRing(const TurtleState& state, Buffers& buffers) {
         dm::float3 tangent   = dm::cross(bitangent, normal);
 
         dm::float3 usedNormal = segs != 2 ? shadingNormal : up;
-        buffers.vertices.emplace_back(pos, usedNormal, tangent, bitangent, dm::float2(percentage, state.branchLength));
+        buffers.positions.push_back(pos);
+        buffers.normals.push_back(usedNormal);
+        buffers.tangents.push_back(tangent);
+        buffers.bitangents.push_back(bitangent);
+        buffers.uvs.push_back(dm::float2(percentage, state.branchLength));
     }
 
     if (nextRingIndex != 0) {

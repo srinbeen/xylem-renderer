@@ -93,6 +93,7 @@ private:
     void _buildRegionsSection();
     void _buildDebugTopDownSection();
     void _buildShadowMapSection();
+    void _buildHiZSection();
 };
 
 } // namespace Xylem

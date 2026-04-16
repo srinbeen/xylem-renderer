@@ -2,6 +2,7 @@
 #define XYLEM_UI_DATA_H
 
 #include <cstdint>
+#include <vector>
 
 namespace Xylem {
 
@@ -24,8 +25,16 @@ struct UIData {
 
     bool showDebugTopDown = false;
     bool showShadowMap   = false;
+    bool showHiZ         = false;
 
-    void* shadowMapTexture = nullptr;  // nvrhi::ITexture*, set by active render pass
+    float hizBypassAngle   = 0.7f;  // downwardness threshold to skip Hi-Z (0=never bypass, 1=always)
+    bool  hizActiveThisFrame = true; // read-only, set by render pass
+
+    void*    shadowMapTexture = nullptr;  // nvrhi::ITexture*, set by active render pass
+    std::vector<void*> shadowCascadeTextures;  // per-cascade nvrhi::ITexture* for debug display
+    // Hi-Z: one nvrhi::ITexture* per mip level (single-mip scratch textures), set by ComputeCullRenderPass
+    // Each entry is a separate R32_FLOAT texture containing exactly one mip, copied each frame.
+    std::vector<void*> hizMipTextures;
 };
 
 } // namespace Xylem

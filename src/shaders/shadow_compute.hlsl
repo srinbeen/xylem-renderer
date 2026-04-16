@@ -2,8 +2,7 @@
 
 cbuffer CB : register(b0)
 {
-    float4x4 view;
-    float4x4 projection;
+    float4x4 viewProj;
     float4x4 lightViewProj;
     float3   sunLightDir;
     float    _pad0;
@@ -13,11 +12,13 @@ cbuffer CB : register(b0)
 struct RootConstant { uint assetIndex; };
 ConstantBuffer<RootConstant> rootConstant : register(b1);
 
+// Layout matches C++ Render::InstanceBufferEntry (104 bytes, packed).
+// See ComputeCullRenderPass.hlsl for the full explanation.
 struct InstanceRenderData
 {
-    float4x4 model;
-    float3x3 normal;
-    uint     treeId;
+    float4x4 model;     // offset 0,  size 64
+    float3x3 normal;    // offset 64, size 36
+    uint     treeId;    // offset 100, size 4
 };
 
 StructuredBuffer<uint>                  shadowVisBuf      : register(t0);

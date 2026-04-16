@@ -41,22 +41,30 @@ void TraditionalRenderPass::_UploadAsset(
 
     for (size_t j = 0; j < assetDef.lods.size(); j++) {
         const auto& lodDef = assetDef.lods[j];
+        std::string lodSuffix = "_LOD" + std::to_string(j);
 
-        vDesc.debugName = "VB_" + assetDef.name + "_LOD" + std::to_string(j);
-        vDesc.byteSize  = lodDef.vertices.size() * sizeof(ProcGen::TreeVertex);
-        auto vBuf = device->createBuffer(vDesc);
-        commandList->beginTrackingBufferState(vBuf, nvrhi::ResourceStates::CopyDest);
-        commandList->writeBuffer(vBuf, lodDef.vertices.data(), vDesc.byteSize);
-        commandList->setPermanentBufferState(vBuf, nvrhi::ResourceStates::VertexBuffer);
+        auto uploadVB = [&](const auto& data, const char* suffix, nvrhi::BufferHandle& out) {
+            vDesc.debugName = "VB_" + assetDef.name + lodSuffix + suffix;
+            vDesc.byteSize  = data.size() * sizeof(data[0]);
+            out = device->createBuffer(vDesc);
+            commandList->beginTrackingBufferState(out, nvrhi::ResourceStates::CopyDest);
+            commandList->writeBuffer(out, data.data(), vDesc.byteSize);
+            commandList->setPermanentBufferState(out, nvrhi::ResourceStates::VertexBuffer);
+        };
 
-        iDesc.debugName = "IB_" + assetDef.name + "_LOD" + std::to_string(j);
+        uploadVB(lodDef.positions,  "_pos",   gpuAsset.lods[j].vbs.position);
+        uploadVB(lodDef.normals,    "_nor",   gpuAsset.lods[j].vbs.normal);
+        uploadVB(lodDef.tangents,   "_tan",   gpuAsset.lods[j].vbs.tangent);
+        uploadVB(lodDef.bitangents, "_bitan", gpuAsset.lods[j].vbs.bitangent);
+        uploadVB(lodDef.uvs,        "_uv",    gpuAsset.lods[j].vbs.uv);
+
+        iDesc.debugName = "IB_" + assetDef.name + lodSuffix;
         iDesc.byteSize  = lodDef.indices.size() * sizeof(uint32_t);
         auto iBuf = device->createBuffer(iDesc);
         commandList->beginTrackingBufferState(iBuf, nvrhi::ResourceStates::CopyDest);
         commandList->writeBuffer(iBuf, lodDef.indices.data(), iDesc.byteSize);
         commandList->setPermanentBufferState(iBuf, nvrhi::ResourceStates::IndexBuffer);
 
-        gpuAsset.lods[j].vertexBuffer   = vBuf;
         gpuAsset.lods[j].indexBuffer    = iBuf;
         gpuAsset.lods[j].indexCount     = static_cast<uint32_t>(lodDef.indices.size());
         gpuAsset.lods[j].radialSegments = lodDef.radialSegments;
@@ -83,12 +91,8 @@ void TraditionalRenderPass::_RebuildInstanceBuffers() {
             .setByteSize(totalInstances * sizeof(Render::InstanceBufferEntry))
             .setStructStride(sizeof(Render::InstanceBufferEntry))
             .setDebugName("TreeInstanceBuffer")
-#if XYLEM_USE_STRUCTURED_BUFFER
-            .enableAutomaticStateTracking(nvrhi::ResourceStates::ShaderResource)
-#else
             .setIsVertexBuffer(true)
             .enableAutomaticStateTracking(nvrhi::ResourceStates::CopyDest)
-#endif
     );
 
     m_ShadowPass.instanceBuffer = GetDevice()->createBuffer(
@@ -101,7 +105,8 @@ void TraditionalRenderPass::_RebuildInstanceBuffers() {
     );
 
     m_VisibleInstanceBuffer.resize(totalInstances);
-    m_ShadowInstanceBuffer.resize(totalInstances);
+    for (auto& csd : m_CascadeShadowData)
+        csd.instanceBuffer.resize(totalInstances);
 }
 
 void TraditionalRenderPass::_RebuildBindingSets() {
@@ -118,12 +123,6 @@ void TraditionalRenderPass::_RebuildBindingSets() {
             nvrhi::BindingSetItem::Texture_SRV(0, m_TreePass.textureSets[i].diffuse),
             nvrhi::BindingSetItem::Texture_SRV(1, m_TreePass.textureSets[i].normalMap),
             nvrhi::BindingSetItem::Texture_SRV(2, m_ShadowPass.depthTexture),
-#if XYLEM_USE_STRUCTURED_BUFFER
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_TreePass.instanceBuffer,
-                nvrhi::Format::UNKNOWN,
-                nvrhi::BufferRange(0, totalInstances * sizeof(Render::InstanceBufferEntry))),
-            nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t)),
-#endif
         };
 
         if (i == 0) {
@@ -180,8 +179,10 @@ bool TraditionalRenderPass::Init() {
     m_VisibleInstanceBuffer.resize(std::max<uint32_t>(1, totalInstances));
     m_DrawCmds.reserve(numAssets * numLods);
 
-    m_ShadowInstanceBuffer.resize(std::max<uint32_t>(1, totalInstances));
-    m_ShadowDrawCmds.reserve(numAssets);
+    for (auto& csd : m_CascadeShadowData) {
+        csd.instanceBuffer.resize(std::max<uint32_t>(1, totalInstances));
+        csd.drawCmds.reserve(numAssets);
+    }
 
     return true;
 }
@@ -262,6 +263,9 @@ void TraditionalRenderPass::onRegionsDirty(const std::vector<size_t>& /*dirtyReg
 
 void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_UI.shadowMapTexture = m_ShadowPass.depthTexture.Get();
+    m_UI.shadowCascadeTextures.resize(Render::c_NumCascades);
+    for (uint32_t c = 0; c < Render::c_NumCascades; c++)
+        m_UI.shadowCascadeTextures[c] = m_ShadowPass.cascadeDebugTextures[c].Get();
 
     app::HiResTimer cpuTimer;
     cpuTimer.Start();
@@ -300,8 +304,9 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     #if XYLEM_USE_REVERSE_Z
     nvrhi::utils::ClearDepthStencilAttachment(m_CommandList, framebuffer, 0.f, 0);
     #else
+    float farPlaneDistance = m_ViewHandler.view.GetProjectionFrustum().farPlane().distance;
     nvrhi::utils::ClearDepthStencilAttachment(m_CommandList, framebuffer,
-        m_ViewHandler.view.GetViewFrustum().farPlane().distance, 0);
+        farPlaneDistance, 0);
     #endif
 
     dm::box3 sceneBbox = dm::box3::empty();
@@ -311,31 +316,56 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     if (terrain)
         sceneBbox |= terrain->getBbox();
 
-    m_ViewHandler.updateShadowVolume(sceneBbox, m_Registry.getSunDirection());
+    // Compute max shadow distance from scene bbox
+    const dm::float3& camPos = m_ViewHandler.camera.GetPosition();
+    const dm::float3& camDir = m_ViewHandler.camera.GetDir();
+    float maxShadowDist = 0.f;
+    for (int i = 0; i < dm::box3::numCorners; i++) {
+        dm::float3 corner = sceneBbox.getCorner(i);
+        dm::float3 camToCorner = corner - camPos;
+        float cornerDir = dm::dot(camToCorner, camDir);
+        if (cornerDir > 0.0f) maxShadowDist = dm::max(maxShadowDist, cornerDir);
+    }
+    // looking away
+    maxShadowDist = dm::max(maxShadowDist, 1.f);
 
-    const dm::box3& shadowCasterBboxLS = m_ViewHandler.shadowCasterBboxLS;
-    float maxXY = dm::max(shadowCasterBboxLS.diagonal().x, shadowCasterBboxLS.diagonal().y);
-    dm::float3 grow = 0.5f * (dm::float3(maxXY, maxXY, shadowCasterBboxLS.diagonal().z)
-                               - shadowCasterBboxLS.diagonal());
-    dm::box3 orthoBox = shadowCasterBboxLS.grow(grow);
-
-    dm::float4x4 lightProj = dm::orthoProjD3DStyle(
-        orthoBox.m_mins.x, orthoBox.m_maxs.x,
-        orthoBox.m_mins.y, orthoBox.m_maxs.y,
-        orthoBox.m_mins.z, orthoBox.m_maxs.z);
-
-    dm::float4x4 lightViewProj = dm::affineToHomogeneous(m_ViewHandler.worldToLight) * lightProj;
+    float aspectRatio = float(fbinfo.width) / float(fbinfo.height);
+    m_ViewHandler.computeCascades(sceneBbox, m_Registry.getSunDirection(),
+        0.1f, maxShadowDist, aspectRatio, dm::radians(60.f), m_ShadowRes);
 
     Render::ConstantBufferEntry constants{};
-    constants.view          = dm::affineToHomogeneous(m_ViewHandler.view.GetViewMatrix());
-    constants.projection    = m_ViewHandler.view.GetProjectionMatrix();
-    constants.lightViewProj = lightViewProj;
-    constants.sunLightDir   = m_Registry.getSunDirection();
+    constants.viewProj  = m_ViewHandler.view.GetViewProjectionMatrix();
+    constants.viewMatrix = dm::affineToHomogeneous(m_ViewHandler.view.GetViewMatrix());
+    for (uint32_t c = 0; c < Render::c_NumCascades; c++)
+        constants.lightViewProj[c] = m_ViewHandler.cascades[c].lightViewProj;
+    constants.sunLightDir    = m_Registry.getSunDirection();
+    constants.cascadeSplits  = m_ViewHandler.cascadeSplitDistances;
     m_CommandList->writeBuffer(m_Shared.constantBuffer, &constants, Render::c_ConstantBufferSize);
 
+    m_CommandList->beginMarker("Draw");
+
+    m_CommandList->beginMarker("Sky");
     _RenderSkyPass(framebuffer);
+    m_CommandList->endMarker();
+
+    m_CommandList->beginMarker("Shadow");
     _RenderShadowPass();
+    m_CommandList->endMarker();
+
+    // Copy cascade slices to debug textures for UI visualization
+    if (m_UI.showShadowMap) {
+        for (uint32_t c = 0; c < Render::c_NumCascades; c++) {
+            m_CommandList->copyTexture(
+                m_ShadowPass.cascadeDebugTextures[c], nvrhi::TextureSlice(),
+                m_ShadowPass.depthTexture, nvrhi::TextureSlice().setArraySlice(c));
+        }
+    }
+
+    m_CommandList->beginMarker("Scene");
     _RenderScenePass(framebuffer);
+    m_CommandList->endMarker();
+
+    m_CommandList->endMarker(); // Draw
 
     // m_CommandList->endTimerQuery(m_GpuTimers[m_NextTimerIdx]);
     m_CommandList->close();
@@ -352,8 +382,8 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_UI.culledInstanceCount  = m_UI.totalInstanceCount - m_UI.visibleInstanceCount;
     m_UI.drawCallCount        = (uint32_t)m_DrawCmds.size();
 
-    m_UI.shadowVisibleCount   = (uint32_t)m_ShadowVisibleRefs.size();
-    m_UI.shadowCulledCount    = m_UI.totalInstanceCount - m_UI.shadowVisibleCount;
+    m_UI.shadowVisibleCount   = m_TotalShadowInstancesDrawn;
+    m_UI.shadowCulledCount    = m_UI.totalInstanceCount - m_TotalShadowInstancesDrawn;
 
     m_VisibleInstanceReferences.clear();
 
@@ -421,77 +451,19 @@ void TraditionalRenderPass::_RenderShadowPass() {
 
     const auto& regions = m_Registry.getRegions();
 
-    m_ShadowVisibleRefs.clear();
-    std::vector<uint32_t> shadowCounts(m_GPUAssets.size(), 0);
-    m_ShadowDrawCmds.clear();
-    
+    m_TotalShadowInstancesDrawn = 0;
+    std::vector<uint32_t> shadowCounts[Render::c_NumCascades];
+    for (uint32_t c = 0; c < Render::c_NumCascades; c++) {
+        m_CascadeShadowData[c].visibleRefs.clear();
+        m_CascadeShadowData[c].drawCmds.clear();
+        shadowCounts[c].assign(m_GPUAssets.size(), 0);
+    }
+
     if (m_ViewHandler.shadowCasterBboxLS.isempty()) {
         return;
     }
-    
-    // Cull instances against shadow volume
-    for (uint32_t ri = 0; ri < regions.size(); ri++) {
-        const auto& region = regions[ri];
 
-        dm::box3 regionLS = region.cullBox * worldToLight;
-        if (!regionLS.intersects(m_ViewHandler.shadowCasterBboxLS))
-            continue;
-
-        for (uint32_t ii = 0; ii < region.instances.size(); ii++) {
-            const auto& inst = region.instances[ii];
-
-            // Global asset visibility
-            const auto* assetDef = m_Registry.findAsset(inst.assetId);
-            if (!assetDef || !assetDef->visible) continue;
-
-            // Per-region asset visibility
-            auto visIt = region.assetVisible.find(inst.assetId);
-            if (visIt != region.assetVisible.end() && !visIt->second) continue;
-
-            dm::box3 instanceLS = inst.bbox * worldToLight;
-            if (!instanceLS.intersects(m_ViewHandler.shadowCasterBboxLS))
-                continue;
-
-            auto it = m_AssetIdToGPUIndex.find(inst.assetId);
-            if (it == m_AssetIdToGPUIndex.end()) continue;
-            uint32_t gpuIdx = static_cast<uint32_t>(it->second);
-
-            m_ShadowVisibleRefs.push_back({ ri, ii, gpuIdx, lodIndex });
-            shadowCounts[gpuIdx]++;
-        }
-    }
-
-    // Build draw commands
-    std::vector<uint32_t> shadowWriteOff(m_GPUAssets.size(), 0);
-    uint32_t shadowOffset = 0;
-    for (uint32_t ai = 0; ai < shadowCounts.size(); ai++) {
-        if (shadowCounts[ai] == 0) continue;
-        const auto& lod = m_GPUAssets[ai].lods[lodIndex];
-        m_ShadowDrawCmds.push_back({
-            lod.vertexBuffer,
-            lod.indexBuffer,
-            nvrhi::DrawArguments()
-                .setVertexCount(lod.indexCount)
-                .setInstanceCount(shadowCounts[ai])
-                .setStartInstanceLocation(shadowOffset)
-        });
-        shadowWriteOff[ai] = shadowOffset;
-        shadowOffset += shadowCounts[ai];
-    }
-
-    for (const auto& ref : m_ShadowVisibleRefs) {
-        uint32_t& writeOffset = shadowWriteOff[ref.treeId];
-        const auto& inst = regions[ref.regionIdx].instances[ref.instanceIdx];
-        m_ShadowInstanceBuffer[writeOffset] = Render::InstanceBufferEntry(
-            inst.model, inst.normal, ref.treeId);
-        writeOffset++;
-    }
-
-    if (!m_ShadowVisibleRefs.empty())
-        m_CommandList->writeBuffer(m_ShadowPass.instanceBuffer, m_ShadowInstanceBuffer.data(),
-            m_ShadowVisibleRefs.size() * sizeof(Render::InstanceBufferEntry));
-
-    // Create shadow pipelines on demand
+    // Create shadow pipelines on demand (shared across all cascades)
     if (!m_ShadowPass.treePipeline) {
         nvrhi::GraphicsPipelineDesc pso;
         pso.VS             = m_ShadowPass.treeVS;
@@ -503,7 +475,7 @@ void TraditionalRenderPass::_RenderShadowPass() {
         pso.renderState.rasterState.depthBias            = 2;
         pso.renderState.rasterState.slopeScaledDepthBias = 2.0f;
         m_ShadowPass.treePipeline = GetDevice()->createGraphicsPipeline(
-            pso, m_ShadowPass.framebuffer->getFramebufferInfo());
+            pso, m_ShadowPass.framebuffers[0]->getFramebufferInfo());
     }
     if (!m_ShadowPass.terrainPipeline && m_TerrainPass.indexCount > 0) {
         nvrhi::GraphicsPipelineDesc pso;
@@ -516,60 +488,140 @@ void TraditionalRenderPass::_RenderShadowPass() {
         pso.renderState.rasterState.depthBias            = 2;
         pso.renderState.rasterState.slopeScaledDepthBias = 2.0f;
         m_ShadowPass.terrainPipeline = GetDevice()->createGraphicsPipeline(
-            pso, m_ShadowPass.framebuffer->getFramebufferInfo());
+            pso, m_ShadowPass.framebuffers[0]->getFramebufferInfo());
     }
-
-    nvrhi::utils::ClearDepthStencilAttachment(m_CommandList,
-        m_ShadowPass.framebuffer, 1.0f, 0);
 
     nvrhi::Viewport shadowVP(static_cast<float>(m_ShadowRes), static_cast<float>(m_ShadowRes));
     nvrhi::ViewportState shadowVPState;
     shadowVPState.addViewportAndScissorRect(shadowVP);
 
-    nvrhi::GraphicsState shadowState;
-    shadowState.pipeline    = m_ShadowPass.treePipeline;
-    shadowState.framebuffer = m_ShadowPass.framebuffer;
-    shadowState.viewport    = shadowVPState;
+    const auto* terrainPtr = m_Registry.getTerrain();
+    auto& cascades = m_ViewHandler.cascades;
 
-    for (const auto& cmd : m_ShadowDrawCmds) {
-        shadowState.bindings = { m_ShadowPass.bindingSet };
-        shadowState.vertexBuffers = {
-#if XYLEM_USE_INTERLEAVED_VERTEX_ATTRIBUTES
-            { cmd.vertexBuffer, 0, 0 },
-    #if !XYLEM_USE_STRUCTURED_BUFFER
-            { m_ShadowPass.instanceBuffer, 1, 0 },
-    #endif
-#else
-            { cmd.vertexBuffer, 0, offsetof(ProcGen::TreeVertex, pos) },
-            { cmd.vertexBuffer, 1, offsetof(ProcGen::TreeVertex, normal) },
-            { cmd.vertexBuffer, 2, offsetof(ProcGen::TreeVertex, tangent) },
-            { cmd.vertexBuffer, 3, offsetof(ProcGen::TreeVertex, bitangent) },
-            { cmd.vertexBuffer, 4, offsetof(ProcGen::TreeVertex, uv) },
-    #if !XYLEM_USE_STRUCTURED_BUFFER
-            { m_ShadowPass.instanceBuffer, 5, offsetof(Render::InstanceBufferEntry, model) },
-            { m_ShadowPass.instanceBuffer, 6, offsetof(Render::InstanceBufferEntry, normal) },
-    #endif
-#endif
-        };
-        shadowState.indexBuffer = { cmd.indexBuffer, nvrhi::Format::R32_UINT, 0 };
-        m_CommandList->setGraphicsState(shadowState);
-        m_CommandList->drawIndexed(cmd.drawArgs);
+    // regions culls against cascades, then instances
+    for (uint32_t ri = 0; ri < regions.size(); ri++) {
+        const auto& region = regions[ri];
+        dm::box3 regionLS = region.cullBox * worldToLight;
+
+        bool frustumIntersects = false;
+        for (uint32_t c = 0; c < Render::c_NumCascades; c++) {
+            auto& cBbox = cascades[c].shadowCasterBboxLS; 
+            if (cBbox.isempty()) continue;
+            if (regionLS.intersects(cBbox)) {
+                frustumIntersects = true;
+                break;
+            }
+        }
+        // none of the cascades hit region
+        if (!frustumIntersects) {
+            continue;
+        }
+
+        for (uint32_t ii = 0; ii < region.instances.size(); ii++) {
+            const auto& inst = region.instances[ii];
+
+            const auto* assetDef = m_Registry.findAsset(inst.assetId);
+            if (!assetDef || !assetDef->visible) continue;
+
+            auto visIt = region.assetVisible.find(inst.assetId);
+            if (visIt != region.assetVisible.end() && !visIt->second) continue;
+
+            auto it = m_AssetIdToGPUIndex.find(inst.assetId);
+            if (it == m_AssetIdToGPUIndex.end()) continue;
+            uint32_t gpuIdx = static_cast<uint32_t>(it->second);
+
+            dm::box3 instanceLS = inst.bbox * worldToLight;
+
+            bool drawnYet = false;
+            for (uint32_t c = 0; c < Render::c_NumCascades; c++) {
+                auto& cBbox = cascades[c].shadowCasterBboxLS;
+
+                if (cBbox.isempty()) continue;
+                if (!instanceLS.intersects(cBbox)) continue;
+                if (!drawnYet) {
+                    m_TotalShadowInstancesDrawn++;
+                    drawnYet = true;
+                }
+                m_CascadeShadowData[c].visibleRefs.push_back({ ri, ii, gpuIdx, lodIndex });
+                shadowCounts[c][gpuIdx]++;
+            }
+        }
     }
 
-    // Draw terrain into shadow map
-    const auto* terrainPtr = m_Registry.getTerrain();
-    if (m_TerrainPass.indexCount > 0 && terrainPtr
-        && (terrainPtr->getBbox() * worldToLight).intersects(m_ViewHandler.shadowCasterBboxLS)) {
-        nvrhi::GraphicsState terrShadow;
-        terrShadow.pipeline    = m_ShadowPass.terrainPipeline;
-        terrShadow.framebuffer = m_ShadowPass.framebuffer;
-        terrShadow.viewport    = shadowVPState;
-        terrShadow.bindings    = { m_ShadowPass.bindingSet };
-        terrShadow.vertexBuffers = { { m_TerrainPass.vertexBuffer, 0, 0 } };
-        terrShadow.indexBuffer   = { m_TerrainPass.indexBuffer, nvrhi::Format::R32_UINT, 0 };
-        m_CommandList->setGraphicsState(terrShadow);
-        m_CommandList->drawIndexed(
-            nvrhi::DrawArguments().setVertexCount(m_TerrainPass.indexCount));
+    // Build draw commands, fill instance buffers, and render per cascade
+    for (uint32_t cascade = 0; cascade < Render::c_NumCascades; cascade++) {
+        auto& csd = m_CascadeShadowData[cascade];
+
+        // Build draw commands for this cascade
+        std::vector<uint32_t> shadowWriteOff(m_GPUAssets.size(), 0);
+        uint32_t shadowOffset = 0;
+        for (uint32_t ai = 0; ai < shadowCounts[cascade].size(); ai++) {
+            if (shadowCounts[cascade][ai] == 0) continue;
+            const auto& lod = m_GPUAssets[ai].lods[lodIndex];
+            csd.drawCmds.push_back({
+                lod.vbs.position,
+                lod.indexBuffer,
+                nvrhi::DrawArguments()
+                    .setVertexCount(lod.indexCount)
+                    .setInstanceCount(shadowCounts[cascade][ai])
+                    .setStartInstanceLocation(shadowOffset)
+            });
+            shadowWriteOff[ai] = shadowOffset;
+            shadowOffset += shadowCounts[cascade][ai];
+        }
+
+        // Fill instance buffer for this cascade
+        for (const auto& ref : csd.visibleRefs) {
+            uint32_t& writeOffset = shadowWriteOff[ref.treeId];
+            const auto& inst = regions[ref.regionIdx].instances[ref.instanceIdx];
+            csd.instanceBuffer[writeOffset] = Render::InstanceBufferEntry(
+                inst.model, inst.normal, ref.treeId);
+            writeOffset++;
+        }
+
+        if (!csd.visibleRefs.empty())
+            m_CommandList->writeBuffer(m_ShadowPass.instanceBuffer, csd.instanceBuffer.data(),
+                csd.visibleRefs.size() * sizeof(Render::InstanceBufferEntry));
+
+        // Clear this cascade's framebuffer
+        nvrhi::utils::ClearDepthStencilAttachment(m_CommandList,
+            m_ShadowPass.framebuffers[cascade], 1.0f, 0);
+
+        // Draw trees into this cascade
+        nvrhi::GraphicsState shadowState;
+        shadowState.pipeline    = m_ShadowPass.treePipeline;
+        shadowState.framebuffer = m_ShadowPass.framebuffers[cascade];
+        shadowState.viewport    = shadowVPState;
+
+        for (const auto& cmd : csd.drawCmds) {
+            shadowState.bindings = { m_ShadowPass.bindingSet };
+            shadowState.vertexBuffers = {
+                { cmd.positionBuffer, 0, 0 },
+                { m_ShadowPass.instanceBuffer, 1, 0 },
+            };
+            shadowState.indexBuffer = { cmd.indexBuffer, nvrhi::Format::R32_UINT, 0 };
+            m_CommandList->setGraphicsState(shadowState);
+            m_CommandList->setPushConstants(&cascade, sizeof(cascade));
+
+            m_CommandList->drawIndexed(cmd.drawArgs);
+        }
+
+        // Draw terrain into this cascade
+        if (m_TerrainPass.indexCount > 0 && terrainPtr
+            && (terrainPtr->getBbox() * worldToLight).intersects(m_ViewHandler.shadowCasterBboxLS)) {
+            nvrhi::GraphicsState terrShadow;
+            terrShadow.pipeline    = m_ShadowPass.terrainPipeline;
+            terrShadow.framebuffer = m_ShadowPass.framebuffers[cascade];
+            terrShadow.viewport    = shadowVPState;
+            terrShadow.bindings    = { m_ShadowPass.bindingSet };
+            terrShadow.vertexBuffers = { { m_TerrainPass.vertexBuffer, 0, 0 } };
+            terrShadow.indexBuffer   = { m_TerrainPass.indexBuffer, nvrhi::Format::R32_UINT, 0 };
+            m_CommandList->setGraphicsState(terrShadow);
+            // doesn'cascade doesn't matter for terrain render, but needed for root signature
+            m_CommandList->setPushConstants(&cascade, sizeof(cascade));
+            m_CommandList->drawIndexed(
+                nvrhi::DrawArguments().setVertexCount(m_TerrainPass.indexCount));
+        }
     }
 }
 
@@ -637,14 +689,14 @@ void TraditionalRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
             uint32_t count = m_InstanceCounts[ai][li];
             if (count == 0) continue;
             const auto& lod = m_GPUAssets[ai].lods[li];
-            m_DrawCmds.push_back({ 
-                lod.vertexBuffer, 
+            m_DrawCmds.push_back({
+                lod.vbs,
                 lod.indexBuffer,
                 nvrhi::DrawArguments()
                     .setVertexCount(lod.indexCount)
                     .setInstanceCount(count)
                     .setStartInstanceLocation(instanceOffset),
-                m_GPUAssets[ai].textureSetIdx 
+                m_GPUAssets[ai].textureSetIdx
             });
             m_InstanceOffsets[ai][li] = instanceOffset;
             instanceOffset += count;
@@ -672,28 +724,15 @@ void TraditionalRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
     for (const auto& cmd : m_DrawCmds) {
         state.bindings = { m_TreePass.bindingSets[cmd.textureSetIdx] };
         state.vertexBuffers = {
-#if XYLEM_USE_INTERLEAVED_VERTEX_ATTRIBUTES
-            { cmd.vertexBuffer, 0, 0 },
-#if !XYLEM_USE_STRUCTURED_BUFFER
-            { m_TreePass.instanceBuffer, 1, 0 },
-#endif
-#else
-            { cmd.vertexBuffer, 0, offsetof(ProcGen::TreeVertex, pos) },
-            { cmd.vertexBuffer, 1, offsetof(ProcGen::TreeVertex, normal) },
-            { cmd.vertexBuffer, 2, offsetof(ProcGen::TreeVertex, tangent) },
-            { cmd.vertexBuffer, 3, offsetof(ProcGen::TreeVertex, bitangent) },
-            { cmd.vertexBuffer, 4, offsetof(ProcGen::TreeVertex, uv) },
-#if !XYLEM_USE_STRUCTURED_BUFFER
-            { m_TreePass.instanceBuffer, 5, offsetof(Render::InstanceBufferEntry, model) },
-            { m_TreePass.instanceBuffer, 6, offsetof(Render::InstanceBufferEntry, normal) },
-#endif
-#endif
+            { cmd.vertexBuffers.position,  0, 0 },
+            { cmd.vertexBuffers.normal,    1, 0 },
+            { cmd.vertexBuffers.tangent,   2, 0 },
+            { cmd.vertexBuffers.bitangent, 3, 0 },
+            { cmd.vertexBuffers.uv,        4, 0 },
+            { m_TreePass.instanceBuffer, 5, 0 },
         };
         state.indexBuffer = { cmd.indexBuffer, nvrhi::Format::R32_UINT, 0 };
         m_CommandList->setGraphicsState(state);
-#if XYLEM_USE_STRUCTURED_BUFFER
-        m_CommandList->setPushConstants(&instanceOffset, sizeof(uint32_t));
-#endif
         m_CommandList->drawIndexed(cmd.drawArgs);
     }
 
@@ -746,94 +785,43 @@ bool TraditionalRenderPass::_InitTreePass(nvrhi::ICommandList* initCL, engine::C
     m_TreePass.pixelShader  = m_ShaderFactory->CreateShader("app/TraditionalRenderPass.hlsl", "main_ps", nullptr, nvrhi::ShaderType::Pixel);
     if (!m_TreePass.vertexShader || !m_TreePass.pixelShader) return false;
 
-    // Vertex attributes
+    // Vertex attributes — SoA: one buffer per attribute stream
     nvrhi::VertexAttributeDesc attributes[] = {
-#if XYLEM_USE_INTERLEAVED_VERTEX_ATTRIBUTES
-        nvrhi::VertexAttributeDesc()
-            .setName("POSITION")
-            .setFormat(nvrhi::Format::RGB32_FLOAT)
-            .setOffset(offsetof(ProcGen::TreeVertex, pos))
-            .setBufferIndex(0)
-            .setElementStride(sizeof(ProcGen::TreeVertex)),
-        nvrhi::VertexAttributeDesc()
-            .setName("NORMAL")
-            .setFormat(nvrhi::Format::RGB32_FLOAT)
-            .setOffset(offsetof(ProcGen::TreeVertex, normal))
-            .setBufferIndex(0)
-            .setElementStride(sizeof(ProcGen::TreeVertex)),
-        nvrhi::VertexAttributeDesc()
-            .setName("TANGENT")
-            .setFormat(nvrhi::Format::RGB32_FLOAT)
-            .setOffset(offsetof(ProcGen::TreeVertex, tangent))
-            .setBufferIndex(0)
-            .setElementStride(sizeof(ProcGen::TreeVertex)),
-        nvrhi::VertexAttributeDesc()
-            .setName("BITANGENT")
-            .setFormat(nvrhi::Format::RGB32_FLOAT)
-            .setOffset(offsetof(ProcGen::TreeVertex, bitangent))
-            .setBufferIndex(0)
-            .setElementStride(sizeof(ProcGen::TreeVertex)),
-        nvrhi::VertexAttributeDesc()
-            .setName("UV")
-            .setFormat(nvrhi::Format::RG32_FLOAT)
-            .setOffset(offsetof(ProcGen::TreeVertex, uv))
-            .setBufferIndex(0)
-            .setElementStride(sizeof(ProcGen::TreeVertex)),
-#if !XYLEM_USE_STRUCTURED_BUFFER
-        nvrhi::VertexAttributeDesc()
-            .setName("MODEL_MATRIX")
-            .setFormat(nvrhi::Format::RGBA32_FLOAT)
-            .setArraySize(4)
-            .setOffset(offsetof(Render::InstanceBufferEntry, model))
-            .setBufferIndex(1)
-            .setElementStride(sizeof(Render::InstanceBufferEntry))
-            .setIsInstanced(true),
-        nvrhi::VertexAttributeDesc()
-            .setName("NORMAL_MATRIX")
-            .setFormat(nvrhi::Format::RGB32_FLOAT)
-            .setArraySize(3)
-            .setOffset(offsetof(Render::InstanceBufferEntry, normal))
-            .setBufferIndex(1)
-            .setElementStride(sizeof(Render::InstanceBufferEntry))
-            .setIsInstanced(true),
-#endif
-#else
         nvrhi::VertexAttributeDesc()
             .setName("POSITION")
             .setFormat(nvrhi::Format::RGB32_FLOAT)
             .setOffset(0)
             .setBufferIndex(0)
-            .setElementStride(sizeof(ProcGen::TreeVertex)),
+            .setElementStride(sizeof(dm::float3)),
         nvrhi::VertexAttributeDesc()
             .setName("NORMAL")
             .setFormat(nvrhi::Format::RGB32_FLOAT)
             .setOffset(0)
             .setBufferIndex(1)
-            .setElementStride(sizeof(ProcGen::TreeVertex)),
+            .setElementStride(sizeof(dm::float3)),
         nvrhi::VertexAttributeDesc()
             .setName("TANGENT")
             .setFormat(nvrhi::Format::RGB32_FLOAT)
             .setOffset(0)
             .setBufferIndex(2)
-            .setElementStride(sizeof(ProcGen::TreeVertex)),
+            .setElementStride(sizeof(dm::float3)),
         nvrhi::VertexAttributeDesc()
             .setName("BITANGENT")
             .setFormat(nvrhi::Format::RGB32_FLOAT)
             .setOffset(0)
             .setBufferIndex(3)
-            .setElementStride(sizeof(ProcGen::TreeVertex)),
+            .setElementStride(sizeof(dm::float3)),
         nvrhi::VertexAttributeDesc()
             .setName("UV")
             .setFormat(nvrhi::Format::RG32_FLOAT)
             .setOffset(0)
             .setBufferIndex(4)
-            .setElementStride(sizeof(ProcGen::TreeVertex)),
-#if !XYLEM_USE_STRUCTURED_BUFFER
+            .setElementStride(sizeof(dm::float2)),
         nvrhi::VertexAttributeDesc()
             .setName("MODEL_MATRIX")
             .setFormat(nvrhi::Format::RGBA32_FLOAT)
             .setArraySize(4)
-            .setOffset(0)
+            .setOffset(offsetof(Render::InstanceBufferEntry, model))
             .setBufferIndex(5)
             .setElementStride(sizeof(Render::InstanceBufferEntry))
             .setIsInstanced(true),
@@ -841,12 +829,10 @@ bool TraditionalRenderPass::_InitTreePass(nvrhi::ICommandList* initCL, engine::C
             .setName("NORMAL_MATRIX")
             .setFormat(nvrhi::Format::RGB32_FLOAT)
             .setArraySize(3)
-            .setOffset(0)
-            .setBufferIndex(6)
+            .setOffset(offsetof(Render::InstanceBufferEntry, normal))
+            .setBufferIndex(5)
             .setElementStride(sizeof(Render::InstanceBufferEntry))
             .setIsInstanced(true),
-#endif
-#endif
     };
     m_TreePass.inputLayout = GetDevice()->createInputLayout(attributes, uint32_t(std::size(attributes)), m_TreePass.vertexShader);
     if (!m_TreePass.inputLayout) return false;
@@ -858,12 +844,8 @@ bool TraditionalRenderPass::_InitTreePass(nvrhi::ICommandList* initCL, engine::C
             .setByteSize(totalInstances * sizeof(Render::InstanceBufferEntry))
             .setStructStride(sizeof(Render::InstanceBufferEntry))
             .setDebugName("TreeInstanceBuffer")
-#if XYLEM_USE_STRUCTURED_BUFFER
-            .enableAutomaticStateTracking(nvrhi::ResourceStates::ShaderResource)
-#else
             .setIsVertexBuffer(true)
             .enableAutomaticStateTracking(nvrhi::ResourceStates::CopyDest)
-#endif
     );
     if (!m_TreePass.instanceBuffer) return false;
 
@@ -915,12 +897,6 @@ bool TraditionalRenderPass::_InitTreePass(nvrhi::ICommandList* initCL, engine::C
             nvrhi::BindingSetItem::Texture_SRV(0, m_TreePass.textureSets[i].diffuse),
             nvrhi::BindingSetItem::Texture_SRV(1, m_TreePass.textureSets[i].normalMap),
             nvrhi::BindingSetItem::Texture_SRV(2, m_ShadowPass.depthTexture),
-#if XYLEM_USE_STRUCTURED_BUFFER
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_TreePass.instanceBuffer,
-                nvrhi::Format::UNKNOWN,
-                nvrhi::BufferRange(0, totalInstances * sizeof(Render::InstanceBufferEntry))),
-            nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t)),
-#endif
         };
 
         if (i == 0) {
@@ -946,19 +922,37 @@ bool TraditionalRenderPass::_InitShadowPass() {
     m_ShadowPass.depthTexture = GetDevice()->createTexture(
         nvrhi::TextureDesc()
             .setWidth(m_ShadowRes).setHeight(m_ShadowRes)
+            .setArraySize(Render::c_NumCascades)
+            .setDimension(nvrhi::TextureDimension::Texture2DArray)
             .setFormat(nvrhi::Format::D32)
             .setIsRenderTarget(true)
             .setUseClearValue(true)
             .setClearValue(nvrhi::Color(1.f))
             .setInitialState(nvrhi::ResourceStates::DepthWrite)
             .setKeepInitialState(true)
-            .setDebugName("ShadowMap")
+            .setDebugName("ShadowMapArray")
     );
     if (!m_ShadowPass.depthTexture) return false;
 
-    m_ShadowPass.framebuffer = GetDevice()->createFramebuffer(
-        nvrhi::FramebufferDesc().setDepthAttachment(m_ShadowPass.depthTexture));
-    if (!m_ShadowPass.framebuffer) return false;
+    for (uint32_t c = 0; c < Render::c_NumCascades; c++) {
+        m_ShadowPass.framebuffers[c] = GetDevice()->createFramebuffer(
+            nvrhi::FramebufferDesc().setDepthAttachment(
+                nvrhi::FramebufferAttachment()
+                    .setTexture(m_ShadowPass.depthTexture)
+                    .setArraySlice(c)
+            ));
+        if (!m_ShadowPass.framebuffers[c]) return false;
+
+        // Per-cascade debug texture for UI visualization (matches Hi-Z debug pattern)
+        m_ShadowPass.cascadeDebugTextures[c] = GetDevice()->createTexture(
+            nvrhi::TextureDesc()
+                .setWidth(m_ShadowRes).setHeight(m_ShadowRes)
+                .setFormat(nvrhi::Format::R32_FLOAT)
+                .setInitialState(nvrhi::ResourceStates::ShaderResource)
+                .setKeepInitialState(true)
+                .setDebugName("ShadowCascadeDebug_" + std::to_string(c))
+        );
+    }
 
     m_ShadowPass.treeVS = m_ShaderFactory->CreateShader(
         "app/shadow.hlsl", "tree_vs", nullptr, nvrhi::ShaderType::Vertex);
@@ -970,10 +964,9 @@ bool TraditionalRenderPass::_InitShadowPass() {
         nvrhi::VertexAttributeDesc()
             .setName("POSITION")
             .setFormat(nvrhi::Format::RGB32_FLOAT)
-            .setOffset(offsetof(ProcGen::TreeVertex, pos))
+            .setOffset(0)
             .setBufferIndex(0)
-            .setElementStride(sizeof(ProcGen::TreeVertex)),
-        #if !XYLEM_USE_STRUCTURED_BUFFER
+            .setElementStride(sizeof(dm::float3)),
         nvrhi::VertexAttributeDesc()
             .setName("MODEL_MATRIX")
             .setFormat(nvrhi::Format::RGBA32_FLOAT)
@@ -982,28 +975,18 @@ bool TraditionalRenderPass::_InitShadowPass() {
             .setBufferIndex(1)
             .setIsInstanced(true)
             .setElementStride(sizeof(Render::InstanceBufferEntry)),
-        #endif
     };
     m_ShadowPass.treeInputLayout = GetDevice()->createInputLayout(
         treeShadowAttrs, uint32_t(std::size(treeShadowAttrs)), m_ShadowPass.treeVS);
     if (!m_ShadowPass.treeInputLayout) return false;
-    
+
     nvrhi::VertexAttributeDesc terrainShadowAttrs[] = {
-        #if XYLEM_USE_INTERLEAVED_VERTEX_ATTRIBUTES
         nvrhi::VertexAttributeDesc()
             .setName("POSITION")
             .setFormat(nvrhi::Format::RGB32_FLOAT)
             .setOffset(offsetof(Scene::TerrainVertex, pos))
             .setBufferIndex(0)
             .setElementStride(sizeof(Scene::TerrainVertex)),
-        #else
-        nvrhi::VertexAttributeDesc()
-            .setName("POSITION")
-            .setFormat(nvrhi::Format::RGB32_FLOAT)
-            .setOffset(0)
-            .setBufferIndex(0)
-            .setElementStride(sizeof(Scene::TerrainVertex)),
-        #endif
     };
     m_ShadowPass.terrainInputLayout = GetDevice()->createInputLayout(
         terrainShadowAttrs, uint32_t(std::size(terrainShadowAttrs)), m_ShadowPass.terrainVS);
@@ -1035,6 +1018,7 @@ bool TraditionalRenderPass::_InitShadowPass() {
     bsd.bindings = {
         nvrhi::BindingSetItem::ConstantBuffer(0, m_Shared.constantBuffer,
             nvrhi::BufferRange(0, Render::c_ConstantBufferSize)),
+        nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t)),
     };
     if (!nvrhi::utils::CreateBindingSetAndLayout(GetDevice(), nvrhi::ShaderType::All, 0,
             bsd, m_ShadowPass.bindingLayout, m_ShadowPass.bindingSet))

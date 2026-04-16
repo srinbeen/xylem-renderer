@@ -5,8 +5,7 @@
 cbuffer CB : register(b0)
 {
     // P0 fields (also read by VS/PS)
-    float4x4 view;
-    float4x4 projection;
+    float4x4 viewProj;
     float4x4 lightViewProj;
     float3   sunLightDir;
     float    _pad0;
@@ -18,11 +17,13 @@ cbuffer CB : register(b0)
 struct RootConstant { uint slot; };
 ConstantBuffer<RootConstant> rc : register(b1);
 
+// Layout matches C++ Render::InstanceBufferEntry (104 bytes, packed — HLSL
+// StructuredBuffers use natural layout, not cbuffer 16-byte-row padding).
 struct InstanceRenderData
 {
-    float4x4 model;
-    float3x3 normal;
-    uint     treeId;
+    float4x4 model;     // offset 0,  size 64
+    float3x3 normal;    // offset 64, size 36
+    uint     treeId;    // offset 100, size 4
 };
 
 StructuredBuffer<uint>                  visBuf       : register(t0);
@@ -50,7 +51,6 @@ void main_vs(
     float4x4 model = instBuf[trueID].model;
     float3x3 normalMat = instBuf[trueID].normal;
 
-    float4x4 viewProj = mul(view, projection);
     float4 worldPos = mul(float4(i_pos, 1), model);
 
     o_pos       = mul(worldPos, viewProj);

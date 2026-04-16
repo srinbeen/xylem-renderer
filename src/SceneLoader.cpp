@@ -20,14 +20,17 @@ bool SceneLoader::Load(const std::filesystem::path& path, SceneRegistry& registr
     {
         std::vector<uint32_t> lodSegments;
         std::vector<float>    lodDistances;
-        if (root.isMember("lods") && root["lods"].isArray()) {
-            for (const auto& lodNode : root["lods"]) {
+        if (root.isMember("lods")) {
+            const auto& lodNode = root["lods"];
+            for (const auto& segment : lodNode["radialSegments"]) {
                 uint32_t segments = 8;
-                float    distance = 100.f;
-                lodNode["segments"] >> segments;
-                lodNode["distance"] >> distance;
+                segment >> segments;
                 lodSegments.push_back(segments);
-                lodDistances.push_back(distance);
+            }
+            for (const auto& distance : lodNode["distances"]) {
+                float    distances = 100.f;
+                distance >> distances;
+                lodDistances.push_back(distances);
             }
         } else {
             lodSegments  = { 16, 8, 4 };

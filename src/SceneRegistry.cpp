@@ -255,7 +255,11 @@ void SceneRegistry::_rebuildAsset(TreeAssetDef& asset) {
         ProcGen::Buffers lod;
         m_TreeGenerator->generateVertexAndIndexBuffers(asset.lsystemString, lod);
 
-        asset.lods[j].vertices       = std::move(lod.vertices);
+        asset.lods[j].positions      = std::move(lod.positions);
+        asset.lods[j].normals        = std::move(lod.normals);
+        asset.lods[j].tangents       = std::move(lod.tangents);
+        asset.lods[j].bitangents     = std::move(lod.bitangents);
+        asset.lods[j].uvs            = std::move(lod.uvs);
         asset.lods[j].indices        = std::move(lod.indices);
         asset.lods[j].bbox           = lod.bbox;
         asset.lods[j].radialSegments = m_LodSegments[j];

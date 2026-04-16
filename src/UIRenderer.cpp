@@ -63,6 +63,11 @@ void UIRenderer::buildUI() {
     if (ImGui::CollapsingHeader("Debug")) {
         ImGui::Checkbox("Top-Down View", &m_ui.showDebugTopDown);
         ImGui::Checkbox("Shadow Map", &m_ui.showShadowMap);
+        ImGui::Checkbox("Hi-Z Mip Chain", &m_ui.showHiZ);
+        ImGui::Separator();
+        ImGui::SliderFloat("Hi-Z Bypass Angle", &m_ui.hizBypassAngle, 0.f, 1.f, "%.2f");
+        ImGui::SameLine();
+        ImGui::TextDisabled(m_ui.hizActiveThisFrame ? "(active)" : "(bypassed)");
     }
 
     ImGui::Spacing();
@@ -72,6 +77,7 @@ void UIRenderer::buildUI() {
 
     _buildDebugTopDownSection();
     _buildShadowMapSection();
+    _buildHiZSection();
 }
 
 
@@ -617,18 +623,72 @@ void UIRenderer::_buildDebugTopDownSection() {
 
 
 void UIRenderer::_buildShadowMapSection() {
-    if (!m_ui.showShadowMap || !m_ui.shadowMapTexture) return;
+    if (!m_ui.showShadowMap) return;
 
-    ImGui::SetNextWindowSize(ImVec2(300, 320), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Shadow Map", &m_ui.showShadowMap)) {
+    int numCascades = static_cast<int>(m_ui.shadowCascadeTextures.size());
+    if (numCascades == 0) return;
+
+    ImGui::SetNextWindowSize(ImVec2(520, 560), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Shadow Map Cascades", &m_ui.showShadowMap)) {
         ImGui::End();
         return;
     }
 
-    float avail = ImGui::GetContentRegionAvail().x;
-    float size  = std::max(avail, 64.f);
+    static int selectedCascade = 0;
+    if (selectedCascade >= numCascades) selectedCascade = 0;
 
-    ImGui::Image(ImTextureRef((void*)m_ui.shadowMapTexture), ImVec2(size, size));
+    ImGui::Text("Cascade:");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(180.f);
+    ImGui::SliderInt("##cascade", &selectedCascade, 0, numCascades - 1);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(%d cascades)", numCascades);
+
+    ImGui::Separator();
+
+    void* tex = m_ui.shadowCascadeTextures[selectedCascade];
+    if (tex) {
+        float avail = ImGui::GetContentRegionAvail().x;
+        float size  = std::max(avail, 64.f); // smth wrong here
+        ImGui::Image(ImTextureRef(tex), ImVec2(size, size));
+    }
+
+    ImGui::End();
+}
+
+
+void UIRenderer::_buildHiZSection() {
+    if (!m_ui.showHiZ || m_ui.hizMipTextures.empty()) return;
+
+    ImGui::SetNextWindowSize(ImVec2(520, 560), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Hi-Z Mip Chain", &m_ui.showHiZ)) {
+        ImGui::End();
+        return;
+    }
+
+    int numMips = static_cast<int>(m_ui.hizMipTextures.size());
+
+    static int selectedMip = 0;
+    if (selectedMip >= numMips) selectedMip = 0;
+
+    ImGui::Text("Mip level:");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(180.f);
+    ImGui::SliderInt("##hizmip", &selectedMip, 0, numMips - 1);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(%d mips total)", numMips);
+    ImGui::TextDisabled("Resolution halves each mip. Mip 0 = full framebuffer.");
+
+    ImGui::Separator();
+
+    void* tex = m_ui.hizMipTextures[selectedMip];
+    if (tex) {
+        float avail = ImGui::GetContentRegionAvail().x;
+        float size  = std::max(avail, 64.f);
+        ImGui::Image(ImTextureRef(tex), ImVec2(size, size));
+    } else {
+        ImGui::TextDisabled("(not yet available — enable Hi-Z panel before first frame)");
+    }
 
     ImGui::End();
 }

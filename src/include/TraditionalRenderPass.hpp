@@ -12,6 +12,7 @@
 #include <donut/engine/CommonRenderPasses.h>
 
 #include <unordered_map>
+#include <array>
 
 #include "SceneRegistry.hpp"
 #include "Render.hpp"
@@ -74,7 +75,8 @@ private:
     // Shadow depth pass
     struct ShadowPassResources {
         nvrhi::TextureHandle                   depthTexture;
-        nvrhi::FramebufferHandle               framebuffer;
+        nvrhi::FramebufferHandle               framebuffers[Render::c_NumCascades];
+        nvrhi::TextureHandle                   cascadeDebugTextures[Render::c_NumCascades];
         nvrhi::ShaderHandle                    treeVS;
         nvrhi::ShaderHandle                    terrainVS;
         nvrhi::InputLayoutHandle               terrainInputLayout;
@@ -136,11 +138,15 @@ private:
     std::vector<std::vector<uint32_t>>                 m_InstanceOffsets;
     std::vector<Render::DrawCmd>                       m_DrawCmds;
     std::vector<Render::InstanceBufferEntry>           m_VisibleInstanceBuffer;
+    uint32_t                                           m_TotalShadowInstancesDrawn;
 
-    // Shadow pass draw data (extended frustum culled, lowest LOD)
-    std::vector<Render::InstanceReference>             m_ShadowVisibleRefs;
-    std::vector<Render::ShadowDrawCmd>                 m_ShadowDrawCmds;
-    std::vector<Render::InstanceBufferEntry>           m_ShadowInstanceBuffer;
+    // Per-cascade shadow draw data
+    struct CascadeShadowData {
+        std::vector<Render::InstanceReference>   visibleRefs;
+        std::vector<Render::ShadowDrawCmd>       drawCmds;
+        std::vector<Render::InstanceBufferEntry> instanceBuffer;
+    };
+    std::array<CascadeShadowData, Render::c_NumCascades> m_CascadeShadowData;
 
     bool _InitShared();
     bool _InitTreePass(nvrhi::ICommandList* initCL, engine::CommonRenderPasses& commonPasses);

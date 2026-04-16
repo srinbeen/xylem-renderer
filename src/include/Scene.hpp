@@ -23,19 +23,23 @@ struct LSystemInstance {
 
 // CPU-only LOD data — no GPU handles. Used by SceneRegistry.
 struct TreeLODDef {
-    std::vector<ProcGen::TreeVertex> vertices;
-    std::vector<uint32_t>            indices;
-    dm::box3                         bbox;
-    uint32_t                         radialSegments = 0;
+    std::vector<dm::float3> positions;
+    std::vector<dm::float3> normals;
+    std::vector<dm::float3> tangents;
+    std::vector<dm::float3> bitangents;
+    std::vector<dm::float2> uvs;
+    std::vector<uint32_t>   indices;
+    dm::box3                bbox;
+    uint32_t                radialSegments = 0;
 };
 
-// GPU-side LOD data — owned by render passes.
+// GPU-side LOD data — owned by render passes. SoA: one buffer per attribute stream.
 struct TreeLODData {
-    nvrhi::BufferHandle vertexBuffer;
-    nvrhi::BufferHandle indexBuffer;
-    uint32_t            indexCount;
-    uint32_t            radialSegments;
-    dm::box3            bbox;
+    Render::VertexBufferSet vbs;
+    nvrhi::BufferHandle     indexBuffer;
+    uint32_t                indexCount;
+    uint32_t                radialSegments;
+    dm::box3                bbox;
 };
 
 struct TreeAsset {

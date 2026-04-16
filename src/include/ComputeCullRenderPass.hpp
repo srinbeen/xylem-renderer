@@ -9,7 +9,6 @@
 
 #include <nvrhi/nvrhi.h>
 #include <nvrhi/d3d12.h>
-#include <GFSDK_Aftermath.h>
 
 #include <unordered_map>
 
@@ -138,6 +137,33 @@ private:
         nvrhi::GraphicsPipelineHandle          pipeline;
     };
 
+    struct DepthPrepassResources {
+        nvrhi::TextureHandle                   depthTexture;       // D32, main FB resolution
+        nvrhi::FramebufferHandle               framebuffer;        // depth-only
+        nvrhi::ShaderHandle                    treeVS;
+        nvrhi::ShaderHandle                    terrainVS;
+        nvrhi::InputLayoutHandle               treeInputLayout;    // position-only
+        nvrhi::InputLayoutHandle               terrainInputLayout; // pos+normal+uv (match VB stride)
+        nvrhi::GraphicsPipelineHandle          treePipeline;
+        nvrhi::GraphicsPipelineHandle          terrainPipeline;
+        nvrhi::BindingLayoutHandle             bindingLayout;      // CB(0) + PushConstants(1) + SRV(0,1,2)
+        nvrhi::BindingSetHandle                bindingSet;
+    };
+
+    struct HiZPassResources {
+        nvrhi::TextureHandle                   hizTexture;         // R32_FLOAT, mipchain, UAV
+        uint32_t                               numMips = 0;
+        nvrhi::ShaderHandle                    copyCS;             // HiZCopy
+        nvrhi::ShaderHandle                    buildCS;            // HiZDownsample
+        nvrhi::ComputePipelineHandle           copyPipeline;
+        nvrhi::ComputePipelineHandle           buildPipeline;
+        nvrhi::BindingLayoutHandle             buildBindingLayout; // PushConstants(0) + SRV(0) + UAV(0)
+        std::vector<nvrhi::BindingSetHandle>   buildBindingSets;   // one per mip transition
+        nvrhi::SamplerHandle                   pointSampler;       // point/clamp for cull shader
+        // Debug view: one single-mip R32_FLOAT texture per mip level, GPU-copied for ImGui display
+        std::vector<nvrhi::TextureHandle>      debugMipTextures;
+    };
+
     // -----------------------------------------------------------------------
     // Members
     // -----------------------------------------------------------------------
@@ -147,9 +173,10 @@ private:
     ShadowPassResources                                m_ShadowPass;
     TerrainPassResources                               m_TerrainPass;
     SkyPassResources                                   m_SkyPass;
+    DepthPrepassResources                              m_DepthPrepass;
+    HiZPassResources                                   m_HiZ;
 
     nvrhi::CommandListHandle                           m_CommandList;
-    GFSDK_Aftermath_ContextHandle                      m_AftermathContext = nullptr;
     ViewHandler&                                       m_ViewHandler;
     std::shared_ptr<engine::ShaderFactory>             m_ShaderFactory;
 
@@ -199,6 +226,7 @@ private:
     bool _InitShadowPass();
     bool _InitTerrainPass(nvrhi::ICommandList* initCL);
     bool _InitSkyPass();
+    bool _InitHiZShaders();
     // bool _InitTimerQueries();
 
     void _UploadAllAssets(nvrhi::IDevice* device, nvrhi::ICommandList* commandList);
@@ -212,6 +240,9 @@ private:
     // -----------------------------------------------------------------------
     // Render helpers
     // -----------------------------------------------------------------------
+    void _EnsureHiZResources(uint32_t width, uint32_t height);
+    void _RenderDepthPrepass();
+    void _BuildHiZMipChain();
     void _RenderSkyPass(nvrhi::IFramebuffer* framebuffer);
     void _RenderShadowPass();
     void _RenderScenePass(nvrhi::IFramebuffer* framebuffer);

@@ -1,12 +1,12 @@
 #pragma pack_matrix(row_major)
 
+#include "../include/macros.h"
 #include "types.hlsli"
 
 cbuffer CB : register(b0)
 {
     // P0 fields (also read by VS/PS)
-    float4x4 view;
-    float4x4 projection;
+    float4x4 viewProj;
     float4x4 lightViewProj;
     float3   sunLightDir;
     float    _pad0;
@@ -23,7 +23,14 @@ cbuffer CB : register(b0)
     uint     totalCapacity;
     float4   lodDistances[3];
     uint     numLods;
-    float    _pad3[3];
+    float    _pad3a;
+    float    _pad3b;
+    float    _pad3c;
+
+    // Hi-Z fields
+    float2   hizDimensions;
+    float    maxHiZMip;
+    uint     hizEnabled;
 };
 
 struct CullInstanceData
@@ -54,8 +61,12 @@ RWStructuredBuffer<uint>           shadowVisBuf         : register(u4);
 RWByteAddressBuffer                mainIndirectArgs     : register(u5);
 RWByteAddressBuffer                shadowIndirectArgs   : register(u6);
 
+Texture2D<float>                   hizTexture           : register(t4);
+SamplerState                       hizSampler           : register(s0);
+
 bool DoesAABBIntersectFrustum(box3 bbox, frustum f);
 uint SelectLOD(box3 bbox);
+bool IsOccludedByHiZ(box3 bbox);
 
 
 [numthreads(64, 1, 1)]
@@ -81,6 +92,8 @@ void CullMain(uint3 dtid : SV_DispatchThreadID)
     if (!mainRegionVisBuf[inst.regionId]) return;
     // instance frustum culled
     if (!DoesAABBIntersectFrustum(inst.bbox, viewFrustum)) return;
+    // Hi-Z occlusion culled
+    if (IsOccludedByHiZ(inst.bbox)) return;
 
     uint lod  = SelectLOD(inst.bbox);
     uint slot = inst.baseSlot + lod;
@@ -171,4 +184,72 @@ uint SelectLOD(box3 bbox)
             return i;
     }
     return numLods - 1;
+}
+
+bool IsOccludedByHiZ(box3 bbox)
+{
+    // Disabled by CPU (bird's-eye view or frame 0)
+    if (!hizEnabled) return false;
+
+    float3 corners[8] = {
+        float3(bbox.min.x, bbox.min.y, bbox.min.z),
+        float3(bbox.max.x, bbox.min.y, bbox.min.z),
+        float3(bbox.min.x, bbox.max.y, bbox.min.z),
+        float3(bbox.max.x, bbox.max.y, bbox.min.z),
+        float3(bbox.min.x, bbox.min.y, bbox.max.z),
+        float3(bbox.max.x, bbox.min.y, bbox.max.z),
+        float3(bbox.min.x, bbox.max.y, bbox.max.z),
+        float3(bbox.max.x, bbox.max.y, bbox.max.z),
+    };
+
+    float2 minUV = float2(1, 1);
+    float2 maxUV = float2(0, 0);
+#if XYLEM_USE_REVERSE_Z
+    float closestDepth = 0.0;   // far plane in reverse-Z
+#else
+    float closestDepth = 1.0;   // far plane in forward-Z
+#endif
+
+    [unroll]
+    for (int i = 0; i < 8; i++)
+    {
+        float4 clip = mul(float4(corners[i], 1), viewProj);
+        // AABB straddles or is behind near plane — treat as visible
+        if (clip.w <= 0.0) return false;
+
+        float3 ndc = clip.xyz / clip.w;
+        float2 uv = ndc.xy * 0.5 + 0.5;
+        uv.y = 1.0 - uv.y;
+
+        minUV = min(minUV, uv);
+        maxUV = max(maxUV, uv);
+#if XYLEM_USE_REVERSE_Z
+        closestDepth = max(closestDepth, ndc.z);  // max = nearest in reverse-Z
+#else
+        closestDepth = min(closestDepth, ndc.z);  // min = nearest in forward-Z
+#endif
+    }
+
+    // Clamp to screen bounds
+    minUV = saturate(minUV);
+    maxUV = saturate(maxUV);
+
+    // Pick mip level based on projected footprint in pixels
+    float2 footprint = (maxUV - minUV) * hizDimensions;
+    float mipLevel = ceil(log2(max(footprint.x, footprint.y)));
+    mipLevel = clamp(mipLevel, 0, maxHiZMip);
+
+    // Sample Hi-Z at center of projected rect
+    float2 centerUV = (minUV + maxUV) * 0.5;
+    float hizDepth = hizTexture.SampleLevel(hizSampler, centerUV, mipLevel);
+
+    // Occlusion test
+#if XYLEM_USE_REVERSE_Z
+    // Reverse-Z: object's nearest depth (large value) < Hi-Z (nearest occluder, large value)
+    // means object is behind the occluder
+    return (closestDepth < hizDepth);
+#else
+    // Forward-Z: object's nearest depth (small value) > Hi-Z (nearest occluder, small value)
+    return (closestDepth > hizDepth);
+#endif
 }

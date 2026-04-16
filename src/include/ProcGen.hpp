@@ -11,17 +11,6 @@
 
 namespace Xylem::ProcGen {
 
-    struct TreeVertex {
-        dm::float3  pos;
-        dm::float3  normal;
-        dm::float3  tangent;
-        dm::float3  bitangent;
-        dm::float2  uv;
-
-        TreeVertex(dm::float3 p, dm::float3 n, dm::float3 t, dm::float3 b, dm::float2 tc)
-            : pos{p}, normal{n}, tangent{t}, bitangent{b}, uv{tc} {}
-    };
-
     struct TurtleState {
         dm::float3  pos;
         dm::quat    orientation;
@@ -34,7 +23,11 @@ namespace Xylem::ProcGen {
     };
 
     struct Buffers {
-        std::vector<TreeVertex> vertices;
+        std::vector<dm::float3> positions;
+        std::vector<dm::float3> normals;
+        std::vector<dm::float3> tangents;
+        std::vector<dm::float3> bitangents;
+        std::vector<dm::float2> uvs;
         std::vector<uint32_t>   indices;
         dm::box3                bbox;
     };

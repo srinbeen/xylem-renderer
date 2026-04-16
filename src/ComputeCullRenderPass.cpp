@@ -3,7 +3,6 @@
 #include "include/macros.h"
 #include "include/Terrain.hpp"
 
-#include <GFSDK_Aftermath_GpuCrashDump.h>
 
 #include <nvrhi/utils.h>
 #include <donut/app/imgui_renderer.h>
@@ -43,22 +42,30 @@ void ComputeCullRenderPass::_UploadAsset(
 
     for (size_t j = 0; j < assetDef.lods.size(); j++) {
         const auto& lodDef = assetDef.lods[j];
+        std::string lodSuffix = "_LOD" + std::to_string(j);
 
-        vDesc.debugName = "VB_" + assetDef.name + "_LOD" + std::to_string(j);
-        vDesc.byteSize  = lodDef.vertices.size() * sizeof(ProcGen::TreeVertex);
-        auto vBuf = device->createBuffer(vDesc);
-        commandList->beginTrackingBufferState(vBuf, nvrhi::ResourceStates::CopyDest);
-        commandList->writeBuffer(vBuf, lodDef.vertices.data(), vDesc.byteSize);
-        commandList->setPermanentBufferState(vBuf, nvrhi::ResourceStates::VertexBuffer);
+        auto uploadVB = [&](const auto& data, const char* suffix, nvrhi::BufferHandle& out) {
+            vDesc.debugName = "VB_" + assetDef.name + lodSuffix + suffix;
+            vDesc.byteSize  = data.size() * sizeof(data[0]);
+            out = device->createBuffer(vDesc);
+            commandList->beginTrackingBufferState(out, nvrhi::ResourceStates::CopyDest);
+            commandList->writeBuffer(out, data.data(), vDesc.byteSize);
+            commandList->setPermanentBufferState(out, nvrhi::ResourceStates::VertexBuffer);
+        };
 
-        iDesc.debugName = "IB_" + assetDef.name + "_LOD" + std::to_string(j);
+        uploadVB(lodDef.positions,  "_pos",   gpuAsset.lods[j].vbs.position);
+        uploadVB(lodDef.normals,    "_nor",   gpuAsset.lods[j].vbs.normal);
+        uploadVB(lodDef.tangents,   "_tan",   gpuAsset.lods[j].vbs.tangent);
+        uploadVB(lodDef.bitangents, "_bitan", gpuAsset.lods[j].vbs.bitangent);
+        uploadVB(lodDef.uvs,        "_uv",    gpuAsset.lods[j].vbs.uv);
+
+        iDesc.debugName = "IB_" + assetDef.name + lodSuffix;
         iDesc.byteSize  = lodDef.indices.size() * sizeof(uint32_t);
         auto iBuf = device->createBuffer(iDesc);
         commandList->beginTrackingBufferState(iBuf, nvrhi::ResourceStates::CopyDest);
         commandList->writeBuffer(iBuf, lodDef.indices.data(), iDesc.byteSize);
         commandList->setPermanentBufferState(iBuf, nvrhi::ResourceStates::IndexBuffer);
 
-        gpuAsset.lods[j].vertexBuffer   = vBuf;
         gpuAsset.lods[j].indexBuffer    = iBuf;
         gpuAsset.lods[j].indexCount     = static_cast<uint32_t>(lodDef.indices.size());
         gpuAsset.lods[j].radialSegments = lodDef.radialSegments;
@@ -413,6 +420,9 @@ void ComputeCullRenderPass::_RebuildCullBindings() {
 
         nvrhi::BindingSetItem::RawBuffer_UAV(5, m_CullPass.indirectArgsBuffer),
         nvrhi::BindingSetItem::RawBuffer_UAV(6, m_CullPass.shadowIndirectArgsBuffer),
+
+        nvrhi::BindingSetItem::Texture_SRV(4, m_HiZ.hizTexture),
+        nvrhi::BindingSetItem::Sampler(0, m_HiZ.pointSampler),
     };
 
     m_CullPass.bindingSet = device->createBindingSet(cullBSD, m_CullPass.bindingLayout);
@@ -455,14 +465,260 @@ void ComputeCullRenderPass::_RebuildCullBindings() {
 }
 
 // ===========================================================================
+// Ensure Hi-Z resources exist at the given resolution (lazy init / resize)
+// ===========================================================================
+
+void ComputeCullRenderPass::_EnsureHiZResources(uint32_t width, uint32_t height) {
+    // Skip if already at the right size
+    if (m_DepthPrepass.depthTexture) {
+        auto desc = m_DepthPrepass.depthTexture->getDesc();
+        if (desc.width == width && desc.height == height)
+            return;
+    }
+
+    auto device = GetDevice();
+
+    // --- Depth prepass texture + framebuffer ---
+    m_DepthPrepass.depthTexture = device->createTexture(
+        nvrhi::TextureDesc()
+            .setWidth(width).setHeight(height)
+            .setFormat(nvrhi::Format::D32)
+            .setIsRenderTarget(true)
+            .setUseClearValue(true)
+        #if XYLEM_USE_REVERSE_Z
+            .setClearValue(nvrhi::Color(0.f))
+        #else
+            .setClearValue(nvrhi::Color(1.f))
+        #endif
+            .setInitialState(nvrhi::ResourceStates::DepthWrite)
+            .setKeepInitialState(true)
+            .setDebugName("DepthPrepass_Depth")
+    );
+    m_DepthPrepass.framebuffer = device->createFramebuffer(
+        nvrhi::FramebufferDesc().setDepthAttachment(m_DepthPrepass.depthTexture));
+
+    // Invalidate pipelines (resolution-dependent)
+    m_DepthPrepass.treePipeline    = nullptr;
+    m_DepthPrepass.terrainPipeline = nullptr;
+
+    // --- Hi-Z texture with full mip chain ---
+    m_HiZ.numMips = static_cast<uint32_t>(std::floor(std::log2(std::max(width, height)))) + 1;
+    m_HiZ.hizTexture = device->createTexture(
+        nvrhi::TextureDesc()
+            .setWidth(width).setHeight(height)
+            .setMipLevels(m_HiZ.numMips)
+            .setFormat(nvrhi::Format::R32_FLOAT)
+            .setIsUAV(true)
+            .setInitialState(nvrhi::ResourceStates::ShaderResource)
+            .setKeepInitialState(true)
+            .setDebugName("HiZTexture")
+    );
+
+    // --- Per-mip binding sets for Hi-Z build ---
+    m_HiZ.buildBindingSets.resize(m_HiZ.numMips);
+
+    // Set 0: copy from depth prepass (D32 read as R32_FLOAT) -> Hi-Z mip 0
+    {
+        nvrhi::BindingSetDesc bsd;
+        bsd.bindings = {
+            nvrhi::BindingSetItem::PushConstants(0, sizeof(uint32_t) * 2),
+            nvrhi::BindingSetItem::Texture_SRV(0, m_DepthPrepass.depthTexture,
+                nvrhi::Format::R32_FLOAT,
+                nvrhi::TextureSubresourceSet(0, 1, 0, 1)),
+            nvrhi::BindingSetItem::Texture_UAV(0, m_HiZ.hizTexture,
+                nvrhi::Format::R32_FLOAT,
+                nvrhi::TextureSubresourceSet(0, 1, 0, 1)),
+        };
+        m_HiZ.buildBindingSets[0] = device->createBindingSet(bsd, m_HiZ.buildBindingLayout);
+    }
+
+    // Sets 1..N-1: downsample mip i-1 -> mip i
+    for (uint32_t mip = 1; mip < m_HiZ.numMips; mip++) {
+        nvrhi::BindingSetDesc bsd;
+        bsd.bindings = {
+            nvrhi::BindingSetItem::PushConstants(0, sizeof(uint32_t) * 2),
+            nvrhi::BindingSetItem::Texture_SRV(0, m_HiZ.hizTexture,
+                nvrhi::Format::R32_FLOAT,
+                nvrhi::TextureSubresourceSet(mip - 1, 1, 0, 1)),
+            nvrhi::BindingSetItem::Texture_UAV(0, m_HiZ.hizTexture,
+                nvrhi::Format::R32_FLOAT,
+                nvrhi::TextureSubresourceSet(mip, 1, 0, 1)),
+        };
+        m_HiZ.buildBindingSets[mip] = device->createBindingSet(bsd, m_HiZ.buildBindingLayout);
+    }
+
+    // --- Per-mip debug view textures (single-mip, R32_FLOAT, for ImGui display) ---
+    m_HiZ.debugMipTextures.resize(m_HiZ.numMips);
+    for (uint32_t mip = 0; mip < m_HiZ.numMips; mip++) {
+        uint32_t mipW = std::max(1u, width  >> mip);
+        uint32_t mipH = std::max(1u, height >> mip);
+        m_HiZ.debugMipTextures[mip] = device->createTexture(
+            nvrhi::TextureDesc()
+                .setWidth(mipW).setHeight(mipH)
+                .setMipLevels(1)
+                .setFormat(nvrhi::Format::R32_FLOAT)
+                .setInitialState(nvrhi::ResourceStates::ShaderResource)
+                .setKeepInitialState(true)
+                .setDebugName(("HiZ_Debug_Mip" + std::to_string(mip)).c_str())
+        );
+    }
+
+    // --- Depth prepass binding set (references main cull vis/inst/slot buffers) ---
+    nvrhi::BindingSetDesc prepassBSD;
+    prepassBSD.bindings = {
+        nvrhi::BindingSetItem::ConstantBuffer(0, m_Shared.constantBuffer,
+            nvrhi::BufferRange(0, Render::c_CullConstantBufferSize)),
+        nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t)),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_CullPass.visibilityBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_CullPass.persistentInstBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_CullPass.slotOffsetBuffer),
+    };
+    m_DepthPrepass.bindingSet = device->createBindingSet(prepassBSD, m_DepthPrepass.bindingLayout);
+
+    // Rebuild cull binding set to reference the new Hi-Z texture
+    _RebuildCullBindings();
+}
+
+// ===========================================================================
+// Depth prepass — draw last frame's visible set depth-only
+// ===========================================================================
+
+void ComputeCullRenderPass::_RenderDepthPrepass() {
+    const uint32_t numLods = static_cast<uint32_t>(m_Registry.getLodSegments().size());
+
+    // Clear depth to far plane
+#if XYLEM_USE_REVERSE_Z
+    nvrhi::utils::ClearDepthStencilAttachment(m_CommandList,
+        m_DepthPrepass.framebuffer, 0.f, 0);
+#else
+    nvrhi::utils::ClearDepthStencilAttachment(m_CommandList,
+        m_DepthPrepass.framebuffer, 1.f, 0);
+#endif
+
+    // Lazy pipeline creation
+    if (!m_DepthPrepass.treePipeline) {
+        nvrhi::GraphicsPipelineDesc pso;
+        pso.VS             = m_DepthPrepass.treeVS;
+        pso.inputLayout    = m_DepthPrepass.treeInputLayout;
+        pso.bindingLayouts = { m_DepthPrepass.bindingLayout };
+        pso.primType       = nvrhi::PrimitiveType::TriangleList;
+    #if XYLEM_USE_REVERSE_Z
+        pso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Greater);
+    #else
+        pso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
+    #endif
+        pso.renderState.rasterState.setCullBack();
+        m_DepthPrepass.treePipeline = GetDevice()->createGraphicsPipeline(
+            pso, m_DepthPrepass.framebuffer->getFramebufferInfo());
+    }
+
+    // Draw trees using last frame's indirect args (not yet cleared)
+    nvrhi::GraphicsState state;
+    state.pipeline    = m_DepthPrepass.treePipeline;
+    state.framebuffer = m_DepthPrepass.framebuffer;
+    state.viewport    = m_ViewHandler.view.GetViewportState();
+    state.bindings    = { m_DepthPrepass.bindingSet };
+    state.indirectParams = m_CullPass.indirectArgsBuffer;
+
+    for (uint32_t ai = 0; ai < m_GPUAssets.size(); ai++) {
+        for (uint32_t li = 0; li < numLods; li++) {
+            uint32_t slot = ai * numLods + li;
+            if (m_MaxSlotCounts[slot] == 0) continue;
+
+            const auto& lod = m_GPUAssets[ai].lods[li];
+            state.vertexBuffers = { { lod.vbs.position, 0, 0 } };
+            state.indexBuffer   = { lod.indexBuffer, nvrhi::Format::R32_UINT, 0 };
+            m_CommandList->setGraphicsState(state);
+            m_CommandList->setPushConstants(&slot, sizeof(slot));
+            m_CommandList->drawIndexedIndirect(
+                slot * sizeof(nvrhi::DrawIndexedIndirectArguments));
+        }
+    }
+
+    // Draw terrain (non-instanced, always visible)
+    if (m_TerrainPass.indexCount > 0) {
+        if (!m_DepthPrepass.terrainPipeline) {
+            nvrhi::GraphicsPipelineDesc pso;
+            pso.VS             = m_DepthPrepass.terrainVS;
+            pso.inputLayout    = m_DepthPrepass.terrainInputLayout;
+            pso.bindingLayouts = { m_DepthPrepass.bindingLayout };
+            pso.primType       = nvrhi::PrimitiveType::TriangleList;
+        #if XYLEM_USE_REVERSE_Z
+            pso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Greater);
+        #else
+            pso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
+        #endif
+            pso.renderState.rasterState.setCullNone();
+            m_DepthPrepass.terrainPipeline = GetDevice()->createGraphicsPipeline(
+                pso, m_DepthPrepass.framebuffer->getFramebufferInfo());
+        }
+
+        nvrhi::GraphicsState terrState;
+        terrState.pipeline    = m_DepthPrepass.terrainPipeline;
+        terrState.framebuffer = m_DepthPrepass.framebuffer;
+        terrState.viewport    = m_ViewHandler.view.GetViewportState();
+        terrState.bindings    = { m_DepthPrepass.bindingSet };
+        terrState.vertexBuffers = { { m_TerrainPass.vertexBuffer, 0, 0 } };
+        terrState.indexBuffer   = { m_TerrainPass.indexBuffer, nvrhi::Format::R32_UINT, 0 };
+        m_CommandList->setGraphicsState(terrState);
+
+        uint32_t c = 0;
+        m_CommandList->setPushConstants(&c, sizeof(c));
+        m_CommandList->drawIndexed(
+            nvrhi::DrawArguments().setVertexCount(m_TerrainPass.indexCount));
+    }
+}
+
+// ===========================================================================
+// Build Hi-Z mip chain from depth prepass
+// ===========================================================================
+
+void ComputeCullRenderPass::_BuildHiZMipChain() {
+    auto desc = m_DepthPrepass.depthTexture->getDesc();
+    uint32_t w = desc.width;
+    uint32_t h = desc.height;
+
+    // Pass 0: Copy depth texture -> Hi-Z mip 0
+    {
+        uint32_t dims[2] = { w, h };
+        nvrhi::ComputeState cs;
+        cs.pipeline = m_HiZ.copyPipeline;
+        cs.bindings = { m_HiZ.buildBindingSets[0] };
+        m_CommandList->setComputeState(cs);
+        m_CommandList->setPushConstants(dims, sizeof(dims));
+        m_CommandList->dispatch((w + 7) / 8, (h + 7) / 8, 1);
+    }
+
+    // Passes 1..N-1: Downsample mip i-1 -> mip i
+    for (uint32_t mip = 1; mip < m_HiZ.numMips; mip++) {
+        uint32_t mipW = std::max(1u, w >> mip);
+        uint32_t mipH = std::max(1u, h >> mip);
+        uint32_t dims[2] = { mipW, mipH };
+
+        nvrhi::ComputeState cs;
+        cs.pipeline = m_HiZ.buildPipeline;
+        cs.bindings = { m_HiZ.buildBindingSets[mip] };
+        m_CommandList->setComputeState(cs);
+        m_CommandList->setPushConstants(dims, sizeof(dims));
+        m_CommandList->dispatch((mipW + 7) / 8, (mipH + 7) / 8, 1);
+    }
+
+    // Copy each mip into its debug view texture (for ImGui display)
+    if (m_UI.showHiZ && !m_HiZ.debugMipTextures.empty()) {
+        for (uint32_t mip = 0; mip < m_HiZ.numMips; mip++) {
+            m_CommandList->copyTexture(
+                m_HiZ.debugMipTextures[mip], nvrhi::TextureSlice(),
+                m_HiZ.hizTexture,           nvrhi::TextureSlice().setMipLevel(mip));
+        }
+    }
+}
+
+// ===========================================================================
 // Destructor
 // ===========================================================================
 
 ComputeCullRenderPass::~ComputeCullRenderPass() {
-    if (m_AftermathContext) {
-        GFSDK_Aftermath_ReleaseContextHandle(m_AftermathContext);
-        m_AftermathContext = nullptr;
-    }
+    
 }
 
 // ===========================================================================
@@ -483,6 +739,7 @@ bool ComputeCullRenderPass::Init() {
         if (!_InitTreePass(initCL, commonPasses))          return false;
         if (!_InitTerrainPass(initCL))                     return false;
         if (!_InitSkyPass())                               return false;
+        if (!_InitHiZShaders())                            return false;
 
         _BuildRegionWindows();
         _BuildSlotLayout();
@@ -498,13 +755,6 @@ bool ComputeCullRenderPass::Init() {
 
     m_CommandList = GetDevice()->createCommandList();
     // _InitTimerQueries();
-
-    // Aftermath: create context handle from the D3D12 device.
-    {
-        auto* d3d12Device = static_cast<ID3D12Device*>(
-            GetDevice()->getNativeObject(nvrhi::ObjectTypes::D3D12_Device));
-        GFSDK_Aftermath_DX12_CreateContextHandle(d3d12Device, &m_AftermathContext);
-    }
 
     m_UI.totalInstanceCount = m_Registry.totalInstanceCount();
 
@@ -538,6 +788,18 @@ void ComputeCullRenderPass::BackBufferResizing() {
     m_ShadowPass.treePipeline    = nullptr;
     m_ShadowPass.terrainPipeline = nullptr;
     m_SkyPass.pipeline           = nullptr;
+
+    // Hi-Z resources are resolution-dependent — force recreation
+    m_DepthPrepass.treePipeline    = nullptr;
+    m_DepthPrepass.terrainPipeline = nullptr;
+    m_DepthPrepass.depthTexture    = nullptr;
+    m_DepthPrepass.framebuffer     = nullptr;
+    m_DepthPrepass.bindingSet      = nullptr;
+
+    m_HiZ.buildBindingSets.clear();
+    m_HiZ.debugMipTextures.clear();
+    m_HiZ.numMips = 0;
+    m_UI.hizMipTextures.clear();
 }
 
 // ===========================================================================
@@ -600,6 +862,10 @@ void ComputeCullRenderPass::onRegionsDirty(const std::vector<size_t>& /*dirtyReg
 
 void ComputeCullRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_UI.shadowMapTexture = m_ShadowPass.depthTexture.Get();
+    // Populate Hi-Z debug pointers for the UI (pointers are stable between resizes)
+    m_UI.hizMipTextures.resize(m_HiZ.debugMipTextures.size());
+    for (size_t i = 0; i < m_HiZ.debugMipTextures.size(); i++)
+        m_UI.hizMipTextures[i] = m_HiZ.debugMipTextures[i].Get();
 
     app::HiResTimer cpuTimer;
     cpuTimer.Start();
@@ -629,7 +895,7 @@ void ComputeCullRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_CommandList->open();
     // m_CommandList->beginTimerQuery(m_GpuTimers[m_NextTimerIdx]);
 
-    GFSDK_Aftermath_SetEventMarker(m_AftermathContext, "Frame::Begin", 0);
+    // m_CommandList->beginMarker("Frame");
 
     m_ViewHandler.view.SetViewMatrix(m_ViewHandler.camera.GetWorldToViewMatrix());
     m_ViewHandler.view.UpdateCache();
@@ -639,7 +905,7 @@ void ComputeCullRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     nvrhi::utils::ClearDepthStencilAttachment(m_CommandList, framebuffer, 0.f, 0);
     #else
     nvrhi::utils::ClearDepthStencilAttachment(m_CommandList, framebuffer,
-        m_ViewHandler.view.GetViewFrustum().farPlane().distance, 0);
+        m_ViewHandler.view.GetProjectionFrustum().farPlane().distance, 0);
     #endif
 
     dm::box3 sceneBbox = dm::box3::empty();
@@ -666,8 +932,7 @@ void ComputeCullRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
 
     // --- Fill CullConstantBufferEntry ---
     Render::CullConstantBufferEntry constants{};
-    constants.view          = dm::affineToHomogeneous(m_ViewHandler.view.GetViewMatrix());
-    constants.projection    = m_ViewHandler.view.GetProjectionMatrix();
+    constants.viewProj      = m_ViewHandler.view.GetViewProjectionMatrix();
     constants.lightViewProj = lightViewProj;
     constants.sunLightDir   = m_Registry.getSunDirection();
 
@@ -686,10 +951,39 @@ void ComputeCullRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     for (uint32_t i = 0; i < constants.numLods; i++)
         constants.lodDistances[i].x = lodDistances[i];
 
+    // Hi-Z fields — bypass when camera looks steeply downward (bird's-eye view)
+    dm::float3 camDir = dm::normalize(m_ViewHandler.camera.GetDir());
+    float downwardness = -camDir.y;  // 0 = horizontal, 1 = straight down
+    bool hizActive = downwardness < m_UI.hizBypassAngle;
+    m_UI.hizActiveThisFrame = hizActive;
+
+    constants.hizDimensions = dm::float2(static_cast<float>(fbinfo.width),
+                                         static_cast<float>(fbinfo.height));
+    constants.maxHiZMip     = static_cast<float>(m_HiZ.numMips - 1);
+    constants.hizEnabled    = hizActive ? 1u : 0u;
+
     m_CommandList->writeBuffer(m_Shared.constantBuffer, &constants, Render::c_CullConstantBufferSize);
 
+    // --- Ensure Hi-Z resources at current resolution ---
+    _EnsureHiZResources(fbinfo.width, fbinfo.height);
+
+    // --- Depth prepass + Hi-Z build (skip entirely when bypassed) ---
+    if (hizActive) {
+        m_CommandList->beginMarker("HiZ");
+
+        m_CommandList->beginMarker("DepthPrepass");
+        _RenderDepthPrepass();
+        m_CommandList->endMarker();
+
+        m_CommandList->beginMarker("BuildMipChain");
+        _BuildHiZMipChain();
+        m_CommandList->endMarker();
+
+        m_CommandList->endMarker(); // HiZ
+    }
+
     // --- GPU Cull Dispatch ---
-    // Clear UAV counters
+    // Clear UAV counters (AFTER depth prepass which reads last frame's data)
     m_CommandList->clearBufferUInt(m_CullPass.countBuffer, 0);
     m_CommandList->clearBufferUInt(m_CullPass.shadowCountBuffer, 0);
 
@@ -701,8 +995,10 @@ void ComputeCullRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         m_ShadowIndirectArgsStaging.data(),
         m_ShadowIndirectArgsStaging.size() * sizeof(nvrhi::DrawIndexedIndirectArguments));
 
+    m_CommandList->beginMarker("Cull");
+
     // region camera cull
-    GFSDK_Aftermath_SetEventMarker(m_AftermathContext, "Cull::RegionDispatch", 0);
+    m_CommandList->beginMarker("RegionDispatch");
     {
         nvrhi::ComputeState cs;
         cs.pipeline = m_CullPass.regionPipeline;
@@ -711,9 +1007,10 @@ void ComputeCullRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         m_CommandList->dispatch(
             (constants.numRegions + 63) / 64, 1, 1);
     }
-    
+    m_CommandList->endMarker();
+
     // Main camera cull
-    GFSDK_Aftermath_SetEventMarker(m_AftermathContext, "Cull::MainDispatch", 0);
+    m_CommandList->beginMarker("MainDispatch");
     {
         nvrhi::ComputeState cs;
         cs.pipeline = m_CullPass.mainPipeline;
@@ -722,17 +1019,21 @@ void ComputeCullRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         m_CommandList->dispatch(
             (m_TotalCapacity + 255) / 256, 1, 1);
     }
+    m_CommandList->endMarker();
 
     // Shadow cull
-    GFSDK_Aftermath_SetEventMarker(m_AftermathContext, "Cull::ShadowDispatch", 0);
+    m_CommandList->beginMarker("ShadowDispatch");
     {
         nvrhi::ComputeState cs;
         cs.pipeline = m_CullPass.shadowPipeline;
         cs.bindings = { m_CullPass.bindingSet };
         m_CommandList->setComputeState(cs);
         m_CommandList->dispatch(
-            (m_TotalCapacity + 63) / 64, 1, 1);
+            (m_TotalCapacity + 255) / 256, 1, 1);
     }
+    m_CommandList->endMarker();
+
+    m_CommandList->endMarker(); // Cull
 
     // --- Copy cull counts to readback ring ---
     {
@@ -747,13 +1048,23 @@ void ComputeCullRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     }
 
     // --- Draw passes (auto barriers: UAV→SRV transitions handled by setGraphicsState) ---
-    GFSDK_Aftermath_SetEventMarker(m_AftermathContext, "Draw::Sky", 0);
+    m_CommandList->beginMarker("Draw");
+
+    m_CommandList->beginMarker("Sky");
     _RenderSkyPass(framebuffer);
-    GFSDK_Aftermath_SetEventMarker(m_AftermathContext, "Draw::Shadow", 0);
+    m_CommandList->endMarker();
+
+    m_CommandList->beginMarker("Shadow");
     _RenderShadowPass();
-    GFSDK_Aftermath_SetEventMarker(m_AftermathContext, "Draw::Scene", 0);
+    m_CommandList->endMarker();
+
+    m_CommandList->beginMarker("Scene");
     _RenderScenePass(framebuffer);
-    GFSDK_Aftermath_SetEventMarker(m_AftermathContext, "Frame::End", 0);
+    m_CommandList->endMarker();
+
+    m_CommandList->endMarker(); // Draw
+
+    // m_CommandList->endMarker(); // Frame
 
     // m_CommandList->endTimerQuery(m_GpuTimers[m_NextTimerIdx]);
     m_CommandList->close();
@@ -786,9 +1097,11 @@ void ComputeCullRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
             GetDevice()->unmapBuffer(m_ReadbackBuffers[readSlot]);
 
             m_UI.visibleInstanceCount = visibleSum;
-            m_UI.culledInstanceCount  = m_UI.totalInstanceCount - visibleSum;
+            m_UI.culledInstanceCount  = (visibleSum <= m_UI.totalInstanceCount)
+                ? m_UI.totalInstanceCount - visibleSum : 0;
             m_UI.shadowVisibleCount   = shadowVisSum;
-            m_UI.shadowCulledCount    = m_UI.totalInstanceCount - shadowVisSum;
+            m_UI.shadowCulledCount    = (shadowVisSum <= m_UI.totalInstanceCount)
+                ? m_UI.totalInstanceCount - shadowVisSum : 0;
         }
     }
     m_ReadbackFrameIndex++;
@@ -915,7 +1228,7 @@ void ComputeCullRenderPass::_RenderShadowPass() {
 
         const auto& lod = m_GPUAssets[ai].lods[lowestLOD];
 
-        shadowState.vertexBuffers = { { lod.vertexBuffer, 0, 0 } };
+        shadowState.vertexBuffers = { { lod.vbs.position, 0, 0 } };
         shadowState.indexBuffer   = { lod.indexBuffer, nvrhi::Format::R32_UINT, 0 };
         m_CommandList->setGraphicsState(shadowState);
 
@@ -989,7 +1302,13 @@ void ComputeCullRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
             const auto& lod = m_GPUAssets[ai].lods[li];
 
             state.bindings = { m_TreePass.bindingSets[m_GPUAssets[ai].textureSetIdx] };
-            state.vertexBuffers = { { lod.vertexBuffer, 0, 0 } };
+            state.vertexBuffers = {
+                { lod.vbs.position,  0, 0 },
+                { lod.vbs.normal,    1, 0 },
+                { lod.vbs.tangent,   2, 0 },
+                { lod.vbs.bitangent, 3, 0 },
+                { lod.vbs.uv,        4, 0 },
+            };
             state.indexBuffer   = { lod.indexBuffer, nvrhi::Format::R32_UINT, 0 };
             m_CommandList->setGraphicsState(state);
 
@@ -1077,6 +1396,9 @@ bool ComputeCullRenderPass::_InitCullPass(nvrhi::ICommandList* /*initCL*/) {
 
         nvrhi::BindingLayoutItem::RawBuffer_UAV(5),        // mainIndirectArgs
         nvrhi::BindingLayoutItem::RawBuffer_UAV(6),        // shadowIndirectArgs
+
+        nvrhi::BindingLayoutItem::Texture_SRV(4),          // hizTexture
+        nvrhi::BindingLayoutItem::Sampler(0),              // hizSampler (point/clamp)
     };
     m_CullPass.bindingLayout = GetDevice()->createBindingLayout(cullLayoutDesc);
     if (!m_CullPass.bindingLayout) return false;
@@ -1113,33 +1435,33 @@ bool ComputeCullRenderPass::_InitTreePass(nvrhi::ICommandList* initCL, engine::C
         nvrhi::VertexAttributeDesc()
             .setName("POSITION")
             .setFormat(nvrhi::Format::RGB32_FLOAT)
-            .setOffset(offsetof(ProcGen::TreeVertex, pos))
+            .setOffset(0)
             .setBufferIndex(0)
-            .setElementStride(sizeof(ProcGen::TreeVertex)),
+            .setElementStride(sizeof(dm::float3)),
         nvrhi::VertexAttributeDesc()
             .setName("NORMAL")
             .setFormat(nvrhi::Format::RGB32_FLOAT)
-            .setOffset(offsetof(ProcGen::TreeVertex, normal))
-            .setBufferIndex(0)
-            .setElementStride(sizeof(ProcGen::TreeVertex)),
+            .setOffset(0)
+            .setBufferIndex(1)
+            .setElementStride(sizeof(dm::float3)),
         nvrhi::VertexAttributeDesc()
             .setName("TANGENT")
             .setFormat(nvrhi::Format::RGB32_FLOAT)
-            .setOffset(offsetof(ProcGen::TreeVertex, tangent))
-            .setBufferIndex(0)
-            .setElementStride(sizeof(ProcGen::TreeVertex)),
+            .setOffset(0)
+            .setBufferIndex(2)
+            .setElementStride(sizeof(dm::float3)),
         nvrhi::VertexAttributeDesc()
             .setName("BITANGENT")
             .setFormat(nvrhi::Format::RGB32_FLOAT)
-            .setOffset(offsetof(ProcGen::TreeVertex, bitangent))
-            .setBufferIndex(0)
-            .setElementStride(sizeof(ProcGen::TreeVertex)),
+            .setOffset(0)
+            .setBufferIndex(3)
+            .setElementStride(sizeof(dm::float3)),
         nvrhi::VertexAttributeDesc()
             .setName("UV")
             .setFormat(nvrhi::Format::RG32_FLOAT)
-            .setOffset(offsetof(ProcGen::TreeVertex, uv))
-            .setBufferIndex(0)
-            .setElementStride(sizeof(ProcGen::TreeVertex)),
+            .setOffset(0)
+            .setBufferIndex(4)
+            .setElementStride(sizeof(dm::float2)),
     };
     m_TreePass.inputLayout = GetDevice()->createInputLayout(
         attributes, uint32_t(std::size(attributes)), m_TreePass.vertexShader);
@@ -1232,14 +1554,14 @@ bool ComputeCullRenderPass::_InitShadowPass() {
         "app/shadow_compute.hlsl", "terrain_vs", nullptr, nvrhi::ShaderType::Vertex);
     if (!m_ShadowPass.treeVS || !m_ShadowPass.terrainVS) return false;
 
-    // Tree shadow input layout — vertex only (instance data via SRV indirection)
+    // Tree shadow input layout — position-only (instance data via SRV indirection)
     nvrhi::VertexAttributeDesc treeShadowAttrs[] = {
         nvrhi::VertexAttributeDesc()
             .setName("POSITION")
             .setFormat(nvrhi::Format::RGB32_FLOAT)
-            .setOffset(offsetof(ProcGen::TreeVertex, pos))
+            .setOffset(0)
             .setBufferIndex(0)
-            .setElementStride(sizeof(ProcGen::TreeVertex)),
+            .setElementStride(sizeof(dm::float3)),
     };
     m_ShadowPass.treeInputLayout = GetDevice()->createInputLayout(
         treeShadowAttrs, uint32_t(std::size(treeShadowAttrs)), m_ShadowPass.treeVS);
@@ -1296,8 +1618,8 @@ bool ComputeCullRenderPass::_InitTerrainPass(nvrhi::ICommandList* initCL) {
 
     m_TerrainPass.indexCount = static_cast<uint32_t>(indices.size());
 
-    m_TerrainPass.vertexShader = m_ShaderFactory->CreateShader("app/terrain.hlsl", "terrain_vs", nullptr, nvrhi::ShaderType::Vertex);
-    m_TerrainPass.pixelShader  = m_ShaderFactory->CreateShader("app/terrain.hlsl", "terrain_ps", nullptr, nvrhi::ShaderType::Pixel);
+    m_TerrainPass.vertexShader = m_ShaderFactory->CreateShader("app/terrain_compute.hlsl", "terrain_vs", nullptr, nvrhi::ShaderType::Vertex);
+    m_TerrainPass.pixelShader  = m_ShaderFactory->CreateShader("app/terrain_compute.hlsl", "terrain_ps", nullptr, nvrhi::ShaderType::Pixel);
     if (!m_TerrainPass.vertexShader || !m_TerrainPass.pixelShader) return false;
 
     nvrhi::VertexAttributeDesc terrainAttrs[] = {
@@ -1354,6 +1676,122 @@ bool ComputeCullRenderPass::_InitTerrainPass(nvrhi::ICommandList* initCL) {
     if (!nvrhi::utils::CreateBindingSetAndLayout(GetDevice(), nvrhi::ShaderType::All, 0,
             bsd, m_TerrainPass.bindingLayout, m_TerrainPass.bindingSet))
         return false;
+
+    return true;
+}
+
+bool ComputeCullRenderPass::_InitHiZShaders() {
+    auto device = GetDevice();
+
+    // --- Depth prepass shaders ---
+    m_DepthPrepass.treeVS = m_ShaderFactory->CreateShader(
+        "app/DepthPrepass.hlsl", "tree_vs", nullptr, nvrhi::ShaderType::Vertex);
+    m_DepthPrepass.terrainVS = m_ShaderFactory->CreateShader(
+        "app/DepthPrepass.hlsl", "terrain_vs", nullptr, nvrhi::ShaderType::Vertex);
+    if (!m_DepthPrepass.treeVS || !m_DepthPrepass.terrainVS) return false;
+
+    // Tree input layout — position-only
+    nvrhi::VertexAttributeDesc treePrepassAttrs[] = {
+        nvrhi::VertexAttributeDesc()
+            .setName("POSITION")
+            .setFormat(nvrhi::Format::RGB32_FLOAT)
+            .setOffset(0)
+            .setBufferIndex(0)
+            .setElementStride(sizeof(dm::float3)),
+    };
+    m_DepthPrepass.treeInputLayout = device->createInputLayout(
+        treePrepassAttrs, uint32_t(std::size(treePrepassAttrs)), m_DepthPrepass.treeVS);
+    if (!m_DepthPrepass.treeInputLayout) return false;
+
+    // Terrain input layout — pos+normal+uv (must match VB stride)
+    nvrhi::VertexAttributeDesc terrainPrepassAttrs[] = {
+        nvrhi::VertexAttributeDesc()
+            .setName("POSITION")
+            .setFormat(nvrhi::Format::RGB32_FLOAT)
+            .setOffset(offsetof(Scene::TerrainVertex, pos))
+            .setBufferIndex(0)
+            .setElementStride(sizeof(Scene::TerrainVertex)),
+        nvrhi::VertexAttributeDesc()
+            .setName("NORMAL")
+            .setFormat(nvrhi::Format::RGB32_FLOAT)
+            .setOffset(offsetof(Scene::TerrainVertex, normal))
+            .setBufferIndex(0)
+            .setElementStride(sizeof(Scene::TerrainVertex)),
+        nvrhi::VertexAttributeDesc()
+            .setName("UV")
+            .setFormat(nvrhi::Format::RG32_FLOAT)
+            .setOffset(offsetof(Scene::TerrainVertex, uv))
+            .setBufferIndex(0)
+            .setElementStride(sizeof(Scene::TerrainVertex)),
+    };
+    m_DepthPrepass.terrainInputLayout = device->createInputLayout(
+        terrainPrepassAttrs, uint32_t(std::size(terrainPrepassAttrs)), m_DepthPrepass.terrainVS);
+    if (!m_DepthPrepass.terrainInputLayout) return false;
+
+    // Depth prepass binding layout — same shape as shadow pass
+    nvrhi::BindingLayoutDesc prepassLayoutDesc;
+    prepassLayoutDesc.visibility = nvrhi::ShaderType::All;
+    prepassLayoutDesc.bindings = {
+        nvrhi::BindingLayoutItem::ConstantBuffer(0),
+        nvrhi::BindingLayoutItem::PushConstants(1, sizeof(uint32_t)),  // slot
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0),             // visBuf
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1),             // instBuf
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2),             // slotOffsets
+    };
+    m_DepthPrepass.bindingLayout = device->createBindingLayout(prepassLayoutDesc);
+    if (!m_DepthPrepass.bindingLayout) return false;
+
+    // --- Hi-Z build shaders ---
+    m_HiZ.copyCS = m_ShaderFactory->CreateShader(
+        "app/HiZBuild.hlsl", "HiZCopy", nullptr, nvrhi::ShaderType::Compute);
+    m_HiZ.buildCS = m_ShaderFactory->CreateShader(
+        "app/HiZBuild.hlsl", "HiZDownsample", nullptr, nvrhi::ShaderType::Compute);
+    if (!m_HiZ.copyCS || !m_HiZ.buildCS) return false;
+
+    // Hi-Z build binding layout: push constants + SRV(source) + UAV(dest)
+    nvrhi::BindingLayoutDesc hizBuildLayoutDesc;
+    hizBuildLayoutDesc.visibility = nvrhi::ShaderType::Compute;
+    hizBuildLayoutDesc.bindings = {
+        nvrhi::BindingLayoutItem::PushConstants(0, sizeof(uint32_t) * 2),  // destDimensions
+        nvrhi::BindingLayoutItem::Texture_SRV(0),                          // source
+        nvrhi::BindingLayoutItem::Texture_UAV(0),                          // dest
+    };
+    m_HiZ.buildBindingLayout = device->createBindingLayout(hizBuildLayoutDesc);
+    if (!m_HiZ.buildBindingLayout) return false;
+
+    // Compute pipelines
+    nvrhi::ComputePipelineDesc copyPso;
+    copyPso.CS = m_HiZ.copyCS;
+    copyPso.bindingLayouts = { m_HiZ.buildBindingLayout };
+    m_HiZ.copyPipeline = device->createComputePipeline(copyPso);
+
+    nvrhi::ComputePipelineDesc buildPso;
+    buildPso.CS = m_HiZ.buildCS;
+    buildPso.bindingLayouts = { m_HiZ.buildBindingLayout };
+    m_HiZ.buildPipeline = device->createComputePipeline(buildPso);
+
+    if (!m_HiZ.copyPipeline || !m_HiZ.buildPipeline) return false;
+
+    // Point/clamp sampler for Hi-Z reads in the cull shader
+    m_HiZ.pointSampler = device->createSampler(
+        nvrhi::SamplerDesc()
+            .setAllFilters(false)
+            .setAllAddressModes(nvrhi::SamplerAddressMode::Clamp)
+    );
+    if (!m_HiZ.pointSampler) return false;
+
+    // Create 1x1 placeholder Hi-Z texture so binding sets can reference it before first frame
+    m_HiZ.hizTexture = device->createTexture(
+        nvrhi::TextureDesc()
+            .setWidth(1).setHeight(1)
+            .setMipLevels(1)
+            .setFormat(nvrhi::Format::R32_FLOAT)
+            .setIsUAV(true)
+            .setInitialState(nvrhi::ResourceStates::ShaderResource)
+            .setKeepInitialState(true)
+            .setDebugName("HiZTexture_Placeholder")
+    );
+    m_HiZ.numMips = 1;
 
     return true;
 }

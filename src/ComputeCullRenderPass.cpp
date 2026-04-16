@@ -179,12 +179,18 @@ void ComputeCullRenderPass::_BuildSlotLayout() {
 
     m_VisBufferSize = std::max(1u, m_VisBufferSize);
 
-    // Shadow slot layout — one slot per asset (no LOD axis)
-    m_ShadowSlotOffsets.resize(numAssets);
+    // Shadow slot layout — numAssets × NUM_CASCADES slots, interleaved as
+    // slot = ai * NUM_CASCADES + c. Each slot reserves livePerAsset[ai] vis entries
+    // (worst case: every instance lives in that cascade).
+    const uint32_t numShadowSlots = numAssets * Render::c_NumCascades;
+    m_ShadowSlotOffsets.resize(numShadowSlots);
     m_ShadowVisBufferSize = 0;
     for (uint32_t ai = 0; ai < numAssets; ai++) {
-        m_ShadowSlotOffsets[ai] = m_ShadowVisBufferSize;
-        m_ShadowVisBufferSize  += livePerAsset[ai];
+        for (uint32_t c = 0; c < Render::c_NumCascades; c++) {
+            uint32_t slot = ai * Render::c_NumCascades + c;
+            m_ShadowSlotOffsets[slot] = m_ShadowVisBufferSize;
+            m_ShadowVisBufferSize    += livePerAsset[ai];
+        }
     }
     m_ShadowVisBufferSize = std::max(1u, m_ShadowVisBufferSize);
 
@@ -202,16 +208,20 @@ void ComputeCullRenderPass::_BuildSlotLayout() {
         }
     }
 
-    // Shadow indirect args — one per asset, using lowest LOD
+    // Shadow indirect args — one per (asset × cascade), using lowest LOD.
+    // Slot indexing matches m_ShadowSlotOffsets: slot = ai * NUM_CASCADES + c.
     const uint32_t lowestLOD = numLods > 0 ? numLods - 1 : 0;
-    m_ShadowIndirectArgsStaging.resize(std::max(1u, numAssets));
+    m_ShadowIndirectArgsStaging.resize(std::max(1u, numShadowSlots));
     for (uint32_t ai = 0; ai < numAssets; ai++) {
-        auto& args = m_ShadowIndirectArgsStaging[ai];
-        args.indexCount            = m_GPUAssets[ai].lods[lowestLOD].indexCount;
-        args.instanceCount         = 0;
-        args.startIndexLocation    = 0;
-        args.baseVertexLocation    = 0;
-        args.startInstanceLocation = 0;
+        for (uint32_t c = 0; c < Render::c_NumCascades; c++) {
+            uint32_t slot = ai * Render::c_NumCascades + c;
+            auto& args = m_ShadowIndirectArgsStaging[slot];
+            args.indexCount            = m_GPUAssets[ai].lods[lowestLOD].indexCount;
+            args.instanceCount         = 0;
+            args.startIndexLocation    = 0;
+            args.baseVertexLocation    = 0;
+            args.startInstanceLocation = 0;
+        }
     }
 }
 
@@ -303,19 +313,20 @@ void ComputeCullRenderPass::_UploadCullBuffers(nvrhi::ICommandList* commandList)
             .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess)
     );
 
-    const uint32_t numAssets = static_cast<uint32_t>(m_GPUAssets.size());
+    const uint32_t numAssets      = static_cast<uint32_t>(m_GPUAssets.size());
+    const uint32_t numShadowSlots = numAssets * Render::c_NumCascades;
 
-    // ShadowCountBuffer — UAV uint32[numAssets], one counter per asset
+    // ShadowCountBuffer — UAV uint32[numShadowSlots], one counter per (asset × cascade)
     m_CullPass.shadowCountBuffer = device->createBuffer(
         nvrhi::BufferDesc()
-            .setByteSize(std::max(1u, numAssets) * sizeof(uint32_t))
+            .setByteSize(std::max(1u, numShadowSlots) * sizeof(uint32_t))
             .setStructStride(sizeof(uint32_t))
             .setDebugName("ShadowCountBuffer")
             .setCanHaveUAVs(true)
             .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess)
     );
 
-    // ShadowVisBuffer — UAV uint32[shadowVisBufferSize], per-asset windows
+    // ShadowVisBuffer — UAV uint32[shadowVisBufferSize], per-(asset × cascade) windows
     m_CullPass.shadowVisBuffer = device->createBuffer(
         nvrhi::BufferDesc()
             .setByteSize(m_ShadowVisBufferSize * sizeof(uint32_t))
@@ -325,19 +336,19 @@ void ComputeCullRenderPass::_UploadCullBuffers(nvrhi::ICommandList* commandList)
             .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess)
     );
 
-    // ShadowSlotOffsetBuffer — SRV uint32[numAssets], prefix sums into ShadowVisBuffer
+    // ShadowSlotOffsetBuffer — SRV uint32[numShadowSlots], prefix sums into ShadowVisBuffer
     m_CullPass.shadowSlotOffsetBuffer = device->createBuffer(
         nvrhi::BufferDesc()
-            .setByteSize(std::max(1u, numAssets) * sizeof(uint32_t))
+            .setByteSize(std::max(1u, numShadowSlots) * sizeof(uint32_t))
             .setStructStride(sizeof(uint32_t))
             .setDebugName("ShadowSlotOffsetBuffer")
             .setCanHaveUAVs(false)
             .setInitialState(nvrhi::ResourceStates::CopyDest)
     );
     commandList->beginTrackingBufferState(m_CullPass.shadowSlotOffsetBuffer, nvrhi::ResourceStates::CopyDest);
-    if (numAssets > 0)
+    if (numShadowSlots > 0)
         commandList->writeBuffer(m_CullPass.shadowSlotOffsetBuffer,
-            m_ShadowSlotOffsets.data(), numAssets * sizeof(uint32_t));
+            m_ShadowSlotOffsets.data(), numShadowSlots * sizeof(uint32_t));
     commandList->setPermanentBufferState(m_CullPass.shadowSlotOffsetBuffer, nvrhi::ResourceStates::ShaderResource);
 
     // IndirectArgsBuffer — UAV + indirect draw args, DrawIndexedIndirectArguments[numSlots]
@@ -353,8 +364,8 @@ void ComputeCullRenderPass::_UploadCullBuffers(nvrhi::ICommandList* commandList)
             .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess)
     );
 
-    // ShadowIndirectArgsBuffer — UAV + indirect draw args, DrawIndexedIndirectArguments[numAssets]
-    uint32_t shadowIndirectArgsBufSize = std::max(1u, numAssets) * sizeof(nvrhi::DrawIndexedIndirectArguments);
+    // ShadowIndirectArgsBuffer — UAV + indirect draw args, DrawIndexedIndirectArguments[numShadowSlots]
+    uint32_t shadowIndirectArgsBufSize = std::max(1u, numShadowSlots) * sizeof(nvrhi::DrawIndexedIndirectArguments);
     m_CullPass.shadowIndirectArgsBuffer = device->createBuffer(
         nvrhi::BufferDesc()
             .setByteSize(shadowIndirectArgsBufSize)
@@ -378,7 +389,7 @@ void ComputeCullRenderPass::_UploadCullBuffers(nvrhi::ICommandList* commandList)
 
     // Readback ring buffers — combined [countBuffer | shadowCountBuffer] per slot
     m_ReadbackCountEntries  = std::max(1u, m_NumSlots);
-    m_ReadbackShadowEntries = std::max(1u, numAssets);
+    m_ReadbackShadowEntries = std::max(1u, numShadowSlots);
     uint64_t readbackSize = (m_ReadbackCountEntries + m_ReadbackShadowEntries) * sizeof(uint32_t);
 
     for (uint32_t i = 0; i < k_QueuedFrames; i++) {
@@ -455,7 +466,7 @@ void ComputeCullRenderPass::_RebuildCullBindings() {
     shadowBSD.bindings = {
         nvrhi::BindingSetItem::ConstantBuffer(0, m_Shared.constantBuffer,
             nvrhi::BufferRange(0, Render::c_CullConstantBufferSize)),
-        nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t)),
+        nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t) * 2),
 
         nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_CullPass.shadowVisBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_CullPass.persistentInstBuffer),
@@ -862,6 +873,9 @@ void ComputeCullRenderPass::onRegionsDirty(const std::vector<size_t>& /*dirtyReg
 
 void ComputeCullRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_UI.shadowMapTexture = m_ShadowPass.depthTexture.Get();
+    m_UI.shadowCascadeTextures.resize(Render::c_NumCascades);
+    for (uint32_t c = 0; c < Render::c_NumCascades; c++)
+        m_UI.shadowCascadeTextures[c] = m_ShadowPass.debugTextures[c].Get();
     // Populate Hi-Z debug pointers for the UI (pointers are stable between resizes)
     m_UI.hizMipTextures.resize(m_HiZ.debugMipTextures.size());
     for (size_t i = 0; i < m_HiZ.debugMipTextures.size(); i++)
@@ -915,31 +929,44 @@ void ComputeCullRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     if (terrain)
         sceneBbox |= terrain->getBbox();
 
-    m_ViewHandler.updateShadowVolume(sceneBbox, m_Registry.getSunDirection());
+    // Compute max shadow distance from scene bbox (same logic as P0)
+    const dm::float3& camPos = m_ViewHandler.camera.GetPosition();
+    const dm::float3& camDir = m_ViewHandler.camera.GetDir();
+    float maxShadowDist = 0.f;
+    for (int i = 0; i < dm::box3::numCorners; i++) {
+        dm::float3 corner = sceneBbox.getCorner(i);
+        dm::float3 camToCorner = corner - camPos;
+        float cornerDir = dm::dot(camToCorner, camDir);
+        if (cornerDir > 0.0f) maxShadowDist = dm::max(maxShadowDist, cornerDir);
+    }
+    maxShadowDist = dm::max(maxShadowDist, 1.f);
 
-    const dm::box3& shadowCasterBboxLS = m_ViewHandler.shadowCasterBboxLS;
-    float maxXY = dm::max(shadowCasterBboxLS.diagonal().x, shadowCasterBboxLS.diagonal().y);
-    dm::float3 grow = 0.5f * (dm::float3(maxXY, maxXY, shadowCasterBboxLS.diagonal().z)
-                               - shadowCasterBboxLS.diagonal());
-    dm::box3 orthoBox = shadowCasterBboxLS.grow(grow);
-
-    dm::float4x4 lightProj = dm::orthoProjD3DStyle(
-        orthoBox.m_mins.x, orthoBox.m_maxs.x,
-        orthoBox.m_mins.y, orthoBox.m_maxs.y,
-        orthoBox.m_mins.z, orthoBox.m_maxs.z);
-
-    dm::float4x4 lightViewProj = dm::affineToHomogeneous(m_ViewHandler.worldToLight) * lightProj;
+    float aspectRatio = float(fbinfo.width) / float(fbinfo.height);
+    m_ViewHandler.computeCascades(sceneBbox, m_Registry.getSunDirection(),
+        0.1f, maxShadowDist, aspectRatio, dm::radians(60.f), k_ShadowRes);
 
     // --- Fill CullConstantBufferEntry ---
     Render::CullConstantBufferEntry constants{};
-    constants.viewProj      = m_ViewHandler.view.GetViewProjectionMatrix();
-    constants.lightViewProj = lightViewProj;
+    constants.viewProj    = m_ViewHandler.view.GetViewProjectionMatrix();
+    constants.viewMatrix  = dm::affineToHomogeneous(m_ViewHandler.view.GetViewMatrix());
+    for (uint32_t c = 0; c < Render::c_NumCascades; c++)
+        constants.lightViewProj[c] = m_ViewHandler.cascades[c].lightViewProj;
     constants.sunLightDir   = m_Registry.getSunDirection();
+    constants.cascadeSplits = m_ViewHandler.cascadeSplitDistances;
 
-    constants.viewFrustum = m_ViewHandler.view.GetViewFrustum();
-    constants.worldToLight     = dm::affineToHomogeneous(m_ViewHandler.worldToLight);
-    constants.shadowCasterMinLS = m_ViewHandler.shadowCasterBboxLS.m_mins;
-    constants.shadowCasterMaxLS = m_ViewHandler.shadowCasterBboxLS.m_maxs;
+    constants.viewFrustum  = m_ViewHandler.view.GetViewFrustum();
+    constants.worldToLight = dm::affineToHomogeneous(m_ViewHandler.worldToLight);
+    for (uint32_t c = 0; c < Render::c_NumCascades; c++) {
+        const dm::box3& cBbox = m_ViewHandler.cascades[c].shadowCasterBboxLS;
+        if (cBbox.isempty()) {
+            // Empty cascade — CullCS detects this via (min > max)
+            constants.shadowCasterMinLS[c] = dm::float4( 1e30f,  1e30f,  1e30f, 0.f);
+            constants.shadowCasterMaxLS[c] = dm::float4(-1e30f, -1e30f, -1e30f, 0.f);
+        } else {
+            constants.shadowCasterMinLS[c] = dm::float4(cBbox.m_mins, 0.f);
+            constants.shadowCasterMaxLS[c] = dm::float4(cBbox.m_maxs, 0.f);
+        }
+    }
 
     constants.numRegions = static_cast<uint32_t>(m_Registry.getRegions().size());
 
@@ -952,8 +979,7 @@ void ComputeCullRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         constants.lodDistances[i].x = lodDistances[i];
 
     // Hi-Z fields — bypass when camera looks steeply downward (bird's-eye view)
-    dm::float3 camDir = dm::normalize(m_ViewHandler.camera.GetDir());
-    float downwardness = -camDir.y;  // 0 = horizontal, 1 = straight down
+    float downwardness = -m_ViewHandler.camera.GetDir().y;  // 0 = horizontal, 1 = straight down
     bool hizActive = downwardness < m_UI.hizBypassAngle;
     m_UI.hizActiveThisFrame = hizActive;
 
@@ -1186,7 +1212,7 @@ void ComputeCullRenderPass::_RenderShadowPass() {
         pso.renderState.rasterState.depthBias            = 2;
         pso.renderState.rasterState.slopeScaledDepthBias = 2.0f;
         m_ShadowPass.treePipeline = GetDevice()->createGraphicsPipeline(
-            pso, m_ShadowPass.framebuffer->getFramebufferInfo());
+            pso, m_ShadowPass.framebuffers[0]->getFramebufferInfo());
     }
     if (!m_ShadowPass.terrainPipeline && m_TerrainPass.indexCount > 0) {
         nvrhi::GraphicsPipelineDesc pso;
@@ -1199,67 +1225,80 @@ void ComputeCullRenderPass::_RenderShadowPass() {
         pso.renderState.rasterState.depthBias            = 2;
         pso.renderState.rasterState.slopeScaledDepthBias = 2.0f;
         m_ShadowPass.terrainPipeline = GetDevice()->createGraphicsPipeline(
-            pso, m_ShadowPass.framebuffer->getFramebufferInfo());
+            pso, m_ShadowPass.framebuffers[0]->getFramebufferInfo());
     }
-
-    nvrhi::utils::ClearDepthStencilAttachment(m_CommandList,
-        m_ShadowPass.framebuffer, 1.0f, 0);
 
     nvrhi::Viewport shadowVP(static_cast<float>(k_ShadowRes), static_cast<float>(k_ShadowRes));
     nvrhi::ViewportState shadowVPState;
     shadowVPState.addViewportAndScissorRect(shadowVP);
 
-    // One draw call per asset using lowest LOD. The VS reads from the asset's
-    // per-slot window in shadowVisBuf via shadowSlotOffsets[ai], drawing only
-    // shadowCount[ai] instances — no cross-asset bleed.
     const uint32_t numLods   = static_cast<uint32_t>(m_Registry.getLodSegments().size());
     const uint32_t lowestLOD = numLods > 0 ? numLods - 1 : 0;
+    const auto* terrainPtr = m_Registry.getTerrain();
+    const auto& cascades   = m_ViewHandler.cascades;
 
-    nvrhi::GraphicsState shadowState;
-    shadowState.pipeline    = m_ShadowPass.treePipeline;
-    shadowState.framebuffer = m_ShadowPass.framebuffer;
-    shadowState.viewport    = shadowVPState;
-    shadowState.bindings    = { m_ShadowPass.bindingSet };
-    shadowState.indirectParams = m_CullPass.shadowIndirectArgsBuffer;
+    for (uint32_t cascade = 0; cascade < Render::c_NumCascades; cascade++) {
+        const auto& cBbox = cascades[cascade].shadowCasterBboxLS;
+        if (cBbox.isempty()) continue;
 
-    for (uint32_t ai = 0; ai < m_GPUAssets.size(); ai++) {
-        uint32_t maxCount = m_MaxSlotCounts[ai * numLods];  // livePerAsset[ai]
-        if (maxCount == 0) continue;
+        nvrhi::utils::ClearDepthStencilAttachment(m_CommandList,
+            m_ShadowPass.framebuffers[cascade], 1.0f, 0);
 
-        const auto& lod = m_GPUAssets[ai].lods[lowestLOD];
+        // Trees: one indirect draw per asset, reading its per-(asset × cascade)
+        // window in shadowVisBuf via shadowSlotOffsets[ai * NUM_CASCADES + cascade].
+        nvrhi::GraphicsState shadowState;
+        shadowState.pipeline    = m_ShadowPass.treePipeline;
+        shadowState.framebuffer = m_ShadowPass.framebuffers[cascade];
+        shadowState.viewport    = shadowVPState;
+        shadowState.bindings    = { m_ShadowPass.bindingSet };
+        shadowState.indirectParams = m_CullPass.shadowIndirectArgsBuffer;
 
-        shadowState.vertexBuffers = { { lod.vbs.position, 0, 0 } };
-        shadowState.indexBuffer   = { lod.indexBuffer, nvrhi::Format::R32_UINT, 0 };
-        m_CommandList->setGraphicsState(shadowState);
+        for (uint32_t ai = 0; ai < m_GPUAssets.size(); ai++) {
+            uint32_t maxCount = m_MaxSlotCounts[ai * numLods];  // livePerAsset[ai]
+            if (maxCount == 0) continue;
 
-        m_CommandList->setPushConstants(&ai, sizeof(ai));
+            const auto& lod = m_GPUAssets[ai].lods[lowestLOD];
 
-        m_CommandList->drawIndexedIndirect(
-            ai * sizeof(nvrhi::DrawIndexedIndirectArguments));
+            shadowState.vertexBuffers = { { lod.vbs.position, 0, 0 } };
+            shadowState.indexBuffer   = { lod.indexBuffer, nvrhi::Format::R32_UINT, 0 };
+            m_CommandList->setGraphicsState(shadowState);
+
+            uint32_t pushConstants[2] = { ai, cascade };
+            m_CommandList->setPushConstants(pushConstants, sizeof(pushConstants));
+
+            uint32_t slot = ai * Render::c_NumCascades + cascade;
+            m_CommandList->drawIndexedIndirect(
+                slot * sizeof(nvrhi::DrawIndexedIndirectArguments));
+        }
+
+        // Terrain shadow — only if terrain bbox intersects this cascade's LS bbox.
+        if (m_TerrainPass.indexCount > 0 && terrainPtr
+            && (terrainPtr->getBbox() * m_ViewHandler.worldToLight).intersects(cBbox)) {
+            nvrhi::GraphicsState terrShadow;
+            terrShadow.pipeline    = m_ShadowPass.terrainPipeline;
+            terrShadow.framebuffer = m_ShadowPass.framebuffers[cascade];
+            terrShadow.viewport    = shadowVPState;
+            terrShadow.bindings    = { m_ShadowPass.bindingSet };
+            terrShadow.vertexBuffers = { { m_TerrainPass.vertexBuffer, 0, 0 } };
+            terrShadow.indexBuffer   = { m_TerrainPass.indexBuffer, nvrhi::Format::R32_UINT, 0 };
+            m_CommandList->setGraphicsState(terrShadow);
+
+            // Terrain VS only reads cascadeIdx; assetIndex unused but required for root sig.
+            uint32_t pushConstants[2] = { 0u, cascade };
+            m_CommandList->setPushConstants(pushConstants, sizeof(pushConstants));
+
+            m_CommandList->drawIndexed(
+                nvrhi::DrawArguments().setVertexCount(m_TerrainPass.indexCount));
+        }
     }
 
-    // Terrain shadow (unchanged — no instancing)
-    const auto* terrainPtr = m_Registry.getTerrain();
-    if (m_TerrainPass.indexCount > 0 && terrainPtr && 
-        (terrainPtr->getBbox() * m_ViewHandler.worldToLight)
-            .intersects(m_ViewHandler.shadowCasterBboxLS)) {
-        nvrhi::GraphicsState terrShadow;
-        terrShadow.pipeline    = m_ShadowPass.terrainPipeline;
-        terrShadow.framebuffer = m_ShadowPass.framebuffer;
-        terrShadow.viewport    = shadowVPState;
-        terrShadow.bindings    = { m_ShadowPass.bindingSet };
-        terrShadow.vertexBuffers = { { m_TerrainPass.vertexBuffer, 0, 0 } };
-        terrShadow.indexBuffer   = { m_TerrainPass.indexBuffer, nvrhi::Format::R32_UINT, 0 };
-        m_CommandList->setGraphicsState(terrShadow);
-        
-        // terrain does not se push constant but needs it for root signature
-        uint32_t c = 0;
-        m_CommandList->setPushConstants(&c, sizeof(c));
-
-        m_CommandList->drawIndexed(
-            nvrhi::DrawArguments()
-                .setVertexCount(m_TerrainPass.indexCount)
-        );
+    // Copy per-cascade slices into debug textures for UI display
+    if (m_UI.showShadowMap) {
+        for (uint32_t c = 0; c < Render::c_NumCascades; c++) {
+            m_CommandList->copyTexture(
+                m_ShadowPass.debugTextures[c], nvrhi::TextureSlice(),
+                m_ShadowPass.depthTexture, nvrhi::TextureSlice().setArraySlice(c));
+        }
     }
 }
 
@@ -1534,19 +1573,35 @@ bool ComputeCullRenderPass::_InitShadowPass() {
     m_ShadowPass.depthTexture = GetDevice()->createTexture(
         nvrhi::TextureDesc()
             .setWidth(k_ShadowRes).setHeight(k_ShadowRes)
+            .setArraySize(Render::c_NumCascades)
+            .setDimension(nvrhi::TextureDimension::Texture2DArray)
             .setFormat(nvrhi::Format::D32)
             .setIsRenderTarget(true)
             .setUseClearValue(true)
             .setClearValue(nvrhi::Color(1.f))
             .setInitialState(nvrhi::ResourceStates::DepthWrite)
             .setKeepInitialState(true)
-            .setDebugName("ShadowMap")
+            .setDebugName("ShadowMapArray")
     );
     if (!m_ShadowPass.depthTexture) return false;
 
-    m_ShadowPass.framebuffer = GetDevice()->createFramebuffer(
-        nvrhi::FramebufferDesc().setDepthAttachment(m_ShadowPass.depthTexture));
-    if (!m_ShadowPass.framebuffer) return false;
+    for (uint32_t c = 0; c < Render::c_NumCascades; c++) {
+        m_ShadowPass.framebuffers[c] = GetDevice()->createFramebuffer(
+            nvrhi::FramebufferDesc().setDepthAttachment(
+                nvrhi::FramebufferAttachment()
+                    .setTexture(m_ShadowPass.depthTexture)
+                    .setArraySlice(c)));
+        if (!m_ShadowPass.framebuffers[c]) return false;
+
+        m_ShadowPass.debugTextures[c] = GetDevice()->createTexture(
+            nvrhi::TextureDesc()
+                .setWidth(k_ShadowRes).setHeight(k_ShadowRes)
+                .setFormat(nvrhi::Format::R32_FLOAT)
+                .setInitialState(nvrhi::ResourceStates::ShaderResource)
+                .setKeepInitialState(true)
+                .setDebugName("ShadowCascadeDebug_" + std::to_string(c))
+        );
+    }
 
     m_ShadowPass.treeVS = m_ShaderFactory->CreateShader(
         "app/shadow_compute.hlsl", "tree_vs", nullptr, nvrhi::ShaderType::Vertex);
@@ -1596,10 +1651,10 @@ bool ComputeCullRenderPass::_InitShadowPass() {
     shadowLayoutDesc.visibility = nvrhi::ShaderType::All;
     shadowLayoutDesc.bindings = {
         nvrhi::BindingLayoutItem::ConstantBuffer(0),
-        nvrhi::BindingLayoutItem::PushConstants(1, sizeof(uint32_t)),  // assetIndex
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0),             // shadowVisBuf
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1),             // instanceBuf
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2),             // shadowSlotOffsets
+        nvrhi::BindingLayoutItem::PushConstants(1, sizeof(uint32_t) * 2),  // {assetIndex, cascadeIdx}
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0),                 // shadowVisBuf
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1),                 // instanceBuf
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2),                 // shadowSlotOffsets
     };
     m_ShadowPass.bindingLayout = GetDevice()->createBindingLayout(shadowLayoutDesc);
     if (!m_ShadowPass.bindingLayout) return false;

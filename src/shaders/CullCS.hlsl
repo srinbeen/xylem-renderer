@@ -3,29 +3,31 @@
 #include "../include/macros.h"
 #include "types.hlsli"
 
+static const uint NUM_CASCADES = 4;
+
 cbuffer CB : register(b0)
 {
-    // P0 fields (also read by VS/PS)
+    // Prefix — matches Render::ConstantBufferEntry / CullConstantBufferEntry
     float4x4 viewProj;
-    float4x4 lightViewProj;
+    float4x4 viewMatrix;
+    float4x4 lightViewProj[NUM_CASCADES];
     float3   sunLightDir;
     float    _pad0;
-    float3x4 _pad1;
+    float4   cascadeSplits;
 
     // Cull fields
-    frustum   viewFrustum;
-    float4x4  worldToLight;
-    float3    shadowCasterMinLS;
-    float     _pad2;
-    float3    shadowCasterMaxLS;
-    uint     numRegions;
+    frustum  viewFrustum;
+    float4x4 worldToLight;
+    float4   shadowCasterMinLS[NUM_CASCADES];
+    float4   shadowCasterMaxLS[NUM_CASCADES];
+
     float3   cameraPos;
+    uint     numRegions;
     uint     totalCapacity;
-    float4   lodDistances[3];
     uint     numLods;
-    float    _pad3a;
-    float    _pad3b;
-    float    _pad3c;
+    float    _pad1a;
+    float    _pad1b;
+    float4   lodDistances[3];
 
     // Hi-Z fields
     float2   hizDimensions;
@@ -38,7 +40,7 @@ struct CullInstanceData
     box3   bbox;
     uint   baseSlot;   // treeId * numLODs
     uint   regionId;   // index into regionVisible
-    
+
     uint   active;     // 1 = live, 0 = dead
 };
 
@@ -119,9 +121,7 @@ void CullShadow(uint3 dtid : SV_DispatchThreadID)
     CullInstanceData inst = instanceData[idx];
     if (!inst.active) return;
 
-    if (any(shadowCasterMinLS > shadowCasterMaxLS)) return;
-
-    // Transform world-space AABB corners into light space, compute light-space AABB
+    // Compute instance world-space AABB in light space
     float3 cornersWS[8] = {
         float3(inst.bbox.min.x, inst.bbox.min.y, inst.bbox.min.z),
         float3(inst.bbox.max.x, inst.bbox.min.y, inst.bbox.min.z),
@@ -143,19 +143,30 @@ void CullShadow(uint3 dtid : SV_DispatchThreadID)
         bboxMaxLS = max(bboxMaxLS, ls);
     }
 
-    // AABB-vs-AABB intersection test in light space
-    if (any(bboxMinLS > shadowCasterMaxLS) || any(bboxMaxLS < shadowCasterMinLS))
-        return;
-
     uint ai = inst.baseSlot / numLods;
 
-    uint writeIdx;
-    InterlockedAdd(shadowSlotCountBuf[ai], 1, writeIdx);
-    shadowVisBuf[shadowSlotOffsets[ai] + writeIdx] = idx;
+    [unroll]
+    for (uint c = 0; c < NUM_CASCADES; c++)
+    {
+        float3 cMin = shadowCasterMinLS[c].xyz;
+        float3 cMax = shadowCasterMaxLS[c].xyz;
 
-    // Atomically increment instanceCount in shadow indirect draw args for this asset.
-    uint dummy;
-    shadowIndirectArgs.InterlockedAdd(ai * 20 + 4, 1, dummy);
+        // Empty cascade AABB (mins > maxs) → skip
+        if (any(cMin > cMax)) continue;
+
+        // AABB-vs-AABB intersection test in light space
+        if (any(bboxMinLS > cMax) || any(bboxMaxLS < cMin)) continue;
+
+        uint slot = ai * NUM_CASCADES + c;
+
+        uint writeIdx;
+        InterlockedAdd(shadowSlotCountBuf[slot], 1, writeIdx);
+        shadowVisBuf[shadowSlotOffsets[slot] + writeIdx] = idx;
+
+        // Atomically increment instanceCount in shadow indirect draw args for this slot.
+        uint dummy;
+        shadowIndirectArgs.InterlockedAdd(slot * 20 + 4, 1, dummy);
+    }
 }
 
 bool DoesAABBIntersectFrustum(box3 bbox, frustum f)

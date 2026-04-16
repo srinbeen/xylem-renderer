@@ -85,31 +85,32 @@ struct CullRegionData {
 
 // Extended constant buffer for compute cull pass.
 struct CullConstantBufferEntry {
+    // Prefix — layout matches ConstantBufferEntry (read by shared VS/PS)
     dm::float4x4 viewProj;
-    dm::float4x4 lightViewProj;
+    dm::float4x4 viewMatrix;
+    dm::float4x4 lightViewProj[c_NumCascades];
     dm::float3   sunLightDir;
     float        _pad0;
-    dm::float3x4 _pad1;
+    dm::float4   cascadeSplits;
 
     // Cull fields (read by CullCS)
     dm::frustum  viewFrustum;
     dm::float4x4 worldToLight;
-    dm::float3   shadowCasterMinLS;
-    float        _pad2;
-    dm::float3   shadowCasterMaxLS;
-    uint32_t     numRegions;
+    dm::float4   shadowCasterMinLS[c_NumCascades];  // xyz used; w is padding
+    dm::float4   shadowCasterMaxLS[c_NumCascades];
+
     dm::float3   cameraPos;
+    uint32_t     numRegions;
     uint32_t     totalCapacity;
-    dm::float4   lodDistances[3];
     uint32_t     numLods;
-    float        _pad3a;
-    float        _pad3b;
-    float        _pad3c;
+    float        _pad1a;
+    float        _pad1b;
+    dm::float4   lodDistances[3];
 
     // Hi-Z fields (read by CullCS for occlusion test)
     dm::float2   hizDimensions;    // mip 0 width, height
     float        maxHiZMip;        // numMips - 1
-    uint32_t     hizEnabled;      // 0 = skip Hi-Z test, 1 = enabled
+    uint32_t     hizEnabled;       // 0 = skip Hi-Z test, 1 = enabled
 };
 
 static constexpr size_t c_CullConstantBufferSize =

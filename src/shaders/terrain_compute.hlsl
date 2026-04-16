@@ -2,13 +2,16 @@
 
 #pragma pack_matrix(row_major)
 
+static const uint NUM_CASCADES = 4;
+
 cbuffer CB : register(b0)
 {
     float4x4 viewProj;
-    float4x4 lightViewProj;
+    float4x4 viewMatrix;
+    float4x4 lightViewProj[NUM_CASCADES];
     float3   sunLightDir;
     float    _pad0;
-    float3x4 _pad1;
+    float4   cascadeSplits;
 };
 
 void terrain_vs(
@@ -17,28 +20,39 @@ void terrain_vs(
     in float2  i_uv     : UV,
 
     out float4 o_pos      : SV_Position,
-    out float4 o_pos_LS   : POSITION_LS,
+    out float3 o_worldPos : WORLD_POS,
+    out float  o_viewZ    : VIEW_Z,
     out float3 o_normal   : NORMAL,
     out float2 o_uv       : UV,
     out float  o_height   : HEIGHT
 )
 {
     o_pos      = mul(float4(i_pos, 1), viewProj);
-    o_pos_LS   = mul(float4(i_pos, 1), lightViewProj);
+    o_worldPos = i_pos;
+    o_viewZ    = mul(float4(i_pos, 1), viewMatrix).z;
     o_normal   = i_normal;
     o_uv       = i_uv;
     o_height   = i_pos.y;
 }
 
-Texture2D              t_ShadowMap     : register(t0);
+Texture2DArray         t_ShadowMap     : register(t0);
 SamplerComparisonState s_ShadowSampler : register(s0);
 
+float SampleShadowCascade(float3 worldPos, uint cascadeIdx)
+{
+    float4 posLS = mul(float4(worldPos, 1), lightViewProj[cascadeIdx]);
+    float2 shadowUV = posLS.xy * float2(0.5, -0.5) + 0.5;
+    return t_ShadowMap.SampleCmpLevelZero(s_ShadowSampler,
+        float3(shadowUV, float(cascadeIdx)), posLS.z);
+}
+
 void terrain_ps(
-    in float4 i_pos     : SV_Position,
-    in float4 i_pos_LS  : POSITION_LS,
-    in float3 i_normal  : NORMAL,
-    in float2 i_uv      : UV,
-    in float  i_height  : HEIGHT,
+    in float4 i_pos      : SV_Position,
+    in float3 i_worldPos : WORLD_POS,
+    in float  i_viewZ    : VIEW_Z,
+    in float3 i_normal   : NORMAL,
+    in float2 i_uv       : UV,
+    in float  i_height   : HEIGHT,
 
     out float4 o_color : SV_Target0
 )
@@ -48,8 +62,13 @@ void terrain_ps(
     float3 lightDir = -normalize(sunLightDir);
     float  diffuse  = max(dot(N, lightDir), 0);
 
-    float2 shadowUV    = i_pos_LS.xy * float2(0.5, -0.5) + 0.5;
-    float  notInShadow = t_ShadowMap.SampleCmpLevelZero(s_ShadowSampler, shadowUV, i_pos_LS.z);
+    // Cascade selection by view-space depth
+    uint cascadeIdx = 3;
+    if      (i_viewZ < cascadeSplits.x) cascadeIdx = 0;
+    else if (i_viewZ < cascadeSplits.y) cascadeIdx = 1;
+    else if (i_viewZ < cascadeSplits.z) cascadeIdx = 2;
+
+    float notInShadow = SampleShadowCascade(i_worldPos, cascadeIdx);
 
     float ambient  = 0.15;
     float lighting = ambient + (1.0 - ambient) * diffuse * notInShadow;

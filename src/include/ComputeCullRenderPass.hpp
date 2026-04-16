@@ -10,6 +10,7 @@
 #include <nvrhi/nvrhi.h>
 #include <nvrhi/d3d12.h>
 
+#include <array>
 #include <unordered_map>
 
 #include "SceneRegistry.hpp"
@@ -103,8 +104,9 @@ private:
     };
 
     struct ShadowPassResources {
-        nvrhi::TextureHandle                   depthTexture;
-        nvrhi::FramebufferHandle               framebuffer;
+        nvrhi::TextureHandle                                              depthTexture;      // Tex2DArray, 4 cascades
+        std::array<nvrhi::FramebufferHandle, Render::c_NumCascades>       framebuffers;      // one per cascade slice
+        std::array<nvrhi::TextureHandle, Render::c_NumCascades>           debugTextures;     // single-slice, for UI display
         nvrhi::ShaderHandle                    treeVS;
         nvrhi::ShaderHandle                    terrainVS;
         nvrhi::InputLayoutHandle               treeInputLayout;

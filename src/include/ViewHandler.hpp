@@ -26,7 +26,6 @@ struct ViewHandler {
     std::array<CascadeData, Render::c_NumCascades> cascades;
     dm::float4 cascadeSplitDistances;
 
-    void updateShadowVolume(const dm::box3& sceneBbox, dm::float3 sunDirection);
     void computeCascades(const dm::box3& sceneBbox, dm::float3 sunDirection,
                          float nearPlane, float farPlane, float aspectRatio, float fovY,
                          uint32_t shadowRes);

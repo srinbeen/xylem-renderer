@@ -1,19 +1,22 @@
 #pragma pack_matrix(row_major)
 
+static const uint NUM_CASCADES = 4;
+
 cbuffer CB : register(b0)
 {
     float4x4 viewProj;
-    float4x4 lightViewProj;
-    float3   sunLightDir;
-    float    _pad0;
-    float3x4 _pad1;
+    float4x4 viewMatrix;
+    float4x4 lightViewProj[NUM_CASCADES];
 };
 
-struct RootConstant { uint assetIndex; };
-ConstantBuffer<RootConstant> rootConstant : register(b1);
+struct RootConstant
+{
+    uint assetIndex;
+    uint cascadeIdx;
+};
+ConstantBuffer<RootConstant> rc : register(b1);
 
 // Layout matches C++ Render::InstanceBufferEntry (104 bytes, packed).
-// See ComputeCullRenderPass.hlsl for the full explanation.
 struct InstanceRenderData
 {
     float4x4 model;     // offset 0,  size 64
@@ -32,11 +35,11 @@ void tree_vs(
     out float4 o_pos       : SV_Position
 )
 {
-    uint ai = rootConstant.assetIndex;
+    uint slot = rc.assetIndex * NUM_CASCADES + rc.cascadeIdx;
 
-    uint trueID    = shadowVisBuf[shadowSlotOffsets[ai] + i_id];
+    uint trueID    = shadowVisBuf[shadowSlotOffsets[slot] + i_id];
     float4x4 model = instanceBuf[trueID].model;
-    o_pos = mul(mul(float4(i_pos, 1), model), lightViewProj);
+    o_pos = mul(mul(float4(i_pos, 1), model), lightViewProj[rc.cascadeIdx]);
 }
 
 void terrain_vs(
@@ -45,5 +48,5 @@ void terrain_vs(
     out float4 o_pos    : SV_Position
 )
 {
-    o_pos = mul(float4(i_pos, 1), lightViewProj);
+    o_pos = mul(float4(i_pos, 1), lightViewProj[rc.cascadeIdx]);
 }

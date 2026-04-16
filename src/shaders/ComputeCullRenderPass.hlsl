@@ -2,16 +2,16 @@
 
 #include "types.hlsli"
 
+static const uint NUM_CASCADES = 4;
+
 cbuffer CB : register(b0)
 {
-    // P0 fields (also read by VS/PS)
     float4x4 viewProj;
-    float4x4 lightViewProj;
+    float4x4 viewMatrix;
+    float4x4 lightViewProj[NUM_CASCADES];
     float3   sunLightDir;
     float    _pad0;
-    float3x4 _pad1;
-
-    // did not specify the cull fields
+    float4   cascadeSplits;
 };
 
 struct RootConstant { uint slot; };
@@ -40,7 +40,8 @@ void main_vs(
     in uint    i_id        : SV_InstanceID,
 
     out float4 o_pos       : SV_Position,
-    out float4 o_pos_LS    : POSITION_LS,
+    out float3 o_worldPos  : WORLD_POS,
+    out float  o_viewZ     : VIEW_Z,
     out float3 o_normal    : NORMAL,
     out float3 o_tangent   : TANGENT,
     out float3 o_bitangent : BITANGENT,
@@ -54,7 +55,8 @@ void main_vs(
     float4 worldPos = mul(float4(i_pos, 1), model);
 
     o_pos       = mul(worldPos, viewProj);
-    o_pos_LS    = mul(worldPos, lightViewProj);
+    o_worldPos  = worldPos.xyz;
+    o_viewZ     = mul(worldPos, viewMatrix).z;
     o_normal    = normalize(mul(i_normal,    normalMat));
     o_tangent   = normalize(mul(i_tangent,   normalMat));
     o_bitangent = normalize(mul(i_bitangent, normalMat));
@@ -64,15 +66,54 @@ void main_vs(
 
 Texture2D              t_Diffuse        : register(t3);
 Texture2D              t_NormalMap      : register(t4);
-Texture2D              t_ShadowMap      : register(t5);
+Texture2DArray         t_ShadowMap      : register(t5);
 
 SamplerState           s_Sampler        : register(s0);
 SamplerComparisonState s_ShadowSampler  : register(s1);
 
 
+float SampleShadowCascade(float3 worldPos, uint cascadeIdx)
+{
+    float4 posLS = mul(float4(worldPos, 1), lightViewProj[cascadeIdx]);
+    float2 shadowUV = posLS.xy * float2(0.5, -0.5) + 0.5;
+
+    uint width, height, elements;
+    t_ShadowMap.GetDimensions(width, height, elements);
+    float2 texelSize = 1.0 / float2(width, height);
+
+    float shadow = 0.0;
+
+    static const float weights[3][3] = {
+        { 1.0, 2.0, 1.0 },
+        { 2.0, 4.0, 2.0 },
+        { 1.0, 2.0, 1.0 }
+    };
+
+    [unroll]
+    for (int x = -1; x <= 1; ++x)
+    {
+        [unroll]
+        for (int y = -1; y <= 1; ++y)
+        {
+            float2 offset = float2(x, y) * texelSize;
+            float weight = weights[x + 1][y + 1];
+
+            shadow += weight * t_ShadowMap.SampleCmpLevelZero(
+                s_ShadowSampler,
+                float3(shadowUV + offset, float(cascadeIdx)),
+                posLS.z
+            );
+        }
+    }
+
+    return shadow / 16.0;
+}
+
+
 void main_ps(
     in float4  i_pos       : SV_Position,
-    in float4  i_pos_LS    : POSITION_LS,
+    in float3  i_worldPos  : WORLD_POS,
+    in float   i_viewZ     : VIEW_Z,
     in float3  i_normal    : NORMAL,
     in float3  i_tangent   : TANGENT,
     in float3  i_bitangent : BITANGENT,
@@ -92,8 +133,13 @@ void main_ps(
     float3 lightDir = -normalize(sunLightDir);
     float diffuse = max(dot(worldNormal, lightDir), 0);
 
-    float2 shadowUV    = i_pos_LS.xy * float2(0.5, -0.5) + 0.5;
-    float  notInShadow = t_ShadowMap.SampleCmpLevelZero(s_ShadowSampler, shadowUV, i_pos_LS.z);
+    // Cascade selection by view-space depth
+    uint cascadeIdx = 3;
+    if      (i_viewZ < cascadeSplits.x) cascadeIdx = 0;
+    else if (i_viewZ < cascadeSplits.y) cascadeIdx = 1;
+    else if (i_viewZ < cascadeSplits.z) cascadeIdx = 2;
+
+    float notInShadow = SampleShadowCascade(i_worldPos, cascadeIdx);
 
     float ambient  = 0.15;
     float lighting = ambient + (1.0 - ambient) * diffuse * notInShadow;

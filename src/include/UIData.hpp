@@ -21,6 +21,11 @@ struct UIData {
     uint32_t culledInstanceCount  = 0;
     uint32_t shadowVisibleCount   = 0;
     uint32_t shadowCulledCount    = 0;
+
+    bool showDebugTopDown = false;
+    bool showShadowMap   = false;
+
+    void* shadowMapTexture = nullptr;  // nvrhi::ITexture*, set by active render pass
 };
 
 } // namespace Xylem

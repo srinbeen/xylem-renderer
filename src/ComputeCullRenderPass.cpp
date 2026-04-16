@@ -102,10 +102,13 @@ void ComputeCullRenderPass::_BuildRegionWindows() {
 
     m_InstanceStaging.assign(m_TotalCapacity, Render::InstanceBufferEntry{});
     m_CullDataStaging.assign(m_TotalCapacity, Render::CullInstanceData{});
+    m_RegionStaging.assign(regions.size(), Render::CullRegionData{});
 
     for (size_t r = 0; r < regions.size(); r++) {
         const auto& win = m_RegionWindows[r];
         const auto& reg = regions[r];
+        m_RegionStaging[r] = {reg.cullBox};
+
         for (uint32_t i = 0; i < reg.instances.size(); i++) {
             const auto& inst = reg.instances[i];
             auto it = m_AssetIdToGPUIndex.find(inst.assetId);
@@ -123,6 +126,7 @@ void ComputeCullRenderPass::_BuildRegionWindows() {
             auto& cd = m_CullDataStaging[idx];
             cd.bbox     = worldBbox;
             cd.baseSlot = gpuIdx * numLods;
+            cd.regionId = static_cast<uint32_t>(r);
             cd.active   = 1;
         }
         // Dead slots remain zero-initialized (active=0)
@@ -176,6 +180,32 @@ void ComputeCullRenderPass::_BuildSlotLayout() {
         m_ShadowVisBufferSize  += livePerAsset[ai];
     }
     m_ShadowVisBufferSize = std::max(1u, m_ShadowVisBufferSize);
+
+    // Build indirect args staging — pre-fill with indexCount, instanceCount=0
+    m_IndirectArgsStaging.resize(std::max(1u, m_NumSlots));
+    for (uint32_t ai = 0; ai < numAssets; ai++) {
+        for (uint32_t lodi = 0; lodi < numLods; lodi++) {
+            uint32_t slotIdx = ai * numLods + lodi;
+            auto& args = m_IndirectArgsStaging[slotIdx];
+            args.indexCount            = m_GPUAssets[ai].lods[lodi].indexCount;
+            args.instanceCount         = 0;  // CS will atomically increment
+            args.startIndexLocation    = 0;
+            args.baseVertexLocation    = 0;
+            args.startInstanceLocation = 0;
+        }
+    }
+
+    // Shadow indirect args — one per asset, using lowest LOD
+    const uint32_t lowestLOD = numLods > 0 ? numLods - 1 : 0;
+    m_ShadowIndirectArgsStaging.resize(std::max(1u, numAssets));
+    for (uint32_t ai = 0; ai < numAssets; ai++) {
+        auto& args = m_ShadowIndirectArgsStaging[ai];
+        args.indexCount            = m_GPUAssets[ai].lods[lowestLOD].indexCount;
+        args.instanceCount         = 0;
+        args.startIndexLocation    = 0;
+        args.baseVertexLocation    = 0;
+        args.startInstanceLocation = 0;
+    }
 }
 
 // ===========================================================================
@@ -184,6 +214,7 @@ void ComputeCullRenderPass::_BuildSlotLayout() {
 
 void ComputeCullRenderPass::_UploadCullBuffers(nvrhi::ICommandList* commandList) {
     auto device = GetDevice();
+    const uint32_t numRegions = static_cast<uint32_t>(m_Registry.getRegions().size());
 
     // PersistentInstanceBuffer — SRV structured buffer (permanent ShaderResource after upload)
     m_CullPass.persistentInstBuffer = device->createBuffer(
@@ -214,6 +245,21 @@ void ComputeCullRenderPass::_UploadCullBuffers(nvrhi::ICommandList* commandList)
         m_CullDataStaging.data(),
         m_TotalCapacity * sizeof(Render::CullInstanceData));
     commandList->setPermanentBufferState(m_CullPass.cullDataBuffer, nvrhi::ResourceStates::ShaderResource);
+
+    // CullRegionDataBuffer — SRV structured buffer (permanent ShaderResource after upload)
+    m_CullPass.cullRegionDataBuffer = device->createBuffer(
+        nvrhi::BufferDesc()
+            .setByteSize(numRegions * sizeof(Render::CullRegionData))
+            .setStructStride(sizeof(Render::CullRegionData))
+            .setDebugName("CullRegionDataBuffer")
+            .setCanHaveUAVs(false)
+            .setInitialState(nvrhi::ResourceStates::CopyDest)
+    );
+    commandList->beginTrackingBufferState(m_CullPass.cullRegionDataBuffer, nvrhi::ResourceStates::CopyDest);
+    commandList->writeBuffer(m_CullPass.cullRegionDataBuffer,
+        m_RegionStaging.data(),
+        numRegions * sizeof(Render::CullRegionData));
+    commandList->setPermanentBufferState(m_CullPass.cullRegionDataBuffer, nvrhi::ResourceStates::ShaderResource);
 
     // SlotOffsetBuffer — SRV structured buffer (permanent ShaderResource after upload)
     m_CullPass.slotOffsetBuffer = device->createBuffer(
@@ -286,6 +332,59 @@ void ComputeCullRenderPass::_UploadCullBuffers(nvrhi::ICommandList* commandList)
         commandList->writeBuffer(m_CullPass.shadowSlotOffsetBuffer,
             m_ShadowSlotOffsets.data(), numAssets * sizeof(uint32_t));
     commandList->setPermanentBufferState(m_CullPass.shadowSlotOffsetBuffer, nvrhi::ResourceStates::ShaderResource);
+
+    // IndirectArgsBuffer — UAV + indirect draw args, DrawIndexedIndirectArguments[numSlots]
+    // Pre-filled with indexCount per slot, instanceCount=0 (CS atomically increments each frame).
+    uint32_t indirectArgsBufSize = std::max(1u, m_NumSlots) * sizeof(nvrhi::DrawIndexedIndirectArguments);
+    m_CullPass.indirectArgsBuffer = device->createBuffer(
+        nvrhi::BufferDesc()
+            .setByteSize(indirectArgsBufSize)
+            .setDebugName("IndirectArgsBuffer")
+            .setIsDrawIndirectArgs(true)
+            .setCanHaveUAVs(true)
+            .setCanHaveRawViews(true)
+            .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess)
+    );
+
+    // ShadowIndirectArgsBuffer — UAV + indirect draw args, DrawIndexedIndirectArguments[numAssets]
+    uint32_t shadowIndirectArgsBufSize = std::max(1u, numAssets) * sizeof(nvrhi::DrawIndexedIndirectArguments);
+    m_CullPass.shadowIndirectArgsBuffer = device->createBuffer(
+        nvrhi::BufferDesc()
+            .setByteSize(shadowIndirectArgsBufSize)
+            .setDebugName("ShadowIndirectArgsBuffer")
+            .setIsDrawIndirectArgs(true)
+            .setCanHaveUAVs(true)
+            .setCanHaveRawViews(true)
+            .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess)
+    );
+
+    // RegionVisibleBuffer — SRV uint32[numRegions], CPU-written each frame via writeBuffer
+    m_RegionVisibleStaging.assign(std::max(1u, numRegions), 1u);
+    m_CullPass.regionVisibleBuffer = device->createBuffer(
+        nvrhi::BufferDesc()
+            .setByteSize(std::max(1u, numRegions) * sizeof(uint32_t))
+            .setStructStride(sizeof(uint32_t))
+            .setDebugName("RegionVisibleBuffer")
+            .setCanHaveUAVs(true)
+            .enableAutomaticStateTracking(nvrhi::ResourceStates::ShaderResource)
+    );
+
+    // Readback ring buffers — combined [countBuffer | shadowCountBuffer] per slot
+    m_ReadbackCountEntries  = std::max(1u, m_NumSlots);
+    m_ReadbackShadowEntries = std::max(1u, numAssets);
+    uint64_t readbackSize = (m_ReadbackCountEntries + m_ReadbackShadowEntries) * sizeof(uint32_t);
+
+    for (uint32_t i = 0; i < k_QueuedFrames; i++) {
+        m_ReadbackBuffers[i] = device->createBuffer(
+            nvrhi::BufferDesc()
+                .setByteSize(readbackSize)
+                .setCpuAccess(nvrhi::CpuAccessMode::Read)
+                .setInitialState(nvrhi::ResourceStates::CopyDest)
+                .setKeepInitialState(true)
+                .setDebugName("CullCountReadback_" + std::to_string(i))
+        );
+    }
+    m_ReadbackFrameIndex = 0;
 }
 
 // ===========================================================================
@@ -300,33 +399,43 @@ void ComputeCullRenderPass::_RebuildCullBindings() {
     cullBSD.bindings = {
         nvrhi::BindingSetItem::ConstantBuffer(0, m_Shared.constantBuffer,
             nvrhi::BufferRange(0, Render::c_CullConstantBufferSize)),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_CullPass.cullDataBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_CullPass.slotOffsetBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_CullPass.shadowSlotOffsetBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_UAV(0, m_CullPass.countBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_UAV(1, m_CullPass.visibilityBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_UAV(2, m_CullPass.shadowCountBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_UAV(3, m_CullPass.shadowVisBuffer),
+
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_CullPass.cullRegionDataBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_CullPass.cullDataBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_CullPass.slotOffsetBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(3, m_CullPass.shadowSlotOffsetBuffer),
+
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(0, m_CullPass.regionVisibleBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(1, m_CullPass.countBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(2, m_CullPass.visibilityBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(3, m_CullPass.shadowCountBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(4, m_CullPass.shadowVisBuffer),
+
+        nvrhi::BindingSetItem::RawBuffer_UAV(5, m_CullPass.indirectArgsBuffer),
+        nvrhi::BindingSetItem::RawBuffer_UAV(6, m_CullPass.shadowIndirectArgsBuffer),
     };
+
     m_CullPass.bindingSet = device->createBindingSet(cullBSD, m_CullPass.bindingLayout);
 
-    // Tree pass binding sets — need visibility/instance/count/slotOffset SRVs + textures
+    // Tree pass binding sets — visibility/instance/slotOffset SRVs + textures
     m_TreePass.bindingSets.resize(m_TreePass.textureSets.size());
     for (size_t i = 0; i < m_TreePass.textureSets.size(); i++) {
         nvrhi::BindingSetDesc bsd;
         bsd.bindings = {
             nvrhi::BindingSetItem::ConstantBuffer(0, m_Shared.constantBuffer,
                 nvrhi::BufferRange(0, Render::c_CullConstantBufferSize)),
+            nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t)),
+
             nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_CullPass.visibilityBuffer),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_CullPass.persistentInstBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_CullPass.countBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(3, m_CullPass.slotOffsetBuffer),
-            nvrhi::BindingSetItem::Texture_SRV(4, m_TreePass.textureSets[i].diffuse),
-            nvrhi::BindingSetItem::Texture_SRV(5, m_TreePass.textureSets[i].normalMap),
-            nvrhi::BindingSetItem::Texture_SRV(6, m_ShadowPass.depthTexture),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_CullPass.slotOffsetBuffer),
+
+            nvrhi::BindingSetItem::Texture_SRV(3, m_TreePass.textureSets[i].diffuse),
+            nvrhi::BindingSetItem::Texture_SRV(4, m_TreePass.textureSets[i].normalMap),
+            nvrhi::BindingSetItem::Texture_SRV(5, m_ShadowPass.depthTexture),
+
             nvrhi::BindingSetItem::Sampler(0, m_TreePass.sampler),
             nvrhi::BindingSetItem::Sampler(1, m_ShadowPass.comparisonSampler),
-            nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t)),
         };
         m_TreePass.bindingSets[i] = device->createBindingSet(bsd, m_TreePass.bindingLayout);
     }
@@ -336,11 +445,11 @@ void ComputeCullRenderPass::_RebuildCullBindings() {
     shadowBSD.bindings = {
         nvrhi::BindingSetItem::ConstantBuffer(0, m_Shared.constantBuffer,
             nvrhi::BufferRange(0, Render::c_CullConstantBufferSize)),
+        nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t)),
+
         nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_CullPass.shadowVisBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_CullPass.persistentInstBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_CullPass.shadowCountBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(3, m_CullPass.shadowSlotOffsetBuffer),
-        nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t)),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_CullPass.shadowSlotOffsetBuffer),
     };
     m_ShadowPass.bindingSet = device->createBindingSet(shadowBSD, m_ShadowPass.bindingLayout);
 }
@@ -490,6 +599,8 @@ void ComputeCullRenderPass::onRegionsDirty(const std::vector<size_t>& /*dirtyReg
 // ===========================================================================
 
 void ComputeCullRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
+    m_UI.shadowMapTexture = m_ShadowPass.depthTexture.Get();
+
     app::HiResTimer cpuTimer;
     cpuTimer.Start();
 
@@ -561,7 +672,11 @@ void ComputeCullRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     constants.sunLightDir   = m_Registry.getSunDirection();
 
     constants.viewFrustum = m_ViewHandler.view.GetViewFrustum();
-    constants.lightFrustum = dm::frustum(lightViewProj, false);
+    constants.worldToLight     = dm::affineToHomogeneous(m_ViewHandler.worldToLight);
+    constants.shadowCasterMinLS = m_ViewHandler.shadowCasterBboxLS.m_mins;
+    constants.shadowCasterMaxLS = m_ViewHandler.shadowCasterBboxLS.m_maxs;
+
+    constants.numRegions = static_cast<uint32_t>(m_Registry.getRegions().size());
 
     constants.cameraPos     = m_ViewHandler.camera.GetPosition();
     constants.totalCapacity = m_TotalCapacity;
@@ -571,10 +686,6 @@ void ComputeCullRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     for (uint32_t i = 0; i < constants.numLods; i++)
         constants.lodDistances[i].x = lodDistances[i];
 
-    constants.numSlots      = m_NumSlots;
-    constants.visBufferSize = m_VisBufferSize;
-    constants.numAssets     = static_cast<uint32_t>(m_GPUAssets.size());
-
     m_CommandList->writeBuffer(m_Shared.constantBuffer, &constants, Render::c_CullConstantBufferSize);
 
     // --- GPU Cull Dispatch ---
@@ -582,6 +693,25 @@ void ComputeCullRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_CommandList->clearBufferUInt(m_CullPass.countBuffer, 0);
     m_CommandList->clearBufferUInt(m_CullPass.shadowCountBuffer, 0);
 
+    // Reset indirect args buffers (re-upload staging with instanceCount=0)
+    m_CommandList->writeBuffer(m_CullPass.indirectArgsBuffer,
+        m_IndirectArgsStaging.data(),
+        m_IndirectArgsStaging.size() * sizeof(nvrhi::DrawIndexedIndirectArguments));
+    m_CommandList->writeBuffer(m_CullPass.shadowIndirectArgsBuffer,
+        m_ShadowIndirectArgsStaging.data(),
+        m_ShadowIndirectArgsStaging.size() * sizeof(nvrhi::DrawIndexedIndirectArguments));
+
+    // region camera cull
+    GFSDK_Aftermath_SetEventMarker(m_AftermathContext, "Cull::RegionDispatch", 0);
+    {
+        nvrhi::ComputeState cs;
+        cs.pipeline = m_CullPass.regionPipeline;
+        cs.bindings = { m_CullPass.bindingSet };
+        m_CommandList->setComputeState(cs);
+        m_CommandList->dispatch(
+            (constants.numRegions + 63) / 64, 1, 1);
+    }
+    
     // Main camera cull
     GFSDK_Aftermath_SetEventMarker(m_AftermathContext, "Cull::MainDispatch", 0);
     {
@@ -590,7 +720,7 @@ void ComputeCullRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         cs.bindings = { m_CullPass.bindingSet };
         m_CommandList->setComputeState(cs);
         m_CommandList->dispatch(
-            (m_TotalCapacity + 63) / 64, 1, 1);
+            (m_TotalCapacity + 255) / 256, 1, 1);
     }
 
     // Shadow cull
@@ -602,6 +732,18 @@ void ComputeCullRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         m_CommandList->setComputeState(cs);
         m_CommandList->dispatch(
             (m_TotalCapacity + 63) / 64, 1, 1);
+    }
+
+    // --- Copy cull counts to readback ring ---
+    {
+        uint32_t ringSlot   = m_ReadbackFrameIndex % k_QueuedFrames;
+        uint64_t countSize  = m_ReadbackCountEntries  * sizeof(uint32_t);
+        uint64_t shadowSize = m_ReadbackShadowEntries * sizeof(uint32_t);
+
+        m_CommandList->copyBuffer(m_ReadbackBuffers[ringSlot], 0,
+                                  m_CullPass.countBuffer, 0, countSize);
+        m_CommandList->copyBuffer(m_ReadbackBuffers[ringSlot], countSize,
+                                  m_CullPass.shadowCountBuffer, 0, shadowSize);
     }
 
     // --- Draw passes (auto barriers: UAV→SRV transitions handled by setGraphicsState) ---
@@ -623,9 +765,33 @@ void ComputeCullRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     // m_NextTimerIdx = (m_NextTimerIdx + 1) % k_QueuedFrames;
 
     m_UI.totalInstanceCount = m_Registry.totalInstanceCount();
-    // Visible/culled counts not available without readback in Iteration A
-    // (will be accurate in Iteration B with readback ring buffer)
-    m_UI.drawCallCount = m_NumSlots;
+    m_UI.drawCallCount      = m_NumSlots;
+
+    // Read back cull counts from oldest ring slot (2 frames ago, GPU-complete)
+    if (m_ReadbackFrameIndex >= (k_QueuedFrames - 1)) {
+        uint32_t readSlot = (m_ReadbackFrameIndex + 1) % k_QueuedFrames;
+
+        void* pData = GetDevice()->mapBuffer(m_ReadbackBuffers[readSlot], nvrhi::CpuAccessMode::Read);
+        if (pData) {
+            const uint32_t* counts = static_cast<const uint32_t*>(pData);
+
+            uint32_t visibleSum = 0;
+            for (uint32_t i = 0; i < m_ReadbackCountEntries; i++)
+                visibleSum += counts[i];
+
+            uint32_t shadowVisSum = 0;
+            for (uint32_t i = 0; i < m_ReadbackShadowEntries; i++)
+                shadowVisSum += counts[m_ReadbackCountEntries + i];
+
+            GetDevice()->unmapBuffer(m_ReadbackBuffers[readSlot]);
+
+            m_UI.visibleInstanceCount = visibleSum;
+            m_UI.culledInstanceCount  = m_UI.totalInstanceCount - visibleSum;
+            m_UI.shadowVisibleCount   = shadowVisSum;
+            m_UI.shadowCulledCount    = m_UI.totalInstanceCount - shadowVisSum;
+        }
+    }
+    m_ReadbackFrameIndex++;
 
     cpuTimer.Stop();
     m_UI.cpuRenderTimeMs = (float)cpuTimer.Milliseconds();
@@ -741,6 +907,7 @@ void ComputeCullRenderPass::_RenderShadowPass() {
     shadowState.framebuffer = m_ShadowPass.framebuffer;
     shadowState.viewport    = shadowVPState;
     shadowState.bindings    = { m_ShadowPass.bindingSet };
+    shadowState.indirectParams = m_CullPass.shadowIndirectArgsBuffer;
 
     for (uint32_t ai = 0; ai < m_GPUAssets.size(); ai++) {
         uint32_t maxCount = m_MaxSlotCounts[ai * numLods];  // livePerAsset[ai]
@@ -751,14 +918,11 @@ void ComputeCullRenderPass::_RenderShadowPass() {
         shadowState.vertexBuffers = { { lod.vertexBuffer, 0, 0 } };
         shadowState.indexBuffer   = { lod.indexBuffer, nvrhi::Format::R32_UINT, 0 };
         m_CommandList->setGraphicsState(shadowState);
-        
+
         m_CommandList->setPushConstants(&ai, sizeof(ai));
 
-        m_CommandList->drawIndexed(
-            nvrhi::DrawArguments()
-                .setVertexCount(lod.indexCount)
-                .setInstanceCount(maxCount)
-        );
+        m_CommandList->drawIndexedIndirect(
+            ai * sizeof(nvrhi::DrawIndexedIndirectArguments));
     }
 
     // Terrain shadow (unchanged — no instancing)
@@ -810,12 +974,13 @@ void ComputeCullRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
     }
 
     nvrhi::GraphicsState state;
-    state.pipeline   = m_TreePass.pipeline;
+    state.pipeline    = m_TreePass.pipeline;
     state.framebuffer = framebuffer;
-    state.viewport   = m_ViewHandler.view.GetViewportState();
+    state.viewport    = m_ViewHandler.view.GetViewportState();
+    state.indirectParams = m_CullPass.indirectArgsBuffer;
 
-    // Draw one call per slot (asset × LOD), using maxSlotCount instances.
-    // VS discards excess via countBuffer[slot] check.
+    // Indirect draw: one call per slot (asset × LOD).
+    // Instance count comes from the indirect args buffer (written by the cull CS).
     for (uint32_t ai = 0; ai < m_GPUAssets.size(); ai++) {
         for (uint32_t li = 0; li < numLods; li++) {
             uint32_t slot = ai * numLods + li;
@@ -827,14 +992,11 @@ void ComputeCullRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
             state.vertexBuffers = { { lod.vertexBuffer, 0, 0 } };
             state.indexBuffer   = { lod.indexBuffer, nvrhi::Format::R32_UINT, 0 };
             m_CommandList->setGraphicsState(state);
-            
+
             m_CommandList->setPushConstants(&slot, sizeof(slot));
 
-            m_CommandList->drawIndexed(
-                nvrhi::DrawArguments()
-                    .setVertexCount(lod.indexCount)
-                    .setInstanceCount(m_MaxSlotCounts[slot])
-            );
+            m_CommandList->drawIndexedIndirect(
+                slot * sizeof(nvrhi::DrawIndexedIndirectArguments));
         }
     }
 
@@ -890,28 +1052,41 @@ bool ComputeCullRenderPass::_InitShared() {
 bool ComputeCullRenderPass::_InitCullPass(nvrhi::ICommandList* /*initCL*/) {
     // Create compute shaders
     m_CullPass.mainCS = m_ShaderFactory->CreateShader(
-        "app/CullCS.hlsl", "CSMain", nullptr, nvrhi::ShaderType::Compute);
+        "app/CullCS.hlsl", "CullMain", nullptr, nvrhi::ShaderType::Compute);
     m_CullPass.shadowCS = m_ShaderFactory->CreateShader(
-        "app/CullCS.hlsl", "CSShadow", nullptr, nvrhi::ShaderType::Compute);
-    if (!m_CullPass.mainCS || !m_CullPass.shadowCS) return false;
+        "app/CullCS.hlsl", "CullShadow", nullptr, nvrhi::ShaderType::Compute);
+    m_CullPass.regionCS = m_ShaderFactory->CreateShader(
+        "app/CullCS.hlsl", "CullRegion", nullptr, nvrhi::ShaderType::Compute);
+    if (!m_CullPass.mainCS || !m_CullPass.shadowCS || !m_CullPass.regionCS) return false;
 
     // Create cull binding layout
     nvrhi::BindingLayoutDesc cullLayoutDesc;
     cullLayoutDesc.visibility = nvrhi::ShaderType::All;
     cullLayoutDesc.bindings = {
         nvrhi::BindingLayoutItem::ConstantBuffer(0),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0),  // cullData
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1),  // slotOffsets
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2),  // shadowSlotOffsets
-        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0),  // countBuffer
-        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(1),  // visibilityBuffer
-        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(2),  // shadowCountBuffer
-        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(3),  // shadowVisBuffer
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0), // regionData
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1), // instanceData  
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2), // mainSlotOffsets  
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3), // shadowSlotOffsets
+
+        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0), // mainRegionVisBuf
+        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(1), // mainSlotCountBuf
+        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(2), // mainVisBuf
+        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(3), // shadowSlotCountBuf
+        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(4), // shadowVisBuf
+
+        nvrhi::BindingLayoutItem::RawBuffer_UAV(5),        // mainIndirectArgs
+        nvrhi::BindingLayoutItem::RawBuffer_UAV(6),        // shadowIndirectArgs
     };
     m_CullPass.bindingLayout = GetDevice()->createBindingLayout(cullLayoutDesc);
     if (!m_CullPass.bindingLayout) return false;
 
     // Create compute pipelines
+    nvrhi::ComputePipelineDesc regionPsoDesc;
+    regionPsoDesc.CS = m_CullPass.regionCS;
+    regionPsoDesc.bindingLayouts = { m_CullPass.bindingLayout };
+    m_CullPass.regionPipeline = GetDevice()->createComputePipeline(regionPsoDesc);
+    
     nvrhi::ComputePipelineDesc mainPsoDesc;
     mainPsoDesc.CS = m_CullPass.mainCS;
     mainPsoDesc.bindingLayouts = { m_CullPass.bindingLayout };
@@ -934,7 +1109,6 @@ bool ComputeCullRenderPass::_InitTreePass(nvrhi::ICommandList* initCL, engine::C
         "app/ComputeCullRenderPass.hlsl", "main_ps", nullptr, nvrhi::ShaderType::Pixel);
     if (!m_TreePass.vertexShader || !m_TreePass.pixelShader) return false;
 
-    // Input layout — vertex attributes only (no per-instance attributes; indirection is via SRV)
     nvrhi::VertexAttributeDesc attributes[] = {
         nvrhi::VertexAttributeDesc()
             .setName("POSITION")
@@ -1010,17 +1184,16 @@ bool ComputeCullRenderPass::_InitTreePass(nvrhi::ICommandList* initCL, engine::C
     nvrhi::BindingLayoutDesc treeLayoutDesc;
     treeLayoutDesc.visibility = nvrhi::ShaderType::All;
     treeLayoutDesc.bindings = {
-        nvrhi::BindingLayoutItem::ConstantBuffer(0),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0),  // visibilityBuffer
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1),  // instanceBuffer
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2),  // countBuffer
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3),  // slotOffsets
-        nvrhi::BindingLayoutItem::Texture_SRV(4),           // diffuse
-        nvrhi::BindingLayoutItem::Texture_SRV(5),           // normalMap
-        nvrhi::BindingLayoutItem::Texture_SRV(6),           // shadowMap
-        nvrhi::BindingLayoutItem::Sampler(0),
-        nvrhi::BindingLayoutItem::Sampler(1),
-        nvrhi::BindingLayoutItem::PushConstants(1, sizeof(uint32_t)),  // slot index
+        nvrhi::BindingLayoutItem::ConstantBuffer(0),                    
+        nvrhi::BindingLayoutItem::PushConstants(1, sizeof(uint32_t)),   // slot
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0),              // visBuf
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1),              // instBuf
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2),              // slotOffsets
+        nvrhi::BindingLayoutItem::Texture_SRV(3),                       // t_Diffuse
+        nvrhi::BindingLayoutItem::Texture_SRV(4),                       // t_NormalMap
+        nvrhi::BindingLayoutItem::Texture_SRV(5),                       // t_ShadowMap
+        nvrhi::BindingLayoutItem::Sampler(0),                           // s_Sampler
+        nvrhi::BindingLayoutItem::Sampler(1),                           // s_ShadowSampler
     };
     m_TreePass.bindingLayout = GetDevice()->createBindingLayout(treeLayoutDesc);
     if (!m_TreePass.bindingLayout) return false;
@@ -1101,11 +1274,10 @@ bool ComputeCullRenderPass::_InitShadowPass() {
     shadowLayoutDesc.visibility = nvrhi::ShaderType::All;
     shadowLayoutDesc.bindings = {
         nvrhi::BindingLayoutItem::ConstantBuffer(0),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0),  // shadowVisBuf
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1),  // instanceBuffer
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2),  // shadowCount
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3),  // shadowSlotOffsets
         nvrhi::BindingLayoutItem::PushConstants(1, sizeof(uint32_t)),  // assetIndex
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0),             // shadowVisBuf
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1),             // instanceBuf
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2),             // shadowSlotOffsets
     };
     m_ShadowPass.bindingLayout = GetDevice()->createBindingLayout(shadowLayoutDesc);
     if (!m_ShadowPass.bindingLayout) return false;

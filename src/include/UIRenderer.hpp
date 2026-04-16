@@ -10,6 +10,7 @@
 
 #include "UIData.hpp"
 #include "SceneRegistry.hpp"
+#include "ViewHandler.hpp"
 
 using namespace donut;
 
@@ -19,6 +20,7 @@ class UIRenderer : public app::ImGui_Renderer {
 private:
     SceneRegistry* m_Registry;
     UIData&        m_ui;
+    ViewHandler*   m_ViewHandler;
 
     // -----------------------------------------------------------------------
     // Transient edit state — not persisted, only alive while UI is open
@@ -72,8 +74,8 @@ private:
     AddRegionState m_AddRegion;
 
 public:
-    UIRenderer(app::DeviceManager* dm, SceneRegistry* registry, UIData& ui)
-        : ImGui_Renderer(dm), m_Registry(registry), m_ui(ui)
+    UIRenderer(app::DeviceManager* dm, SceneRegistry* registry, UIData& ui, ViewHandler* vh)
+        : ImGui_Renderer(dm), m_Registry(registry), m_ui(ui), m_ViewHandler(vh)
     {
         ImGui::GetIO().IniFilename = nullptr;
     }
@@ -89,6 +91,8 @@ private:
     void _buildLSystemsSection();
     void _buildAssetsSection();
     void _buildRegionsSection();
+    void _buildDebugTopDownSection();
+    void _buildShadowMapSection();
 };
 
 } // namespace Xylem

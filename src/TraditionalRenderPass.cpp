@@ -261,6 +261,8 @@ void TraditionalRenderPass::onRegionsDirty(const std::vector<size_t>& /*dirtyReg
 // ===========================================================================
 
 void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
+    m_UI.shadowMapTexture = m_ShadowPass.depthTexture.Get();
+
     app::HiResTimer cpuTimer;
     cpuTimer.Start();
 

@@ -24,7 +24,7 @@ using namespace donut;
 
 class ComputeCullRenderPass : public app::IRenderPass {
 public:
-    // static constexpr uint32_t k_QueuedFrames  = 4;
+    static constexpr uint32_t k_QueuedFrames  = 3;
     static constexpr uint32_t k_ShadowRes     = 2048;
     static constexpr float    k_CapacitySlack = 1.5f;
 
@@ -70,19 +70,25 @@ private:
     struct CullPassResources {
         nvrhi::ShaderHandle              mainCS;
         nvrhi::ShaderHandle              shadowCS;
+        nvrhi::ShaderHandle              regionCS;
         nvrhi::ComputePipelineHandle     mainPipeline;
+        nvrhi::ComputePipelineHandle     regionPipeline;
         nvrhi::ComputePipelineHandle     shadowPipeline;
         nvrhi::BindingLayoutHandle       bindingLayout;
         nvrhi::BindingSetHandle          bindingSet;
 
         nvrhi::BufferHandle              cullDataBuffer;       // SRV CullInstanceData[totalCapacity]
         nvrhi::BufferHandle              persistentInstBuffer; // SRV InstanceBufferEntry[totalCapacity]
+        nvrhi::BufferHandle              cullRegionDataBuffer; // SRV InstanceBufferEntry[totalCapacity]
         nvrhi::BufferHandle              slotOffsetBuffer;     // SRV uint32[numSlots]
         nvrhi::BufferHandle              countBuffer;          // UAV uint32[numSlots]
         nvrhi::BufferHandle              visibilityBuffer;     // UAV uint32[visBufferSize]
+        nvrhi::BufferHandle              indirectArgsBuffer;   // UAV DrawIndexedIndirectArguments[numSlots] (also indirect args)
         nvrhi::BufferHandle              shadowCountBuffer;      // UAV uint32[numAssets]
         nvrhi::BufferHandle              shadowVisBuffer;        // UAV uint32[shadowVisBufferSize]
         nvrhi::BufferHandle              shadowSlotOffsetBuffer; // SRV uint32[numAssets]
+        nvrhi::BufferHandle              shadowIndirectArgsBuffer; // UAV DrawIndexedIndirectArguments[numAssets] (also indirect args)
+        nvrhi::BufferHandle              regionVisibleBuffer;      // SRV uint32[numRegions], CPU-written each frame
     };
 
     // Tree draw pass — uses visibility indirection via structured buffers
@@ -147,8 +153,11 @@ private:
     ViewHandler&                                       m_ViewHandler;
     std::shared_ptr<engine::ShaderFactory>             m_ShaderFactory;
 
-    // nvrhi::TimerQueryHandle                            m_GpuTimers[k_QueuedFrames];
-    // int                                                m_NextTimerIdx = 0;
+    // Readback ring buffer for GPU cull count display
+    nvrhi::BufferHandle                                m_ReadbackBuffers[k_QueuedFrames];
+    uint32_t                                           m_ReadbackFrameIndex    = 0;
+    uint32_t                                           m_ReadbackCountEntries  = 0;
+    uint32_t                                           m_ReadbackShadowEntries = 0;
 
     UIData&                                            m_UI;
     SceneRegistry&                                     m_Registry;
@@ -162,12 +171,20 @@ private:
     uint32_t                                           m_TotalCapacity = 0;
     std::vector<Render::InstanceBufferEntry>           m_InstanceStaging;
     std::vector<Render::CullInstanceData>              m_CullDataStaging;
+    std::vector<Render::CullRegionData>                m_RegionStaging;
 
     // Slot layout (main pass: numAssets × numLods slots)
     uint32_t                                           m_NumSlots = 0;
     std::vector<uint32_t>                              m_SlotOffsets;       // prefix sums [numSlots]
     std::vector<uint32_t>                              m_MaxSlotCounts;     // max instances per slot [numSlots]
     uint32_t                                           m_VisBufferSize = 0;
+
+    // Region CPU-frustum-cull visibility (written each frame, uploaded to regionVisibleBuffer)
+    std::vector<uint32_t>                              m_RegionVisibleStaging;
+
+    // Indirect args staging (pre-filled with indexCount, instanceCount=0)
+    std::vector<nvrhi::DrawIndexedIndirectArguments>   m_IndirectArgsStaging;
+    std::vector<nvrhi::DrawIndexedIndirectArguments>   m_ShadowIndirectArgsStaging;
 
     // Shadow slot layout (per-asset, no LOD axis)
     std::vector<uint32_t>                              m_ShadowSlotOffsets; // prefix sums [numAssets]

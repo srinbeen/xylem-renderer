@@ -3,6 +3,7 @@
 #include <donut/core/math/math.h>
 #include <sstream>
 #include <string>
+#include <algorithm>
 
 using namespace Xylem;
 
@@ -14,9 +15,6 @@ bool UIRenderer::KeyboardUpdate(int key, int scancode, int action, int mods) {
     return ImGui_Renderer::KeyboardUpdate(key, scancode, action, mods);
 }
 
-// ---------------------------------------------------------------------------
-// Top-level buildUI
-// ---------------------------------------------------------------------------
 
 void UIRenderer::buildUI() {
     if (!m_ui.ShowUI) return;
@@ -62,15 +60,20 @@ void UIRenderer::buildUI() {
     _buildAssetsSection();
     _buildRegionsSection();
 
+    if (ImGui::CollapsingHeader("Debug")) {
+        ImGui::Checkbox("Top-Down View", &m_ui.showDebugTopDown);
+        ImGui::Checkbox("Shadow Map", &m_ui.showShadowMap);
+    }
+
     ImGui::Spacing();
     if (ImGui::Button("Hide UI  [ESC]")) m_ui.ShowUI = false;
 
     ImGui::End();
+
+    _buildDebugTopDownSection();
+    _buildShadowMapSection();
 }
 
-// ---------------------------------------------------------------------------
-// L-Systems section
-// ---------------------------------------------------------------------------
 
 void UIRenderer::_buildLSystemsSection() {
     if (!ImGui::CollapsingHeader("L-Systems")) return;
@@ -133,9 +136,6 @@ void UIRenderer::_buildLSystemsSection() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Assets section
-// ---------------------------------------------------------------------------
 
 void UIRenderer::_buildAssetsSection() {
     if (!ImGui::CollapsingHeader("Tree Assets")) return;
@@ -280,9 +280,6 @@ void UIRenderer::_buildAssetsSection() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Regions section
-// ---------------------------------------------------------------------------
 
 void UIRenderer::_buildRegionsSection() {
     if (!ImGui::CollapsingHeader("Regions")) return;
@@ -454,4 +451,184 @@ void UIRenderer::_buildRegionsSection() {
 
         ImGui::Unindent();
     }
+}
+
+
+void UIRenderer::_buildDebugTopDownSection() {
+    if (!m_ui.showDebugTopDown) return;
+
+    ImGui::SetNextWindowSize(ImVec2(420, 440), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Top-Down Debug View", &m_ui.showDebugTopDown)) {
+        ImGui::End();
+        return;
+    }
+
+    const auto& regions = m_Registry->getRegions();
+    if (regions.empty()) {
+        ImGui::TextDisabled("No regions in scene.");
+        ImGui::End();
+        return;
+    }
+
+    // --- Compute scene bounding box (XZ) ---
+    dm::box3 sceneBbox = dm::box3::empty();
+    for (const auto& region : regions)
+        sceneBbox |= region.cullBox;
+    if (const auto* terrain = m_Registry->getTerrain())
+        sceneBbox |= terrain->getBbox();
+
+    float worldMinX = sceneBbox.m_mins.x;
+    float worldMaxX = sceneBbox.m_maxs.x;
+    float worldMinZ = sceneBbox.m_mins.z;
+    float worldMaxZ = sceneBbox.m_maxs.z;
+
+    float extentX = worldMaxX - worldMinX;
+    float extentZ = worldMaxZ - worldMinZ;
+    if (extentX < 1.f) extentX = 1.f;
+    if (extentZ < 1.f) extentZ = 1.f;
+
+    // 10% padding
+    float padX = extentX * 0.1f;
+    float padZ = extentZ * 0.1f;
+    worldMinX -= padX; worldMaxX += padX;
+    worldMinZ -= padZ; worldMaxZ += padZ;
+    extentX = worldMaxX - worldMinX;
+    extentZ = worldMaxZ - worldMinZ;
+
+    float worldCenterX = (worldMinX + worldMaxX) * 0.5f;
+    float worldCenterZ = (worldMinZ + worldMaxZ) * 0.5f;
+
+    // --- Canvas area ---
+    ImVec2 canvasPos  = ImGui::GetCursorScreenPos();
+    ImVec2 canvasSize = ImGui::GetContentRegionAvail();
+    if (canvasSize.x < 50.f) canvasSize.x = 50.f;
+    if (canvasSize.y < 50.f) canvasSize.y = 50.f;
+
+    // Reserve the canvas space so ImGui knows it's used
+    ImGui::InvisibleButton("##canvas", canvasSize);
+
+    float canvasCenterX = canvasPos.x + canvasSize.x * 0.5f;
+    float canvasCenterY = canvasPos.y + canvasSize.y * 0.5f;
+
+    float scale = std::min(canvasSize.x / extentX, canvasSize.y / extentZ);
+
+    // World XZ -> screen pixel
+    auto worldToScreen = [&](float wx, float wz) -> ImVec2 {
+        return ImVec2(
+            canvasCenterX + (wx - worldCenterX) * scale,
+            canvasCenterY + (wz - worldCenterZ) * scale
+        );
+    };
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    // --- Background ---
+    ImVec2 bgMin = worldToScreen(worldMinX, worldMinZ);
+    ImVec2 bgMax = worldToScreen(worldMaxX, worldMaxZ);
+    dl->AddRectFilled(bgMin, bgMax, IM_COL32(20, 20, 20, 255));
+
+    // --- Frustum for culling test ---
+    dm::frustum frust = m_ViewHandler->view.GetViewFrustum();
+
+    // --- Draw instances: culled (red) first, then visible (green) on top ---
+    const ImU32 colRegion  = IM_COL32(100,100,100, 150);
+    const ImU32 colCulled  = IM_COL32(200, 60, 60, 180);
+    const ImU32 colVisible = IM_COL32(60, 200, 60, 220);
+    const float radCulled  = 0.5f;
+    const float radVisible  = 0.75;
+
+    for (const auto& region : regions) {
+        ImVec2 rMin = worldToScreen(region.bounds.m_mins.x, region.bounds.m_mins.y);
+        ImVec2 rMax = worldToScreen(region.bounds.m_maxs.x, region.bounds.m_maxs.y);
+
+        if (!frust.intersectsWith(region.cullBox)) {
+
+            dl->AddRect(rMin, rMax, colCulled, 0.f, 0, 1.f);
+            continue;
+        }
+        else {
+            dl->AddRect(rMin, rMax, colRegion, 0.f, 0, 1.f);
+        }
+        
+        for (const auto& inst : region.instances) {
+            bool vis = frust.intersectsWith(inst.bbox);
+
+            float wx = inst.model[3][0];
+            float wz = inst.model[3][2];
+            ImVec2 sp = worldToScreen(wx, wz);
+            float  r  = vis ? radVisible : radCulled;
+            ImU32  c  = vis ? colVisible : colCulled;
+            dl->AddRectFilled(ImVec2(sp.x-r,sp.y-r), ImVec2(sp.x+r,sp.y+r), c);
+        }
+    }
+
+    // --- Camera frustum wireframe ---
+    // Corner bits: bit0=right, bit1=top, bit2=far
+    ImVec2 corners[8];
+    for (int i = 0; i < 8; i++) {
+        dm::float3 c = frust.getCorner(i);
+        corners[i] = worldToScreen(c.x, c.z);
+    }
+
+    const ImU32 frustumColor = IM_COL32(255, 255, 0, 255);
+    float thickness = 2.0f;
+
+    // Near quad: 0-1, 1-3, 3-2, 2-0
+    dl->AddLine(corners[0], corners[1], frustumColor, thickness);
+    dl->AddLine(corners[1], corners[3], frustumColor, thickness);
+    dl->AddLine(corners[3], corners[2], frustumColor, thickness);
+    dl->AddLine(corners[2], corners[0], frustumColor, thickness);
+
+    // Far quad: 4-5, 5-7, 7-6, 6-4
+    dl->AddLine(corners[4], corners[5], frustumColor, thickness);
+    dl->AddLine(corners[5], corners[7], frustumColor, thickness);
+    dl->AddLine(corners[7], corners[6], frustumColor, thickness);
+    dl->AddLine(corners[6], corners[4], frustumColor, thickness);
+
+    // Near-to-far connecting edges
+    dl->AddLine(corners[0], corners[4], frustumColor, thickness);
+    dl->AddLine(corners[1], corners[5], frustumColor, thickness);
+    dl->AddLine(corners[2], corners[6], frustumColor, thickness);
+    dl->AddLine(corners[3], corners[7], frustumColor, thickness);
+
+    // --- Camera position marker ---
+    dm::float3 camPos = m_ViewHandler->camera.GetPosition();
+    ImVec2 camScreen = worldToScreen(camPos.x, camPos.z);
+    dl->AddCircleFilled(camScreen, 5.f, IM_COL32(0, 255, 255, 255));
+
+    // --- Legend ---
+    const float legendScale = 4.f;
+    ImVec2 legendPos = ImVec2(canvasPos.x + 5.f, canvasPos.y + 5.f);
+    dl->AddRectFilled(
+        ImVec2(legendPos.x + 5.f-radVisible*legendScale, legendPos.y + 6.f-radVisible*legendScale),
+        ImVec2(legendPos.x + 5.f+radVisible*legendScale, legendPos.y + 6.f+radVisible*legendScale),
+        colVisible);
+    dl->AddText(ImVec2(legendPos.x + 14.f, legendPos.y), IM_COL32(200, 200, 200, 255), "Visible");
+    dl->AddRectFilled(
+        ImVec2(legendPos.x + 5.f-radCulled*legendScale, legendPos.y + 20.f-radCulled*legendScale), 
+        ImVec2(legendPos.x + 5.f+radCulled*legendScale, legendPos.y + 20.f+radCulled*legendScale), 
+        colCulled);
+    dl->AddText(ImVec2(legendPos.x + 14.f, legendPos.y + 14.f), IM_COL32(200, 200, 200, 255), "Culled");
+    dl->AddCircleFilled(ImVec2(legendPos.x + 5.f, legendPos.y + 34.f), 4.f, IM_COL32(0, 255, 255, 255));
+    dl->AddText(ImVec2(legendPos.x + 14.f, legendPos.y + 28.f), IM_COL32(200, 200, 200, 255), "Camera");
+
+    ImGui::End();
+}
+
+
+void UIRenderer::_buildShadowMapSection() {
+    if (!m_ui.showShadowMap || !m_ui.shadowMapTexture) return;
+
+    ImGui::SetNextWindowSize(ImVec2(300, 320), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Shadow Map", &m_ui.showShadowMap)) {
+        ImGui::End();
+        return;
+    }
+
+    float avail = ImGui::GetContentRegionAvail().x;
+    float size  = std::max(avail, 64.f);
+
+    ImGui::Image(ImTextureRef((void*)m_ui.shadowMapTexture), ImVec2(size, size));
+
+    ImGui::End();
 }

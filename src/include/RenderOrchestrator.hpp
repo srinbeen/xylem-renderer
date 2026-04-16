@@ -28,7 +28,7 @@ public:
         , m_UI{ui}
         , m_Traditional{dm, registry, ui, m_ViewHandler}
         , m_Compute{dm, registry, ui, m_ViewHandler}
-        , m_UIPass{dm, &registry, ui}
+        , m_UIPass{dm, &registry, ui, &m_ViewHandler}
     {}
 
     // Must be called before Init().

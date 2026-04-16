@@ -64,7 +64,12 @@ struct InstanceReference {
 struct CullInstanceData {
     dm::box3 bbox;
     uint32_t   baseSlot;  // treeId * numLODs
+    uint32_t   regionId;  // index into regionVisible buffer
     uint32_t   active;    // 1 = live, 0 = dead capacity slot
+};
+
+struct CullRegionData {
+    dm::box3 bbox;
 };
 
 // Extended constant buffer for compute cull pass.
@@ -78,15 +83,17 @@ struct CullConstantBufferEntry {
     dm::float3x4 _pad1;
 
     // Cull fields (read by CullCS)
-    dm::frustum  viewFrustum;              
-    dm::frustum  lightFrustum;    
+    dm::frustum  viewFrustum;
+    dm::float4x4 worldToLight;
+    dm::float3   shadowCasterMinLS;
+    float        _pad2;
+    dm::float3   shadowCasterMaxLS;
+    uint32_t     numRegions;
     dm::float3   cameraPos;
     uint32_t     totalCapacity;
     dm::float4   lodDistances[3];
     uint32_t     numLods;
-    uint32_t     numSlots;
-    uint32_t     visBufferSize;
-    uint32_t     numAssets;
+    float        _pad3[3];
 };
 
 static constexpr size_t c_CullConstantBufferSize =

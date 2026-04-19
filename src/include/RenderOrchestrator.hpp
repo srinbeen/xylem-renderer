@@ -10,7 +10,7 @@
 #include "SceneRegistry.hpp"
 #include "ViewHandler.hpp"
 #include "TraditionalRenderPass.hpp"
-#include "ComputeCullRenderPass.hpp"
+#include "ComputeRenderPass.hpp"
 #include "UIRenderer.hpp"
 
 namespace Xylem {
@@ -56,7 +56,7 @@ private:
 
     ViewHandler             m_ViewHandler;
     TraditionalRenderPass   m_Traditional;
-    ComputeCullRenderPass   m_Compute;
+    ComputeRenderPass       m_Compute;
     UIRenderer              m_UIPass;
 
     std::shared_ptr<engine::ShaderFactory> m_ShaderFactory;

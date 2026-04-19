@@ -1,5 +1,5 @@
-#ifndef XYLEM_COMPUTE_CULL_RENDER_PASS_H
-#define XYLEM_COMPUTE_CULL_RENDER_PASS_H
+#ifndef XYLEM_COMPUTE_RENDER_PASS_H
+#define XYLEM_COMPUTE_RENDER_PASS_H
 
 #include <donut/app/ApplicationBase.h>
 #include <donut/app/Camera.h>
@@ -22,18 +22,18 @@ namespace Xylem {
 
 using namespace donut;
 
-class ComputeCullRenderPass : public app::IRenderPass {
+class ComputeRenderPass : public app::IRenderPass {
 public:
     static constexpr uint32_t k_QueuedFrames  = 3;
     static constexpr uint32_t k_ShadowRes     = 2048;
     static constexpr float    k_CapacitySlack = 1.5f;
 
-    ComputeCullRenderPass(app::DeviceManager* dm, SceneRegistry& registry, UIData& ui, ViewHandler& vh)
+    ComputeRenderPass(app::DeviceManager* dm, SceneRegistry& registry, UIData& ui, ViewHandler& vh)
         : IRenderPass{dm}, m_Registry{registry}, m_UI{ui}, m_ViewHandler{vh} {}
 
     void SetShaderFactory(std::shared_ptr<engine::ShaderFactory> sf) { m_ShaderFactory = std::move(sf); }
 
-    ~ComputeCullRenderPass();
+    ~ComputeRenderPass();
     bool Init();
     void Animate(float seconds) override;
     void BackBufferResizing() override;

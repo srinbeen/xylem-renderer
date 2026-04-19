@@ -1,4 +1,4 @@
-#include "include/ComputeCullRenderPass.hpp"
+#include "include/ComputeRenderPass.hpp"
 #include "include/Globals.hpp"
 #include "include/macros.h"
 #include "include/Terrain.hpp"
@@ -23,7 +23,7 @@ using namespace Xylem;
 // GPU asset upload helpers (identical to P0)
 // ===========================================================================
 
-void ComputeCullRenderPass::_UploadAsset(
+void ComputeRenderPass::_UploadAsset(
     const TreeAssetDef& assetDef,
     GPUTreeAsset& gpuAsset,
     nvrhi::IDevice* device,
@@ -73,7 +73,7 @@ void ComputeCullRenderPass::_UploadAsset(
     }
 }
 
-void ComputeCullRenderPass::_UploadAllAssets(nvrhi::IDevice* device, nvrhi::ICommandList* commandList) {
+void ComputeRenderPass::_UploadAllAssets(nvrhi::IDevice* device, nvrhi::ICommandList* commandList) {
     const auto& assets = m_Registry.getAssets();
     m_GPUAssets.resize(assets.size());
     m_AssetIdToGPUIndex.clear();
@@ -88,7 +88,7 @@ void ComputeCullRenderPass::_UploadAllAssets(nvrhi::IDevice* device, nvrhi::ICom
 // Region windows — gapped persistent buffer layout
 // ===========================================================================
 
-void ComputeCullRenderPass::_BuildRegionWindows() {
+void ComputeRenderPass::_BuildRegionWindows() {
     const auto& regions = m_Registry.getRegions();
     m_RegionWindows.resize(regions.size());
     m_TotalCapacity = 0;
@@ -144,7 +144,7 @@ void ComputeCullRenderPass::_BuildRegionWindows() {
 // Slot layout — compute slot offsets and visibility buffer sizing
 // ===========================================================================
 
-void ComputeCullRenderPass::_BuildSlotLayout() {
+void ComputeRenderPass::_BuildSlotLayout() {
     const uint32_t numLods   = static_cast<uint32_t>(m_Registry.getLodSegments().size());
     const uint32_t numAssets = static_cast<uint32_t>(m_GPUAssets.size());
 
@@ -229,7 +229,7 @@ void ComputeCullRenderPass::_BuildSlotLayout() {
 // Upload cull buffers to GPU
 // ===========================================================================
 
-void ComputeCullRenderPass::_UploadCullBuffers(nvrhi::ICommandList* commandList) {
+void ComputeRenderPass::_UploadCullBuffers(nvrhi::ICommandList* commandList) {
     auto device = GetDevice();
     const uint32_t numRegions = static_cast<uint32_t>(m_Registry.getRegions().size());
 
@@ -409,7 +409,7 @@ void ComputeCullRenderPass::_UploadCullBuffers(nvrhi::ICommandList* commandList)
 // Rebuild cull binding sets
 // ===========================================================================
 
-void ComputeCullRenderPass::_RebuildCullBindings() {
+void ComputeRenderPass::_RebuildCullBindings() {
     auto device = GetDevice();
 
     // Cull compute binding set
@@ -479,7 +479,7 @@ void ComputeCullRenderPass::_RebuildCullBindings() {
 // Ensure Hi-Z resources exist at the given resolution (lazy init / resize)
 // ===========================================================================
 
-void ComputeCullRenderPass::_EnsureHiZResources(uint32_t width, uint32_t height) {
+void ComputeRenderPass::_EnsureHiZResources(uint32_t width, uint32_t height) {
     // Skip if already at the right size
     if (m_DepthPrepass.depthTexture) {
         auto desc = m_DepthPrepass.depthTexture->getDesc();
@@ -606,7 +606,7 @@ void ComputeCullRenderPass::_EnsureHiZResources(uint32_t width, uint32_t height)
 // Depth prepass — draw last frame's visible set depth-only
 // ===========================================================================
 
-void ComputeCullRenderPass::_RenderDepthPrepass() {
+void ComputeRenderPass::_RenderDepthPrepass() {
     const uint32_t numLods = static_cast<uint32_t>(m_Registry.getLodSegments().size());
 
     // Clear depth to far plane
@@ -696,7 +696,7 @@ void ComputeCullRenderPass::_RenderDepthPrepass() {
 // Build Hi-Z mip chain from depth prepass
 // ===========================================================================
 
-void ComputeCullRenderPass::_BuildHiZMipChain() {
+void ComputeRenderPass::_BuildHiZMipChain() {
     auto desc = m_DepthPrepass.depthTexture->getDesc();
     uint32_t w = desc.width;
     uint32_t h = desc.height;
@@ -767,7 +767,7 @@ namespace {
     };
 }
 
-void ComputeCullRenderPass::_ComputeRegionEnvelope(const dm::frustum& viewFrustum,
+void ComputeRenderPass::_ComputeRegionEnvelope(const dm::frustum& viewFrustum,
                                                     const dm::float3& camPos,
                                                     const dm::float3& camDir,
                                                     float& outNearZ, float& outFarZ) const {
@@ -794,7 +794,7 @@ void ComputeCullRenderPass::_ComputeRegionEnvelope(const dm::frustum& viewFrustu
     outFarZ  = dm::max(outFarZ,  outNearZ + 1.f);
 }
 
-void ComputeCullRenderPass::_RunSDSMBuildCascades(const dm::box3& sceneBbox,
+void ComputeRenderPass::_RunSDSMBuildCascades(const dm::box3& sceneBbox,
                                                    float aspectRatio, float fovY,
                                                    float regionEnvelopeNear,
                                                    float regionEnvelopeFar) {
@@ -867,7 +867,7 @@ void ComputeCullRenderPass::_RunSDSMBuildCascades(const dm::box3& sceneBbox,
 // Destructor
 // ===========================================================================
 
-ComputeCullRenderPass::~ComputeCullRenderPass() {
+ComputeRenderPass::~ComputeRenderPass() {
     
 }
 
@@ -875,7 +875,7 @@ ComputeCullRenderPass::~ComputeCullRenderPass() {
 // Init
 // ===========================================================================
 
-bool ComputeCullRenderPass::Init() {
+bool ComputeRenderPass::Init() {
     engine::CommonRenderPasses commonPasses(GetDevice(), m_ShaderFactory);
 
     {
@@ -916,7 +916,7 @@ bool ComputeCullRenderPass::Init() {
 // Animate
 // ===========================================================================
 
-void ComputeCullRenderPass::Animate(float seconds) {
+void ComputeRenderPass::Animate(float seconds) {
     GetDeviceManager()->SetInformativeWindowTitle(g_WindowTitle);
 
     if (!m_Registry.anyDirty()) return;
@@ -933,7 +933,7 @@ void ComputeCullRenderPass::Animate(float seconds) {
     m_Registry.clearDirtyFlags();
 }
 
-void ComputeCullRenderPass::BackBufferResizing() {
+void ComputeRenderPass::BackBufferResizing() {
     m_TreePass.pipeline          = nullptr;
     m_TerrainPass.pipeline       = nullptr;
     m_ShadowPass.treePipeline    = nullptr;
@@ -957,7 +957,7 @@ void ComputeCullRenderPass::BackBufferResizing() {
 // Hot-reload callbacks
 // ===========================================================================
 
-void ComputeCullRenderPass::onAssetsDirty(const std::vector<size_t>& dirtyAssetIndices) {
+void ComputeRenderPass::onAssetsDirty(const std::vector<size_t>& dirtyAssetIndices) {
     nvrhi::CommandListHandle cl = GetDevice()->createCommandList();
     cl->open();
 
@@ -992,7 +992,7 @@ void ComputeCullRenderPass::onAssetsDirty(const std::vector<size_t>& dirtyAssetI
     GetDevice()->executeCommandList(cl);
 }
 
-void ComputeCullRenderPass::onRegionsDirty(const std::vector<size_t>& /*dirtyRegionIndices*/) {
+void ComputeRenderPass::onRegionsDirty(const std::vector<size_t>& /*dirtyRegionIndices*/) {
     nvrhi::CommandListHandle cl = GetDevice()->createCommandList();
     cl->open();
 
@@ -1011,7 +1011,7 @@ void ComputeCullRenderPass::onRegionsDirty(const std::vector<size_t>& /*dirtyReg
 // Render
 // ===========================================================================
 
-void ComputeCullRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
+void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_UI.shadowMapTexture = m_ShadowPass.depthTexture.Get();
     m_UI.shadowCascadeTextures.resize(Render::c_NumCascades);
     for (uint32_t c = 0; c < Render::c_NumCascades; c++)
@@ -1289,7 +1289,7 @@ void ComputeCullRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
 // Sky pass (identical to P0)
 // ===========================================================================
 
-void ComputeCullRenderPass::_RenderSkyPass(nvrhi::IFramebuffer* framebuffer) {
+void ComputeRenderPass::_RenderSkyPass(nvrhi::IFramebuffer* framebuffer) {
     if (!m_SkyPass.pipeline) {
         nvrhi::GraphicsPipelineDesc pso;
         pso.VS             = m_SkyPass.vertexShader;
@@ -1346,7 +1346,7 @@ void ComputeCullRenderPass::_RenderSkyPass(nvrhi::IFramebuffer* framebuffer) {
 // Shadow pass — GPU cull results, visibility buffer indirection in VS
 // ===========================================================================
 
-void ComputeCullRenderPass::_RenderShadowPass() {
+void ComputeRenderPass::_RenderShadowPass() {
     if (m_ViewHandler.shadowCasterBboxLS.isempty())
         return;
 
@@ -1455,7 +1455,7 @@ void ComputeCullRenderPass::_RenderShadowPass() {
 // Scene pass — GPU cull results, visibility buffer indirection in VS
 // ===========================================================================
 
-void ComputeCullRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
+void ComputeRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
     const nvrhi::FramebufferInfoEx& fbinfo = framebuffer->getFramebufferInfo();
     const uint32_t numLods = static_cast<uint32_t>(m_Registry.getLodSegments().size());
 
@@ -1545,7 +1545,7 @@ void ComputeCullRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
 // Init helpers
 // ===========================================================================
 
-bool ComputeCullRenderPass::_InitShared() {
+bool ComputeRenderPass::_InitShared() {
     m_Shared.constantBuffer = GetDevice()->createBuffer(
         nvrhi::BufferDesc()
             .setByteSize(Render::c_CullConstantBufferSize)
@@ -1556,7 +1556,7 @@ bool ComputeCullRenderPass::_InitShared() {
     return !!m_Shared.constantBuffer;
 }
 
-bool ComputeCullRenderPass::_InitCullPass(nvrhi::ICommandList* /*initCL*/) {
+bool ComputeRenderPass::_InitCullPass(nvrhi::ICommandList* /*initCL*/) {
     // Create compute shaders
     m_CullPass.mainCS = m_ShaderFactory->CreateShader(
         "app/CullCS.hlsl", "CullMain", nullptr, nvrhi::ShaderType::Compute);
@@ -1612,11 +1612,11 @@ bool ComputeCullRenderPass::_InitCullPass(nvrhi::ICommandList* /*initCL*/) {
     return true;
 }
 
-bool ComputeCullRenderPass::_InitTreePass(nvrhi::ICommandList* initCL, engine::CommonRenderPasses& commonPasses) {
+bool ComputeRenderPass::_InitTreePass(nvrhi::ICommandList* initCL, engine::CommonRenderPasses& commonPasses) {
     m_TreePass.vertexShader = m_ShaderFactory->CreateShader(
-        "app/ComputeCullRenderPass.hlsl", "main_vs", nullptr, nvrhi::ShaderType::Vertex);
+        "app/ComputeRenderPass.hlsl", "main_vs", nullptr, nvrhi::ShaderType::Vertex);
     m_TreePass.pixelShader  = m_ShaderFactory->CreateShader(
-        "app/ComputeCullRenderPass.hlsl", "main_ps", nullptr, nvrhi::ShaderType::Pixel);
+        "app/ComputeRenderPass.hlsl", "main_ps", nullptr, nvrhi::ShaderType::Pixel);
     if (!m_TreePass.vertexShader || !m_TreePass.pixelShader) return false;
 
     nvrhi::VertexAttributeDesc attributes[] = {
@@ -1712,13 +1712,13 @@ bool ComputeCullRenderPass::_InitTreePass(nvrhi::ICommandList* initCL, engine::C
     return true;
 }
 
-// bool ComputeCullRenderPass::_InitTimerQueries() {
+// bool ComputeRenderPass::_InitTimerQueries() {
 //     for (uint32_t i = 0; i < k_QueuedFrames; i++)
 //         m_GpuTimers[i] = GetDevice()->createTimerQuery();
 //     return true;
 // }
 
-bool ComputeCullRenderPass::_InitShadowPass() {
+bool ComputeRenderPass::_InitShadowPass() {
     m_ShadowPass.depthTexture = GetDevice()->createTexture(
         nvrhi::TextureDesc()
             .setWidth(k_ShadowRes).setHeight(k_ShadowRes)
@@ -1812,7 +1812,7 @@ bool ComputeCullRenderPass::_InitShadowPass() {
     return true;
 }
 
-bool ComputeCullRenderPass::_InitTerrainPass(nvrhi::ICommandList* initCL) {
+bool ComputeRenderPass::_InitTerrainPass(nvrhi::ICommandList* initCL) {
     const auto* terrain = m_Registry.getTerrain();
     if (!terrain) return true;
 
@@ -1884,7 +1884,7 @@ bool ComputeCullRenderPass::_InitTerrainPass(nvrhi::ICommandList* initCL) {
     return true;
 }
 
-bool ComputeCullRenderPass::_InitHiZShaders() {
+bool ComputeRenderPass::_InitHiZShaders() {
     auto device = GetDevice();
 
     // --- Depth prepass shaders ---
@@ -2000,7 +2000,7 @@ bool ComputeCullRenderPass::_InitHiZShaders() {
     return true;
 }
 
-bool ComputeCullRenderPass::_InitSDSMPass() {
+bool ComputeRenderPass::_InitSDSMPass() {
     auto device = GetDevice();
 
     m_SDSM.buildCS = m_ShaderFactory->CreateShader(
@@ -2060,7 +2060,7 @@ bool ComputeCullRenderPass::_InitSDSMPass() {
     return true;
 }
 
-bool ComputeCullRenderPass::_InitSkyPass() {
+bool ComputeRenderPass::_InitSkyPass() {
     m_SkyPass.vertexShader = m_ShaderFactory->CreateShader("app/sky.hlsl", "sky_vs", nullptr, nvrhi::ShaderType::Vertex);
     m_SkyPass.pixelShader  = m_ShaderFactory->CreateShader("app/sky.hlsl", "sky_ps", nullptr, nvrhi::ShaderType::Pixel);
     if (!m_SkyPass.vertexShader || !m_SkyPass.pixelShader) return false;

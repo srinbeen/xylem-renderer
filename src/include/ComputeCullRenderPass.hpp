@@ -153,7 +153,9 @@ private:
     };
 
     struct HiZPassResources {
-        nvrhi::TextureHandle                   hizTexture;         // R32_FLOAT, mipchain, UAV
+        nvrhi::TextureHandle                   hizTexture;         // RG32_FLOAT, mipchain, UAV.
+                                                                    // .r = farthest (Hi-Z occlusion)
+                                                                    // .g = nearest  (SDSM extrema)
         uint32_t                               numMips = 0;
         nvrhi::ShaderHandle                    copyCS;             // HiZCopy
         nvrhi::ShaderHandle                    buildCS;            // HiZDownsample
@@ -162,8 +164,18 @@ private:
         nvrhi::BindingLayoutHandle             buildBindingLayout; // PushConstants(0) + SRV(0) + UAV(0)
         std::vector<nvrhi::BindingSetHandle>   buildBindingSets;   // one per mip transition
         nvrhi::SamplerHandle                   pointSampler;       // point/clamp for cull shader
-        // Debug view: one single-mip R32_FLOAT texture per mip level, GPU-copied for ImGui display
+        // Debug view: one single-mip RG32_FLOAT texture per mip level, GPU-copied for ImGui display
         std::vector<nvrhi::TextureHandle>      debugMipTextures;
+    };
+
+    // SDSM: GPU-side cascade construction from reduced depth bounds.
+    struct SDSMPassResources {
+        nvrhi::ShaderHandle                    buildCS;
+        nvrhi::ComputePipelineHandle           buildPipeline;
+        nvrhi::BindingLayoutHandle             buildBindingLayout; // CB(0) + SRV(0 hiz) + UAV(0 out)
+        nvrhi::BindingSetHandle                buildBindingSet;
+        nvrhi::BufferHandle                    inputCB;            // SDSMInput (CPU-written each frame)
+        nvrhi::BufferHandle                    cascadeDataBuffer;  // UAV, copied into main CB
     };
 
     // -----------------------------------------------------------------------
@@ -177,6 +189,7 @@ private:
     SkyPassResources                                   m_SkyPass;
     DepthPrepassResources                              m_DepthPrepass;
     HiZPassResources                                   m_HiZ;
+    SDSMPassResources                                  m_SDSM;
 
     nvrhi::CommandListHandle                           m_CommandList;
     ViewHandler&                                       m_ViewHandler;
@@ -229,6 +242,7 @@ private:
     bool _InitTerrainPass(nvrhi::ICommandList* initCL);
     bool _InitSkyPass();
     bool _InitHiZShaders();
+    bool _InitSDSMPass();
     // bool _InitTimerQueries();
 
     void _UploadAllAssets(nvrhi::IDevice* device, nvrhi::ICommandList* commandList);
@@ -245,6 +259,11 @@ private:
     void _EnsureHiZResources(uint32_t width, uint32_t height);
     void _RenderDepthPrepass();
     void _BuildHiZMipChain();
+    void _RunSDSMBuildCascades(const dm::box3& sceneBbox, float aspectRatio, float fovY,
+                               float regionEnvelopeNear, float regionEnvelopeFar);
+    void _ComputeRegionEnvelope(const dm::frustum& viewFrustum,
+                                const dm::float3& camPos, const dm::float3& camDir,
+                                float& outNearZ, float& outFarZ) const;
     void _RenderSkyPass(nvrhi::IFramebuffer* framebuffer);
     void _RenderShadowPass();
     void _RenderScenePass(nvrhi::IFramebuffer* framebuffer);

@@ -28,7 +28,7 @@ struct ViewHandler {
 
     void computeCascades(const dm::box3& sceneBbox, dm::float3 sunDirection,
                          float nearPlane, float farPlane, float aspectRatio, float fovY,
-                         uint32_t shadowRes);
+                         uint32_t shadowRes, float pssmLambda);
 
     uint32_t distToLOD(float value, const std::vector<float>& arr) {
         auto it = std::lower_bound(arr.begin(), arr.end(), value);

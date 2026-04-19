@@ -262,15 +262,22 @@ void TraditionalRenderPass::onRegionsDirty(const std::vector<size_t>& /*dirtyReg
 // ===========================================================================
 
 void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
+    // get debug textures before starting the timer
     m_UI.shadowMapTexture = m_ShadowPass.depthTexture.Get();
     m_UI.shadowCascadeTextures.resize(Render::c_NumCascades);
     for (uint32_t c = 0; c < Render::c_NumCascades; c++)
         m_UI.shadowCascadeTextures[c] = m_ShadowPass.cascadeDebugTextures[c].Get();
 
+
     app::HiResTimer cpuTimer;
     cpuTimer.Start();
 
     const nvrhi::FramebufferInfoEx& fbinfo = framebuffer->getFramebufferInfo();
+    constexpr float zNear = 0.1f;
+    constexpr float zFar = 1000.0f;
+    constexpr float vertFOV = 60.0f;
+    const float vertFOVRad = dm::radians(vertFOV);
+    float aspectRatio = float(fbinfo.width) / float(fbinfo.height);
 
     // when window changes size
     if (!m_TreePass.pipeline) {
@@ -278,16 +285,16 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         m_ViewHandler.view.SetProjectionMatrix(
         #if XYLEM_USE_REVERSE_Z
             dm::perspProjD3DStyleReverse(
-                dm::radians(60.f),
-                float(fbinfo.width)/float(fbinfo.height),
-                0.1f
+                vertFOVRad,
+                aspectRatio,
+                zNear
             )
         #else
             dm::perspProjD3DStyle(
-                dm::radians(60.f),
-                float(fbinfo.width)/float(fbinfo.height),
-                0.1f,
-                1000.0f
+                vertFOVRad,
+                aspectRatio,
+                zNear,
+                zFar
             )
         #endif
         );
@@ -329,9 +336,15 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     // looking away
     maxShadowDist = dm::max(maxShadowDist, 1.f);
 
-    float aspectRatio = float(fbinfo.width) / float(fbinfo.height);
-    m_ViewHandler.computeCascades(sceneBbox, m_Registry.getSunDirection(),
-        0.1f, maxShadowDist, aspectRatio, dm::radians(60.f), m_ShadowRes);
+    m_ViewHandler.computeCascades(
+        sceneBbox,
+        m_Registry.getSunDirection(),
+        zNear,
+        maxShadowDist,
+        aspectRatio,
+        vertFOVRad,
+        m_ShadowRes,
+        m_UI.pssmLambda);
 
     Render::ConstantBufferEntry constants{};
     constants.viewProj  = m_ViewHandler.view.GetViewProjectionMatrix();
@@ -523,6 +536,7 @@ void TraditionalRenderPass::_RenderShadowPass() {
             const auto* assetDef = m_Registry.findAsset(inst.assetId);
             if (!assetDef || !assetDef->visible) continue;
 
+            // imgui visibility check -- remove?
             auto visIt = region.assetVisible.find(inst.assetId);
             if (visIt != region.assetVisible.end() && !visIt->second) continue;
 

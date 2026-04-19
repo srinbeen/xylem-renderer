@@ -512,13 +512,13 @@ void ComputeCullRenderPass::_EnsureHiZResources(uint32_t width, uint32_t height)
     m_DepthPrepass.treePipeline    = nullptr;
     m_DepthPrepass.terrainPipeline = nullptr;
 
-    // --- Hi-Z texture with full mip chain ---
+    // --- Hi-Z texture with full mip chain (RG32: .r=farthest for Hi-Z, .g=nearest for SDSM) ---
     m_HiZ.numMips = static_cast<uint32_t>(std::floor(std::log2(std::max(width, height)))) + 1;
     m_HiZ.hizTexture = device->createTexture(
         nvrhi::TextureDesc()
             .setWidth(width).setHeight(height)
             .setMipLevels(m_HiZ.numMips)
-            .setFormat(nvrhi::Format::R32_FLOAT)
+            .setFormat(nvrhi::Format::RG32_FLOAT)
             .setIsUAV(true)
             .setInitialState(nvrhi::ResourceStates::ShaderResource)
             .setKeepInitialState(true)
@@ -528,7 +528,8 @@ void ComputeCullRenderPass::_EnsureHiZResources(uint32_t width, uint32_t height)
     // --- Per-mip binding sets for Hi-Z build ---
     m_HiZ.buildBindingSets.resize(m_HiZ.numMips);
 
-    // Set 0: copy from depth prepass (D32 read as R32_FLOAT) -> Hi-Z mip 0
+    // Set 0: copy from depth prepass (D32 read as R32_FLOAT) -> Hi-Z mip 0 (RG32)
+    // Shader seeds both channels from the single-channel source.
     {
         nvrhi::BindingSetDesc bsd;
         bsd.bindings = {
@@ -537,28 +538,28 @@ void ComputeCullRenderPass::_EnsureHiZResources(uint32_t width, uint32_t height)
                 nvrhi::Format::R32_FLOAT,
                 nvrhi::TextureSubresourceSet(0, 1, 0, 1)),
             nvrhi::BindingSetItem::Texture_UAV(0, m_HiZ.hizTexture,
-                nvrhi::Format::R32_FLOAT,
+                nvrhi::Format::RG32_FLOAT,
                 nvrhi::TextureSubresourceSet(0, 1, 0, 1)),
         };
         m_HiZ.buildBindingSets[0] = device->createBindingSet(bsd, m_HiZ.buildBindingLayout);
     }
 
-    // Sets 1..N-1: downsample mip i-1 -> mip i
+    // Sets 1..N-1: downsample mip i-1 -> mip i (both RG32)
     for (uint32_t mip = 1; mip < m_HiZ.numMips; mip++) {
         nvrhi::BindingSetDesc bsd;
         bsd.bindings = {
             nvrhi::BindingSetItem::PushConstants(0, sizeof(uint32_t) * 2),
             nvrhi::BindingSetItem::Texture_SRV(0, m_HiZ.hizTexture,
-                nvrhi::Format::R32_FLOAT,
+                nvrhi::Format::RG32_FLOAT,
                 nvrhi::TextureSubresourceSet(mip - 1, 1, 0, 1)),
             nvrhi::BindingSetItem::Texture_UAV(0, m_HiZ.hizTexture,
-                nvrhi::Format::R32_FLOAT,
+                nvrhi::Format::RG32_FLOAT,
                 nvrhi::TextureSubresourceSet(mip, 1, 0, 1)),
         };
         m_HiZ.buildBindingSets[mip] = device->createBindingSet(bsd, m_HiZ.buildBindingLayout);
     }
 
-    // --- Per-mip debug view textures (single-mip, R32_FLOAT, for ImGui display) ---
+    // --- Per-mip debug view textures (single-mip, RG32_FLOAT, for ImGui display) ---
     m_HiZ.debugMipTextures.resize(m_HiZ.numMips);
     for (uint32_t mip = 0; mip < m_HiZ.numMips; mip++) {
         uint32_t mipW = std::max(1u, width  >> mip);
@@ -567,7 +568,7 @@ void ComputeCullRenderPass::_EnsureHiZResources(uint32_t width, uint32_t height)
             nvrhi::TextureDesc()
                 .setWidth(mipW).setHeight(mipH)
                 .setMipLevels(1)
-                .setFormat(nvrhi::Format::R32_FLOAT)
+                .setFormat(nvrhi::Format::RG32_FLOAT)
                 .setInitialState(nvrhi::ResourceStates::ShaderResource)
                 .setKeepInitialState(true)
                 .setDebugName(("HiZ_Debug_Mip" + std::to_string(mip)).c_str())
@@ -588,6 +589,17 @@ void ComputeCullRenderPass::_EnsureHiZResources(uint32_t width, uint32_t height)
 
     // Rebuild cull binding set to reference the new Hi-Z texture
     _RebuildCullBindings();
+
+    // Rebuild SDSM binding set (reads top mip of Hi-Z texture)
+    if (m_SDSM.buildBindingLayout) {
+        nvrhi::BindingSetDesc bsd;
+        bsd.bindings = {
+            nvrhi::BindingSetItem::ConstantBuffer(0, m_SDSM.inputCB),
+            nvrhi::BindingSetItem::Texture_SRV(0, m_HiZ.hizTexture),
+            nvrhi::BindingSetItem::StructuredBuffer_UAV(0, m_SDSM.cascadeDataBuffer),
+        };
+        m_SDSM.buildBindingSet = device->createBindingSet(bsd, m_SDSM.buildBindingLayout);
+    }
 }
 
 // ===========================================================================
@@ -725,6 +737,133 @@ void ComputeCullRenderPass::_BuildHiZMipChain() {
 }
 
 // ===========================================================================
+// SDSM — GPU cascade construction
+// ===========================================================================
+
+namespace {
+    struct SDSMInput {
+        dm::float4x4 worldToLight;
+        dm::float4x4 viewToWorldToLight;
+        dm::float4   sceneBboxMinLS;
+        dm::float4   sceneBboxMaxLS;
+        float        tanHalfFovX;
+        float        tanHalfFovY;
+        float        projA;
+        float        projB;
+        float        regionEnvelopeNear;
+        float        regionEnvelopeFar;
+        float        cameraNearPlane;
+        uint32_t     shadowRes;
+        uint32_t     maxHiZMip;
+        float        pssmLambda;
+        float        _pad[2];
+    };
+
+    struct SDSMCascadeOut {
+        dm::float4x4 lightViewProj[Render::c_NumCascades];
+        dm::float4   cascadeSplits;
+        dm::float4   shadowCasterMinLS[Render::c_NumCascades];
+        dm::float4   shadowCasterMaxLS[Render::c_NumCascades];
+    };
+}
+
+void ComputeCullRenderPass::_ComputeRegionEnvelope(const dm::frustum& viewFrustum,
+                                                    const dm::float3& camPos,
+                                                    const dm::float3& camDir,
+                                                    float& outNearZ, float& outFarZ) const {
+    outNearZ = std::numeric_limits<float>::max();
+    outFarZ  = std::numeric_limits<float>::lowest();
+    bool any = false;
+
+    for (const auto& region : m_Registry.getRegions()) {
+        if (!viewFrustum.intersectsWith(region.cullBox)) continue;
+        for (int i = 0; i < dm::box3::numCorners; i++) {
+            dm::float3 corner = region.cullBox.getCorner(i);
+            float vsZ = dm::dot(corner - camPos, camDir);
+            outNearZ = dm::min(outNearZ, vsZ);
+            outFarZ  = dm::max(outFarZ,  vsZ);
+            any = true;
+        }
+    }
+
+    if (!any) {
+        outNearZ = 0.1f;
+        outFarZ  = 1.f;
+    }
+    outNearZ = dm::max(outNearZ, 0.1f);
+    outFarZ  = dm::max(outFarZ,  outNearZ + 1.f);
+}
+
+void ComputeCullRenderPass::_RunSDSMBuildCascades(const dm::box3& sceneBbox,
+                                                   float aspectRatio, float fovY,
+                                                   float regionEnvelopeNear,
+                                                   float regionEnvelopeFar) {
+    // Pack invariants into SDSMInput CB
+    SDSMInput input{};
+
+    dm::affine3 worldToLightAff = m_ViewHandler.worldToLight;
+    dm::affine3 viewToWorldToLightAff = m_ViewHandler.view.GetInverseViewMatrix() * worldToLightAff;
+
+    input.worldToLight       = dm::affineToHomogeneous(worldToLightAff);
+    input.viewToWorldToLight = dm::affineToHomogeneous(viewToWorldToLightAff);
+
+    dm::box3 sceneBboxLS = sceneBbox * worldToLightAff;
+    input.sceneBboxMinLS = dm::float4(sceneBboxLS.m_mins, 0.f);
+    input.sceneBboxMaxLS = dm::float4(sceneBboxLS.m_maxs, 0.f);
+
+    float tanHalfFovY = std::tanf(fovY * 0.5f);
+    input.tanHalfFovX = tanHalfFovY * aspectRatio;
+    input.tanHalfFovY = tanHalfFovY;
+
+    // Depth -> viewZ conversion: viewZ = projB / (depth - projA)
+    dm::float4x4 proj = m_ViewHandler.view.GetProjectionMatrix();
+    input.projA = proj.m_data[2 * 4 + 2];  // proj[2][2]
+    input.projB = proj.m_data[3 * 4 + 2];  // proj[3][2]
+
+    input.regionEnvelopeNear = regionEnvelopeNear;
+    input.regionEnvelopeFar  = regionEnvelopeFar;
+    input.cameraNearPlane    = 0.1f;
+    input.shadowRes          = k_ShadowRes;
+    input.maxHiZMip          = (m_HiZ.numMips > 0) ? (m_HiZ.numMips - 1) : 0;
+    input.pssmLambda         = m_UI.pssmLambda;
+
+    m_CommandList->writeBuffer(m_SDSM.inputCB, &input, sizeof(SDSMInput));
+
+    // Dispatch — one threadgroup, NUM_CASCADES threads
+    {
+        nvrhi::ComputeState cs;
+        cs.pipeline = m_SDSM.buildPipeline;
+        cs.bindings = { m_SDSM.buildBindingSet };
+        m_CommandList->setComputeState(cs);
+        m_CommandList->dispatch(1, 1, 1);
+    }
+
+    // Copy cascade fields into the main CB at their CullConstantBufferEntry offsets.
+    constexpr size_t kOffLightViewProj     = offsetof(Render::CullConstantBufferEntry, lightViewProj);
+    constexpr size_t kOffCascadeSplits     = offsetof(Render::CullConstantBufferEntry, cascadeSplits);
+    constexpr size_t kOffShadowCasterMin   = offsetof(Render::CullConstantBufferEntry, shadowCasterMinLS);
+    constexpr size_t kOffShadowCasterMax   = offsetof(Render::CullConstantBufferEntry, shadowCasterMaxLS);
+
+    constexpr size_t kSrcLightViewProj     = offsetof(SDSMCascadeOut, lightViewProj);
+    constexpr size_t kSrcCascadeSplits     = offsetof(SDSMCascadeOut, cascadeSplits);
+    constexpr size_t kSrcShadowCasterMin   = offsetof(SDSMCascadeOut, shadowCasterMinLS);
+    constexpr size_t kSrcShadowCasterMax   = offsetof(SDSMCascadeOut, shadowCasterMaxLS);
+
+    m_CommandList->copyBuffer(m_Shared.constantBuffer, kOffLightViewProj,
+                              m_SDSM.cascadeDataBuffer, kSrcLightViewProj,
+                              sizeof(dm::float4x4) * Render::c_NumCascades);
+    m_CommandList->copyBuffer(m_Shared.constantBuffer, kOffCascadeSplits,
+                              m_SDSM.cascadeDataBuffer, kSrcCascadeSplits,
+                              sizeof(dm::float4));
+    m_CommandList->copyBuffer(m_Shared.constantBuffer, kOffShadowCasterMin,
+                              m_SDSM.cascadeDataBuffer, kSrcShadowCasterMin,
+                              sizeof(dm::float4) * Render::c_NumCascades);
+    m_CommandList->copyBuffer(m_Shared.constantBuffer, kOffShadowCasterMax,
+                              m_SDSM.cascadeDataBuffer, kSrcShadowCasterMax,
+                              sizeof(dm::float4) * Render::c_NumCascades);
+}
+
+// ===========================================================================
 // Destructor
 // ===========================================================================
 
@@ -751,6 +890,7 @@ bool ComputeCullRenderPass::Init() {
         if (!_InitTerrainPass(initCL))                     return false;
         if (!_InitSkyPass())                               return false;
         if (!_InitHiZShaders())                            return false;
+        if (!_InitSDSMPass())                              return false;
 
         _BuildRegionWindows();
         _BuildSlotLayout();
@@ -943,7 +1083,7 @@ void ComputeCullRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
 
     float aspectRatio = float(fbinfo.width) / float(fbinfo.height);
     m_ViewHandler.computeCascades(sceneBbox, m_Registry.getSunDirection(),
-        0.1f, maxShadowDist, aspectRatio, dm::radians(60.f), k_ShadowRes);
+        0.1f, maxShadowDist, aspectRatio, dm::radians(60.f), k_ShadowRes, m_UI.pssmLambda);
 
     // --- Fill CullConstantBufferEntry ---
     Render::CullConstantBufferEntry constants{};
@@ -1006,6 +1146,15 @@ void ComputeCullRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         m_CommandList->endMarker();
 
         m_CommandList->endMarker(); // HiZ
+
+        // SDSM — GPU replaces cascade fields in the shared CB from the reduced depth.
+        m_CommandList->beginMarker("SDSM");
+        float regionNear, regionFar;
+        _ComputeRegionEnvelope(m_ViewHandler.view.GetViewFrustum(), camPos, camDir,
+                               regionNear, regionFar);
+        _RunSDSMBuildCascades(sceneBbox, aspectRatio, dm::radians(60.f),
+                              regionNear, regionFar);
+        m_CommandList->endMarker();
     }
 
     // --- GPU Cull Dispatch ---
@@ -1840,13 +1989,73 @@ bool ComputeCullRenderPass::_InitHiZShaders() {
         nvrhi::TextureDesc()
             .setWidth(1).setHeight(1)
             .setMipLevels(1)
-            .setFormat(nvrhi::Format::R32_FLOAT)
+            .setFormat(nvrhi::Format::RG32_FLOAT)
             .setIsUAV(true)
             .setInitialState(nvrhi::ResourceStates::ShaderResource)
             .setKeepInitialState(true)
             .setDebugName("HiZTexture_Placeholder")
     );
     m_HiZ.numMips = 1;
+
+    return true;
+}
+
+bool ComputeCullRenderPass::_InitSDSMPass() {
+    auto device = GetDevice();
+
+    m_SDSM.buildCS = m_ShaderFactory->CreateShader(
+        "app/SDSMBuildCascades.hlsl", "BuildCascades", nullptr, nvrhi::ShaderType::Compute);
+    if (!m_SDSM.buildCS) return false;
+
+    nvrhi::BindingLayoutDesc layoutDesc;
+    layoutDesc.visibility = nvrhi::ShaderType::Compute;
+    layoutDesc.bindings = {
+        nvrhi::BindingLayoutItem::ConstantBuffer(0),   // SDSMInput
+        nvrhi::BindingLayoutItem::Texture_SRV(0),      // hizTexture
+        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0),  // cascade data out
+    };
+    m_SDSM.buildBindingLayout = device->createBindingLayout(layoutDesc);
+    if (!m_SDSM.buildBindingLayout) return false;
+
+    nvrhi::ComputePipelineDesc pso;
+    pso.CS = m_SDSM.buildCS;
+    pso.bindingLayouts = { m_SDSM.buildBindingLayout };
+    m_SDSM.buildPipeline = device->createComputePipeline(pso);
+    if (!m_SDSM.buildPipeline) return false;
+
+    // Input CB (non-volatile, state-tracked so writeBuffer works inside Render)
+    constexpr size_t kInputCBSize =
+        (sizeof(SDSMInput) + (nvrhi::c_ConstantBufferOffsetSizeAlignment - 1))
+        & ~(nvrhi::c_ConstantBufferOffsetSizeAlignment - 1);
+    m_SDSM.inputCB = device->createBuffer(
+        nvrhi::BufferDesc()
+            .setByteSize(kInputCBSize)
+            .setIsConstantBuffer(true)
+            .setDebugName("SDSMInputCB")
+            .enableAutomaticStateTracking(nvrhi::ResourceStates::ConstantBuffer)
+    );
+    if (!m_SDSM.inputCB) return false;
+
+    // Cascade output — structured UAV, single element holding all per-cascade data
+    m_SDSM.cascadeDataBuffer = device->createBuffer(
+        nvrhi::BufferDesc()
+            .setByteSize(sizeof(SDSMCascadeOut))
+            .setStructStride(sizeof(SDSMCascadeOut))
+            .setDebugName("SDSMCascadeData")
+            .setCanHaveUAVs(true)
+            .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess)
+    );
+    if (!m_SDSM.cascadeDataBuffer) return false;
+
+    // Binding set references the placeholder Hi-Z texture; rebuilt in _EnsureHiZResources
+    nvrhi::BindingSetDesc bsd;
+    bsd.bindings = {
+        nvrhi::BindingSetItem::ConstantBuffer(0, m_SDSM.inputCB),
+        nvrhi::BindingSetItem::Texture_SRV(0, m_HiZ.hizTexture),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(0, m_SDSM.cascadeDataBuffer),
+    };
+    m_SDSM.buildBindingSet = device->createBindingSet(bsd, m_SDSM.buildBindingLayout);
+    if (!m_SDSM.buildBindingSet) return false;
 
     return true;
 }

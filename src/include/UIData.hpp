@@ -23,12 +23,15 @@ struct UIData {
     uint32_t shadowVisibleCount   = 0;
     uint32_t shadowCulledCount    = 0;
 
-    bool showDebugTopDown = false;
-    bool showShadowMap   = false;
-    bool showHiZ         = false;
+    bool showDebugTopDown       = false;
+    bool showDebugShadowTopDown = false;
+    bool showShadowMap          = false;
+    bool showHiZ                = false;
 
-    float hizBypassAngle   = 0.7f;  // downwardness threshold to skip Hi-Z (0=never bypass, 1=always)
+    float hizBypassAngle   = 1.0f;  // downwardness threshold to skip Hi-Z (0=never bypass, 1=always)
     bool  hizActiveThisFrame = true; // read-only, set by render pass
+
+    float pssmLambda       = 0.85f; // PSSM/SDSM blend: 0=linear splits, 1=logarithmic splits
 
     void*    shadowMapTexture = nullptr;  // nvrhi::ITexture*, set by active render pass
     std::vector<void*> shadowCascadeTextures;  // per-cascade nvrhi::ITexture* for debug display

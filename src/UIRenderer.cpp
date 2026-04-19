@@ -62,12 +62,14 @@ void UIRenderer::buildUI() {
 
     if (ImGui::CollapsingHeader("Debug")) {
         ImGui::Checkbox("Top-Down View", &m_ui.showDebugTopDown);
+        ImGui::Checkbox("Shadow Top-Down View", &m_ui.showDebugShadowTopDown);
         ImGui::Checkbox("Shadow Map", &m_ui.showShadowMap);
         ImGui::Checkbox("Hi-Z Mip Chain", &m_ui.showHiZ);
         ImGui::Separator();
         ImGui::SliderFloat("Hi-Z Bypass Angle", &m_ui.hizBypassAngle, 0.f, 1.f, "%.2f");
         ImGui::SameLine();
         ImGui::TextDisabled(m_ui.hizActiveThisFrame ? "(active)" : "(bypassed)");
+        ImGui::SliderFloat("PSSM Lambda", &m_ui.pssmLambda, 0.f, 1.f, "%.2f");
     }
 
     ImGui::Spacing();
@@ -76,6 +78,7 @@ void UIRenderer::buildUI() {
     ImGui::End();
 
     _buildDebugTopDownSection();
+    _buildDebugShadowTopDownSection();
     _buildShadowMapSection();
     _buildHiZSection();
 }
@@ -460,163 +463,214 @@ void UIRenderer::_buildRegionsSection() {
 }
 
 
-void UIRenderer::_buildDebugTopDownSection() {
-    if (!m_ui.showDebugTopDown) return;
+bool UIRenderer::_beginTopDown(const char* title, bool* show, const char* canvasId,
+                               TopDownCanvas& out) {
+    if (!*show) return false;
 
-    ImGui::SetNextWindowSize(ImVec2(420, 440), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Top-Down Debug View", &m_ui.showDebugTopDown)) {
+    ImGui::SetNextWindowSize(ImVec2(420, 460), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin(title, show)) {
         ImGui::End();
-        return;
+        return false;
     }
 
     const auto& regions = m_Registry->getRegions();
     if (regions.empty()) {
         ImGui::TextDisabled("No regions in scene.");
         ImGui::End();
-        return;
+        return false;
     }
 
-    // --- Compute scene bounding box (XZ) ---
+    // Scene bbox in XZ with 10% padding.
     dm::box3 sceneBbox = dm::box3::empty();
     for (const auto& region : regions)
         sceneBbox |= region.cullBox;
     if (const auto* terrain = m_Registry->getTerrain())
         sceneBbox |= terrain->getBbox();
 
-    float worldMinX = sceneBbox.m_mins.x;
-    float worldMaxX = sceneBbox.m_maxs.x;
-    float worldMinZ = sceneBbox.m_mins.z;
-    float worldMaxZ = sceneBbox.m_maxs.z;
-
-    float extentX = worldMaxX - worldMinX;
-    float extentZ = worldMaxZ - worldMinZ;
-    if (extentX < 1.f) extentX = 1.f;
-    if (extentZ < 1.f) extentZ = 1.f;
-
-    // 10% padding
-    float padX = extentX * 0.1f;
-    float padZ = extentZ * 0.1f;
+    float worldMinX = sceneBbox.m_mins.x, worldMaxX = sceneBbox.m_maxs.x;
+    float worldMinZ = sceneBbox.m_mins.z, worldMaxZ = sceneBbox.m_maxs.z;
+    float extentX = std::max(1.f, worldMaxX - worldMinX);
+    float extentZ = std::max(1.f, worldMaxZ - worldMinZ);
+    float padX = extentX * 0.1f, padZ = extentZ * 0.1f;
     worldMinX -= padX; worldMaxX += padX;
     worldMinZ -= padZ; worldMaxZ += padZ;
     extentX = worldMaxX - worldMinX;
     extentZ = worldMaxZ - worldMinZ;
 
-    float worldCenterX = (worldMinX + worldMaxX) * 0.5f;
-    float worldCenterZ = (worldMinZ + worldMaxZ) * 0.5f;
+    out.worldCenterX = (worldMinX + worldMaxX) * 0.5f;
+    out.worldCenterZ = (worldMinZ + worldMaxZ) * 0.5f;
+    out.canvasPos    = ImGui::GetCursorScreenPos();
+    out.canvasSize   = ImGui::GetContentRegionAvail();
+    if (out.canvasSize.x < 50.f) out.canvasSize.x = 50.f;
+    if (out.canvasSize.y < 50.f) out.canvasSize.y = 50.f;
+    ImGui::InvisibleButton(canvasId, out.canvasSize);
 
-    // --- Canvas area ---
-    ImVec2 canvasPos  = ImGui::GetCursorScreenPos();
-    ImVec2 canvasSize = ImGui::GetContentRegionAvail();
-    if (canvasSize.x < 50.f) canvasSize.x = 50.f;
-    if (canvasSize.y < 50.f) canvasSize.y = 50.f;
+    out.canvasCenterX = out.canvasPos.x + out.canvasSize.x * 0.5f;
+    out.canvasCenterY = out.canvasPos.y + out.canvasSize.y * 0.5f;
+    out.scale         = std::min(out.canvasSize.x / extentX, out.canvasSize.y / extentZ);
+    out.dl            = ImGui::GetWindowDrawList();
 
-    // Reserve the canvas space so ImGui knows it's used
-    ImGui::InvisibleButton("##canvas", canvasSize);
+    out.dl->AddRectFilled(out.toScreen(worldMinX, worldMinZ),
+                          out.toScreen(worldMaxX, worldMaxZ),
+                          IM_COL32(20, 20, 20, 255));
+    return true;
+}
 
-    float canvasCenterX = canvasPos.x + canvasSize.x * 0.5f;
-    float canvasCenterY = canvasPos.y + canvasSize.y * 0.5f;
 
-    float scale = std::min(canvasSize.x / extentX, canvasSize.y / extentZ);
+void UIRenderer::_buildDebugTopDownSection() {
+    TopDownCanvas ctx;
+    if (!_beginTopDown("Top-Down Debug View", &m_ui.showDebugTopDown, "##canvas", ctx))
+        return;
 
-    // World XZ -> screen pixel
-    auto worldToScreen = [&](float wx, float wz) -> ImVec2 {
-        return ImVec2(
-            canvasCenterX + (wx - worldCenterX) * scale,
-            canvasCenterY + (wz - worldCenterZ) * scale
-        );
-    };
-
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-
-    // --- Background ---
-    ImVec2 bgMin = worldToScreen(worldMinX, worldMinZ);
-    ImVec2 bgMax = worldToScreen(worldMaxX, worldMaxZ);
-    dl->AddRectFilled(bgMin, bgMax, IM_COL32(20, 20, 20, 255));
-
-    // --- Frustum for culling test ---
+    const auto& regions = m_Registry->getRegions();
     dm::frustum frust = m_ViewHandler->view.GetViewFrustum();
 
-    // --- Draw instances: culled (red) first, then visible (green) on top ---
     const ImU32 colRegion  = IM_COL32(100,100,100, 150);
     const ImU32 colCulled  = IM_COL32(200, 60, 60, 180);
     const ImU32 colVisible = IM_COL32(60, 200, 60, 220);
     const float radCulled  = 0.5f;
-    const float radVisible  = 0.75;
+    const float radVisible = 0.75f;
 
     for (const auto& region : regions) {
-        ImVec2 rMin = worldToScreen(region.bounds.m_mins.x, region.bounds.m_mins.y);
-        ImVec2 rMax = worldToScreen(region.bounds.m_maxs.x, region.bounds.m_maxs.y);
+        ImVec2 rMin = ctx.toScreen(region.bounds.m_mins.x, region.bounds.m_mins.y);
+        ImVec2 rMax = ctx.toScreen(region.bounds.m_maxs.x, region.bounds.m_maxs.y);
 
-        if (!frust.intersectsWith(region.cullBox)) {
+        bool regionVis = frust.intersectsWith(region.cullBox);
+        ctx.dl->AddRect(rMin, rMax, regionVis ? colRegion : colCulled, 0.f, 0, 1.f);
+        if (!regionVis) continue;
 
-            dl->AddRect(rMin, rMax, colCulled, 0.f, 0, 1.f);
-            continue;
-        }
-        else {
-            dl->AddRect(rMin, rMax, colRegion, 0.f, 0, 1.f);
-        }
-        
         for (const auto& inst : region.instances) {
             bool vis = frust.intersectsWith(inst.bbox);
-
             float wx = inst.model[3][0];
             float wz = inst.model[3][2];
-            ImVec2 sp = worldToScreen(wx, wz);
+            ImVec2 sp = ctx.toScreen(wx, wz);
             float  r  = vis ? radVisible : radCulled;
             ImU32  c  = vis ? colVisible : colCulled;
-            dl->AddRectFilled(ImVec2(sp.x-r,sp.y-r), ImVec2(sp.x+r,sp.y+r), c);
+            ctx.dl->AddRectFilled(ImVec2(sp.x-r,sp.y-r), ImVec2(sp.x+r,sp.y+r), c);
         }
     }
 
-    // --- Camera frustum wireframe ---
-    // Corner bits: bit0=right, bit1=top, bit2=far
+    // Camera frustum wireframe (corner bits: 0=right, 1=top, 2=far).
     ImVec2 corners[8];
     for (int i = 0; i < 8; i++) {
         dm::float3 c = frust.getCorner(i);
-        corners[i] = worldToScreen(c.x, c.z);
+        corners[i] = ctx.toScreen(c.x, c.z);
     }
-
     const ImU32 frustumColor = IM_COL32(255, 255, 0, 255);
-    float thickness = 2.0f;
+    const float thickness = 2.0f;
+    static const int edges[12][2] = {
+        {0,1},{1,3},{3,2},{2,0},   // near
+        {4,5},{5,7},{7,6},{6,4},   // far
+        {0,4},{1,5},{2,6},{3,7},   // near->far
+    };
+    for (const auto& e : edges)
+        ctx.dl->AddLine(corners[e[0]], corners[e[1]], frustumColor, thickness);
 
-    // Near quad: 0-1, 1-3, 3-2, 2-0
-    dl->AddLine(corners[0], corners[1], frustumColor, thickness);
-    dl->AddLine(corners[1], corners[3], frustumColor, thickness);
-    dl->AddLine(corners[3], corners[2], frustumColor, thickness);
-    dl->AddLine(corners[2], corners[0], frustumColor, thickness);
-
-    // Far quad: 4-5, 5-7, 7-6, 6-4
-    dl->AddLine(corners[4], corners[5], frustumColor, thickness);
-    dl->AddLine(corners[5], corners[7], frustumColor, thickness);
-    dl->AddLine(corners[7], corners[6], frustumColor, thickness);
-    dl->AddLine(corners[6], corners[4], frustumColor, thickness);
-
-    // Near-to-far connecting edges
-    dl->AddLine(corners[0], corners[4], frustumColor, thickness);
-    dl->AddLine(corners[1], corners[5], frustumColor, thickness);
-    dl->AddLine(corners[2], corners[6], frustumColor, thickness);
-    dl->AddLine(corners[3], corners[7], frustumColor, thickness);
-
-    // --- Camera position marker ---
     dm::float3 camPos = m_ViewHandler->camera.GetPosition();
-    ImVec2 camScreen = worldToScreen(camPos.x, camPos.z);
-    dl->AddCircleFilled(camScreen, 5.f, IM_COL32(0, 255, 255, 255));
+    ctx.dl->AddCircleFilled(ctx.toScreen(camPos.x, camPos.z), 5.f, IM_COL32(0, 255, 255, 255));
 
-    // --- Legend ---
+    // Legend.
     const float legendScale = 4.f;
-    ImVec2 legendPos = ImVec2(canvasPos.x + 5.f, canvasPos.y + 5.f);
-    dl->AddRectFilled(
+    ImVec2 legendPos = ImVec2(ctx.canvasPos.x + 5.f, ctx.canvasPos.y + 5.f);
+    ctx.dl->AddRectFilled(
         ImVec2(legendPos.x + 5.f-radVisible*legendScale, legendPos.y + 6.f-radVisible*legendScale),
         ImVec2(legendPos.x + 5.f+radVisible*legendScale, legendPos.y + 6.f+radVisible*legendScale),
         colVisible);
-    dl->AddText(ImVec2(legendPos.x + 14.f, legendPos.y), IM_COL32(200, 200, 200, 255), "Visible");
-    dl->AddRectFilled(
-        ImVec2(legendPos.x + 5.f-radCulled*legendScale, legendPos.y + 20.f-radCulled*legendScale), 
-        ImVec2(legendPos.x + 5.f+radCulled*legendScale, legendPos.y + 20.f+radCulled*legendScale), 
+    ctx.dl->AddText(ImVec2(legendPos.x + 14.f, legendPos.y), IM_COL32(200, 200, 200, 255), "Visible");
+    ctx.dl->AddRectFilled(
+        ImVec2(legendPos.x + 5.f-radCulled*legendScale, legendPos.y + 20.f-radCulled*legendScale),
+        ImVec2(legendPos.x + 5.f+radCulled*legendScale, legendPos.y + 20.f+radCulled*legendScale),
         colCulled);
-    dl->AddText(ImVec2(legendPos.x + 14.f, legendPos.y + 14.f), IM_COL32(200, 200, 200, 255), "Culled");
-    dl->AddCircleFilled(ImVec2(legendPos.x + 5.f, legendPos.y + 34.f), 4.f, IM_COL32(0, 255, 255, 255));
-    dl->AddText(ImVec2(legendPos.x + 14.f, legendPos.y + 28.f), IM_COL32(200, 200, 200, 255), "Camera");
+    ctx.dl->AddText(ImVec2(legendPos.x + 14.f, legendPos.y + 14.f), IM_COL32(200, 200, 200, 255), "Culled");
+    ctx.dl->AddCircleFilled(ImVec2(legendPos.x + 5.f, legendPos.y + 34.f), 4.f, IM_COL32(0, 255, 255, 255));
+    ctx.dl->AddText(ImVec2(legendPos.x + 14.f, legendPos.y + 28.f), IM_COL32(200, 200, 200, 255), "Camera");
+
+    ImGui::End();
+}
+
+
+void UIRenderer::_buildDebugShadowTopDownSection() {
+    TopDownCanvas ctx;
+    if (!_beginTopDown("Shadow Top-Down View", &m_ui.showDebugShadowTopDown, "##shadowCanvas", ctx))
+        return;
+
+    const auto& regions = m_Registry->getRegions();
+
+    const dm::float3 cascadeRGB[Render::c_NumCascades] = {
+        { 1.00f, 0.90f, 0.20f },  // yellow
+        { 0.30f, 1.00f, 0.40f },  // green
+        { 0.30f, 0.70f, 1.00f },  // cyan
+        { 0.80f, 0.40f, 1.00f },  // purple
+    };
+    auto packColor = [](dm::float3 rgb, float a) -> ImU32 {
+        auto clamp01 = [](float v) { return v < 0.f ? 0.f : (v > 1.f ? 1.f : v); };
+        return IM_COL32(
+            int(clamp01(rgb.x) * 255.f), int(clamp01(rgb.y) * 255.f),
+            int(clamp01(rgb.z) * 255.f), int(clamp01(a)    * 255.f));
+    };
+
+    const dm::affine3& worldToLight = m_ViewHandler->worldToLight;
+
+    // Lowest-index cascade whose light-space shadow-caster bbox overlaps this instance's
+    // world-space bbox transformed into light space. Mirrors CullShadow in CullCS.hlsl.
+    auto firstCascadeFor = [&](const dm::box3& wsBbox) -> int {
+        dm::box3 lsBbox = wsBbox * worldToLight;
+        for (uint32_t c = 0; c < Render::c_NumCascades; ++c) {
+            const dm::box3& lsCasc = m_ViewHandler->cascades[c].shadowCasterBboxLS;
+            if (!lsCasc.isempty() && lsBbox.intersects(lsCasc)) return int(c);
+        }
+        return -1;
+    };
+
+    const ImU32 colRegion   = IM_COL32(100, 100, 100, 150);
+    const ImU32 colExcluded = IM_COL32(70, 70, 70, 180);
+    const float radIncluded = 0.9f;
+    const float radExcluded = 0.5f;
+
+    for (const auto& region : regions) {
+        ImVec2 rMin = ctx.toScreen(region.bounds.m_mins.x, region.bounds.m_mins.y);
+        ImVec2 rMax = ctx.toScreen(region.bounds.m_maxs.x, region.bounds.m_maxs.y);
+        ctx.dl->AddRect(rMin, rMax, colRegion, 0.f, 0, 1.f);
+
+        for (const auto& inst : region.instances) {
+            int ci = firstCascadeFor(inst.bbox);
+            float wx = inst.model[3][0];
+            float wz = inst.model[3][2];
+            ImVec2 sp = ctx.toScreen(wx, wz);
+
+            ImU32 c = (ci >= 0) ? packColor(cascadeRGB[ci], 0.9f) : colExcluded;
+            float r = (ci >= 0) ? radIncluded : radExcluded;
+            ctx.dl->AddRectFilled(ImVec2(sp.x - r, sp.y - r), ImVec2(sp.x + r, sp.y + r), c);
+        }
+    }
+
+    dm::float3 camPos = m_ViewHandler->camera.GetPosition();
+    ctx.dl->AddCircleFilled(ctx.toScreen(camPos.x, camPos.z), 5.f, IM_COL32(0, 255, 255, 255));
+
+    // Legend.
+    const float legendScale = 4.f;
+    const float r = 0.75f;
+    ImVec2 legendPos = ImVec2(ctx.canvasPos.x + 5.f, ctx.canvasPos.y + 5.f);
+    char label[32];
+    for (uint32_t ci = 0; ci < Render::c_NumCascades; ++ci) {
+        float y = float(ci) * 14.f;
+        ImU32 col = packColor(cascadeRGB[ci], 1.f);
+        ctx.dl->AddRectFilled(
+            ImVec2(legendPos.x + 5.f - r * legendScale, legendPos.y + y + 6.f - r * legendScale),
+            ImVec2(legendPos.x + 5.f + r * legendScale, legendPos.y + y + 6.f + r * legendScale),
+            col);
+        snprintf(label, sizeof(label), "Cascade %u", ci);
+        ctx.dl->AddText(ImVec2(legendPos.x + 14.f, legendPos.y + y), IM_COL32(220, 220, 220, 255), label);
+    }
+    float yExcl = float(Render::c_NumCascades) * 14.f;
+    ctx.dl->AddRectFilled(
+        ImVec2(legendPos.x + 5.f - r * legendScale, legendPos.y + yExcl + 6.f - r * legendScale),
+        ImVec2(legendPos.x + 5.f + r * legendScale, legendPos.y + yExcl + 6.f + r * legendScale),
+        colExcluded);
+    ctx.dl->AddText(ImVec2(legendPos.x + 14.f, legendPos.y + yExcl), IM_COL32(220, 220, 220, 255), "Not shadowed");
+    float camY = yExcl + 14.f + 6.f;
+    ctx.dl->AddCircleFilled(ImVec2(legendPos.x + 5.f, legendPos.y + camY + 6.f), 4.f, IM_COL32(0, 255, 255, 255));
+    ctx.dl->AddText(ImVec2(legendPos.x + 14.f, legendPos.y + camY), IM_COL32(220, 220, 220, 255), "Camera");
 
     ImGui::End();
 }
@@ -648,8 +702,8 @@ void UIRenderer::_buildShadowMapSection() {
 
     void* tex = m_ui.shadowCascadeTextures[selectedCascade];
     if (tex) {
-        float avail = ImGui::GetContentRegionAvail().x;
-        float size  = std::max(avail, 64.f); // smth wrong here
+        ImVec2 avail = ImGui::GetContentRegionAvail();
+        float size  = std::max(std::min(avail.x, avail.y), 64.f);
         ImGui::Image(ImTextureRef(tex), ImVec2(size, size));
     }
 
@@ -683,8 +737,8 @@ void UIRenderer::_buildHiZSection() {
 
     void* tex = m_ui.hizMipTextures[selectedMip];
     if (tex) {
-        float avail = ImGui::GetContentRegionAvail().x;
-        float size  = std::max(avail, 64.f);
+        ImVec2 avail = ImGui::GetContentRegionAvail();
+        float size  = std::max(std::min(avail.x, avail.y), 64.f);
         ImGui::Image(ImTextureRef(tex), ImVec2(size, size));
     } else {
         ImGui::TextDisabled("(not yet available — enable Hi-Z panel before first frame)");

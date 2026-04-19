@@ -1,19 +1,17 @@
 #include "include/ViewHandler.hpp"
-#include "include/macros.h"
 #include <cmath>
 
 using namespace Xylem;
 
 void ViewHandler::computeCascades(const dm::box3& sceneBbox, dm::float3 sunDirection,
                                    float nearPlane, float farPlane, float aspectRatio, float fovY,
-                                   uint32_t shadowRes)
+                                   uint32_t shadowRes, float pssmLambda)
 {
     worldToLight = dm::lookatZ(sunDirection, dm::float3(0,1,0)) * dm::scaling(dm::float3(1.f, 1.f, -1.f));
     dm::box3 sceneBboxLS = sceneBbox * worldToLight;
 
-    // TODO: read Parallel-Split Shadow Maps
-    constexpr float lambda = 0.9f;
-    constexpr float pssmNearPlane = 5.f;
+    const float lambda = pssmLambda;
+    float pssmNearPlane = nearPlane;
     constexpr uint32_t N = Render::c_NumCascades;
     float splits[N + 1];
     // float splits[N + 1] = {
@@ -64,6 +62,13 @@ void ViewHandler::computeCascades(const dm::box3& sceneBbox, dm::float3 sunDirec
             cascadeBboxLS |= cornerLS;
         }
 
+        // cascade is not looking at anything
+        if (!cascadeBboxLS.intersects(sceneBboxLS)) {
+            cascades[c].lightViewProj = dm::float4x4::identity();
+            cascades[c].shadowCasterBboxLS = dm::box3::empty();
+            continue;
+        }
+
         // squares bbox for uniform texels
         dm::float3 cascadeExtent = cascadeBboxLS.diagonal();
         float maxXY = dm::max(cascadeExtent.x, cascadeExtent.y);
@@ -80,8 +85,10 @@ void ViewHandler::computeCascades(const dm::box3& sceneBbox, dm::float3 sunDirec
             cascadeBboxLS.m_maxs.y = cascadeBboxLS.m_mins.y + cascadeExtent.y;
         }
 
+        // extend box towards casters & shrink if aabb is past scene
         cascadeBboxLS.m_mins.z = dm::min(cascadeBboxLS.m_mins.z, sceneBboxLS.m_mins.z);
         cascadeBboxLS.m_maxs.z = dm::min(cascadeBboxLS.m_maxs.z, sceneBboxLS.m_maxs.z);
+
         dm::float4x4 lightProj = dm::orthoProjD3DStyle(
             cascadeBboxLS.m_mins.x, cascadeBboxLS.m_maxs.x,
             cascadeBboxLS.m_mins.y, cascadeBboxLS.m_maxs.y,

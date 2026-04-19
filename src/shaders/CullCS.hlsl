@@ -63,7 +63,7 @@ RWStructuredBuffer<uint>           shadowVisBuf         : register(u4);
 RWByteAddressBuffer                mainIndirectArgs     : register(u5);
 RWByteAddressBuffer                shadowIndirectArgs   : register(u6);
 
-Texture2D<float>                   hizTexture           : register(t4);
+Texture2D<float2>                  hizTexture           : register(t4);
 SamplerState                       hizSampler           : register(s0);
 
 bool DoesAABBIntersectFrustum(box3 bbox, frustum f);
@@ -250,9 +250,9 @@ bool IsOccludedByHiZ(box3 bbox)
     float mipLevel = ceil(log2(max(footprint.x, footprint.y)));
     mipLevel = clamp(mipLevel, 0, maxHiZMip);
 
-    // Sample Hi-Z at center of projected rect
+    // Sample Hi-Z at center of projected rect (.r = farthest-depth reduction)
     float2 centerUV = (minUV + maxUV) * 0.5;
-    float hizDepth = hizTexture.SampleLevel(hizSampler, centerUV, mipLevel);
+    float hizDepth = hizTexture.SampleLevel(hizSampler, centerUV, mipLevel).r;
 
     // Occlusion test
 #if XYLEM_USE_REVERSE_Z

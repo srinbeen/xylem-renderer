@@ -92,8 +92,30 @@ private:
     void _buildAssetsSection();
     void _buildRegionsSection();
     void _buildDebugTopDownSection();
+    void _buildDebugShadowTopDownSection();
     void _buildShadowMapSection();
     void _buildHiZSection();
+
+    // Shared top-down canvas context — world XZ <-> screen pixel transform.
+    struct TopDownCanvas {
+        ImDrawList* dl = nullptr;
+        ImVec2      canvasPos{};
+        ImVec2      canvasSize{};
+        float       canvasCenterX = 0.f, canvasCenterY = 0.f;
+        float       worldCenterX  = 0.f, worldCenterZ  = 0.f;
+        float       scale         = 1.f;
+
+        ImVec2 toScreen(float wx, float wz) const {
+            return ImVec2(canvasCenterX + (wx - worldCenterX) * scale,
+                          canvasCenterY + (wz - worldCenterZ) * scale);
+        }
+    };
+
+    // Opens an ImGui window, computes a top-down XZ transform from scene bounds,
+    // reserves canvas, fills background. Returns true if the caller should draw;
+    // in that case the caller owns the matching ImGui::End().
+    bool _beginTopDown(const char* title, bool* show, const char* canvasId,
+                       TopDownCanvas& out);
 };
 
 } // namespace Xylem

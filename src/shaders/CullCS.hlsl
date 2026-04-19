@@ -62,6 +62,7 @@ RWStructuredBuffer<uint>           shadowVisBuf         : register(u4);
 
 RWByteAddressBuffer                mainIndirectArgs     : register(u5);
 RWByteAddressBuffer                shadowIndirectArgs   : register(u6);
+RWByteAddressBuffer                shadowUniqueCounter  : register(u7);
 
 Texture2D<float2>                  hizTexture           : register(t4);
 SamplerState                       hizSampler           : register(s0);
@@ -145,6 +146,8 @@ void CullShadow(uint3 dtid : SV_DispatchThreadID)
 
     uint ai = inst.baseSlot / numLods;
 
+    bool anyCascadeVisible = false;
+
     [unroll]
     for (uint c = 0; c < NUM_CASCADES; c++)
     {
@@ -166,6 +169,16 @@ void CullShadow(uint3 dtid : SV_DispatchThreadID)
         // Atomically increment instanceCount in shadow indirect draw args for this slot.
         uint dummy;
         shadowIndirectArgs.InterlockedAdd(slot * 20 + 4, 1, dummy);
+
+        anyCascadeVisible = true;
+    }
+
+    // Count each instance once if it contributes to any cascade (for UI stats
+    // that need unique shadow-caster count, not summed per-cascade overdraw).
+    if (anyCascadeVisible)
+    {
+        uint dummy;
+        shadowUniqueCounter.InterlockedAdd(0, 1, dummy);
     }
 }
 

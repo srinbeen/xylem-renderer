@@ -88,6 +88,7 @@ private:
         nvrhi::BufferHandle              shadowVisBuffer;        // UAV uint32[shadowVisBufferSize]
         nvrhi::BufferHandle              shadowSlotOffsetBuffer; // SRV uint32[numAssets]
         nvrhi::BufferHandle              shadowIndirectArgsBuffer; // UAV DrawIndexedIndirectArguments[numAssets] (also indirect args)
+        nvrhi::BufferHandle              shadowUniqueCounter;    // UAV uint32 (single counter, raw); incremented once per instance visible in any cascade
         nvrhi::BufferHandle              regionVisibleBuffer;      // SRV uint32[numRegions], CPU-written each frame
     };
 

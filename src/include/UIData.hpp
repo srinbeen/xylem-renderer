@@ -20,8 +20,10 @@ struct UIData {
     uint32_t drawCallCount        = 0;
     uint32_t totalInstanceCount   = 0;
     uint32_t culledInstanceCount  = 0;
-    uint32_t shadowVisibleCount   = 0;
-    uint32_t shadowCulledCount    = 0;
+    uint32_t shadowVisibleCount     = 0; // unique instances contributing to any cascade
+    uint32_t shadowCulledCount      = 0; // totalInstanceCount - shadowVisibleCount
+    uint32_t shadowCascadeDrawCount = 0; // sum over all cascades of per-cascade visible (counts overdraw)
+    uint32_t shadowOverdrawCount    = 0; // shadowCascadeDrawCount - shadowVisibleCount
 
     bool showDebugTopDown       = false;
     bool showDebugShadowTopDown = false;

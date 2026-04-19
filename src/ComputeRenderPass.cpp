@@ -376,6 +376,18 @@ void ComputeRenderPass::_UploadCullBuffers(nvrhi::ICommandList* commandList) {
             .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess)
     );
 
+    // ShadowUniqueCounter — single uint32, incremented once per instance that
+    // passes at least one cascade. Used by UI to report unique-caster count
+    // distinct from the per-cascade summed count (which double-counts).
+    m_CullPass.shadowUniqueCounter = device->createBuffer(
+        nvrhi::BufferDesc()
+            .setByteSize(sizeof(uint32_t))
+            .setDebugName("ShadowUniqueCounter")
+            .setCanHaveUAVs(true)
+            .setCanHaveRawViews(true)
+            .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess)
+    );
+
     // RegionVisibleBuffer — SRV uint32[numRegions], CPU-written each frame via writeBuffer
     m_RegionVisibleStaging.assign(std::max(1u, numRegions), 1u);
     m_CullPass.regionVisibleBuffer = device->createBuffer(
@@ -387,10 +399,11 @@ void ComputeRenderPass::_UploadCullBuffers(nvrhi::ICommandList* commandList) {
             .enableAutomaticStateTracking(nvrhi::ResourceStates::ShaderResource)
     );
 
-    // Readback ring buffers — combined [countBuffer | shadowCountBuffer] per slot
+    // Readback ring buffers — combined [countBuffer | shadowCountBuffer | shadowUniqueCounter] per slot
     m_ReadbackCountEntries  = std::max(1u, m_NumSlots);
     m_ReadbackShadowEntries = std::max(1u, numShadowSlots);
-    uint64_t readbackSize = (m_ReadbackCountEntries + m_ReadbackShadowEntries) * sizeof(uint32_t);
+    // Layout: [main counts (m_ReadbackCountEntries)][shadow per-slot counts (m_ReadbackShadowEntries)][1 unique counter]
+    uint64_t readbackSize = (m_ReadbackCountEntries + m_ReadbackShadowEntries + 1) * sizeof(uint32_t);
 
     for (uint32_t i = 0; i < k_QueuedFrames; i++) {
         m_ReadbackBuffers[i] = device->createBuffer(
@@ -431,6 +444,7 @@ void ComputeRenderPass::_RebuildCullBindings() {
 
         nvrhi::BindingSetItem::RawBuffer_UAV(5, m_CullPass.indirectArgsBuffer),
         nvrhi::BindingSetItem::RawBuffer_UAV(6, m_CullPass.shadowIndirectArgsBuffer),
+        nvrhi::BindingSetItem::RawBuffer_UAV(7, m_CullPass.shadowUniqueCounter),
 
         nvrhi::BindingSetItem::Texture_SRV(4, m_HiZ.hizTexture),
         nvrhi::BindingSetItem::Sampler(0, m_HiZ.pointSampler),
@@ -1161,6 +1175,7 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     // Clear UAV counters (AFTER depth prepass which reads last frame's data)
     m_CommandList->clearBufferUInt(m_CullPass.countBuffer, 0);
     m_CommandList->clearBufferUInt(m_CullPass.shadowCountBuffer, 0);
+    m_CommandList->clearBufferUInt(m_CullPass.shadowUniqueCounter, 0);
 
     // Reset indirect args buffers (re-upload staging with instanceCount=0)
     m_CommandList->writeBuffer(m_CullPass.indirectArgsBuffer,
@@ -1220,6 +1235,8 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
                                   m_CullPass.countBuffer, 0, countSize);
         m_CommandList->copyBuffer(m_ReadbackBuffers[ringSlot], countSize,
                                   m_CullPass.shadowCountBuffer, 0, shadowSize);
+        m_CommandList->copyBuffer(m_ReadbackBuffers[ringSlot], countSize + shadowSize,
+                                  m_CullPass.shadowUniqueCounter, 0, sizeof(uint32_t));
     }
 
     // --- Draw passes (auto barriers: UAV→SRV transitions handled by setGraphicsState) ---
@@ -1269,14 +1286,19 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
             for (uint32_t i = 0; i < m_ReadbackShadowEntries; i++)
                 shadowVisSum += counts[m_ReadbackCountEntries + i];
 
+            uint32_t shadowUnique = counts[m_ReadbackCountEntries + m_ReadbackShadowEntries];
+
             GetDevice()->unmapBuffer(m_ReadbackBuffers[readSlot]);
 
             m_UI.visibleInstanceCount = visibleSum;
             m_UI.culledInstanceCount  = (visibleSum <= m_UI.totalInstanceCount)
                 ? m_UI.totalInstanceCount - visibleSum : 0;
-            m_UI.shadowVisibleCount   = shadowVisSum;
-            m_UI.shadowCulledCount    = (shadowVisSum <= m_UI.totalInstanceCount)
-                ? m_UI.totalInstanceCount - shadowVisSum : 0;
+            m_UI.shadowVisibleCount     = shadowUnique;
+            m_UI.shadowCulledCount      = (shadowUnique <= m_UI.totalInstanceCount)
+                ? m_UI.totalInstanceCount - shadowUnique : 0;
+            m_UI.shadowCascadeDrawCount = shadowVisSum;
+            m_UI.shadowOverdrawCount    = (shadowVisSum >= shadowUnique)
+                ? shadowVisSum - shadowUnique : 0;
         }
     }
     m_ReadbackFrameIndex++;
@@ -1584,6 +1606,7 @@ bool ComputeRenderPass::_InitCullPass(nvrhi::ICommandList* /*initCL*/) {
 
         nvrhi::BindingLayoutItem::RawBuffer_UAV(5),        // mainIndirectArgs
         nvrhi::BindingLayoutItem::RawBuffer_UAV(6),        // shadowIndirectArgs
+        nvrhi::BindingLayoutItem::RawBuffer_UAV(7),        // shadowUniqueCounter
 
         nvrhi::BindingLayoutItem::Texture_SRV(4),          // hizTexture
         nvrhi::BindingLayoutItem::Sampler(0),              // hizSampler (point/clamp)

@@ -305,106 +305,220 @@
   },
   "regions": [
     {
-      "name": "OakForest",
-      "density": 0.022,
-      "boundsMinX": -150, "boundsMinY": -150, "boundsMaxX": -50, "boundsMaxY": -50,
+      "name": "CentralMeadow",
+      "density": 0.012,
+      "boundsMinX": -80, "boundsMinY": -70, "boundsMaxX": 90, "boundsMaxY": 80,
+      "assets": ["OakMature", "MapleWide", "BirchTall", "ShrubSparse"]
+    },
+    {
+      "name": "OakHollowNW",
+      "density": 0.028,
+      "boundsMinX": -320, "boundsMinY": -380, "boundsMaxX": -90, "boundsMaxY": -120,
       "assets": ["OakMature", "OakAged", "OakSapling"]
     },
     {
-      "name": "MapleGrove",
-      "density": 0.018,
-      "boundsMinX": 50, "boundsMinY": -50, "boundsMaxX": 150, "boundsMaxY": 50,
-      "assets": ["MapleWide", "MapleYoung"]
-    },
-    {
-      "name": "WillowWetland",
-      "density": 0.015,
-      "boundsMinX": -150, "boundsMinY": 50, "boundsMaxX": -50, "boundsMaxY": 150,
-      "assets": ["WillowLarge", "WillowSmall"]
-    },
-    {
-      "name": "CypressStand",
-      "density": 0.020,
-      "boundsMinX": -50, "boundsMinY": 50, "boundsMaxX": 50, "boundsMaxY": 150,
-      "assets": ["CypressColumn", "CypressSmall"]
-    },
-    {
-      "name": "OpenShrubland",
-      "density": 0.035,
-      "boundsMinX": 50, "boundsMinY": 50, "boundsMaxX": 150, "boundsMaxY": 150,
-      "assets": ["ShrubDense", "ShrubSparse", "FernPatch"]
-    },
-    {
-      "name": "FarNorthOak",
-      "density": 0.022,
-      "boundsMinX": -475, "boundsMinY": -475, "boundsMaxX": -150, "boundsMaxY": -150,
-      "assets": ["OakMature", "OakAged", "OakSapling"]
-    },
-    {
-      "name": "FarNorthPine",
-      "density": 0.025,
-      "boundsMinX": -150, "boundsMinY": -475, "boundsMaxX": 150, "boundsMaxY": -150,
-      "assets": ["PineTall", "PineSmall", "PineSlender"]
-    },
-    {
-      "name": "FarNorthSpruce",
-      "density": 0.022,
-      "boundsMinX": 150, "boundsMinY": -475, "boundsMaxX": 475, "boundsMaxY": -150,
-      "assets": ["SpruceDense", "SpruceYoung"]
-    },
-    {
-      "name": "FarWestBirch",
-      "density": 0.020,
-      "boundsMinX": -475, "boundsMinY": -150, "boundsMaxX": -150, "boundsMaxY": 150,
-      "assets": ["BirchTall", "BirchYoung", "WillowSmall"]
-    },
-    {
-      "name": "FarEastMaple",
-      "density": 0.018,
-      "boundsMinX": 150, "boundsMinY": -150, "boundsMaxX": 475, "boundsMaxY": 150,
-      "assets": ["MapleWide", "MapleYoung", "CypressSmall"]
-    },
-    {
-      "name": "FarSouthWillow",
-      "density": 0.016,
-      "boundsMinX": -475, "boundsMinY": 150, "boundsMaxX": -150, "boundsMaxY": 475,
-      "assets": ["WillowLarge", "WillowSmall", "ShrubDense"]
-    },
-    {
-      "name": "FarSouthCypress",
-      "density": 0.020,
-      "boundsMinX": -150, "boundsMinY": 150, "boundsMaxX": 150, "boundsMaxY": 475,
-      "assets": ["CypressColumn", "CypressSmall", "ShrubSparse"]
-    },
-    {
-      "name": "NorthPineStrip",
+      "name": "OakRidgeSE",
       "density": 0.024,
-      "boundsMinX": -50, "boundsMinY": -150, "boundsMaxX": 50, "boundsMaxY": -50,
-      "assets": ["PineTall", "PineSlender", "SpruceYoung"]
+      "boundsMinX": 200, "boundsMinY": 100, "boundsMaxX": 520, "boundsMaxY": 340,
+      "assets": ["OakMature", "OakAged", "ShrubDense"]
     },
     {
-      "name": "NorthEastSpruce",
+      "name": "DeepPineNorth",
+      "density": 0.032,
+      "boundsMinX": -180, "boundsMinY": -850, "boundsMaxX": 280, "boundsMaxY": -400,
+      "assets": ["PineTall", "PineSlender", "PineSmall"]
+    },
+    {
+      "name": "PineClusterWest",
+      "density": 0.026,
+      "boundsMinX": -700, "boundsMinY": -300, "boundsMaxX": -350, "boundsMaxY": 50,
+      "assets": ["PineTall", "PineSmall", "SpruceYoung"]
+    },
+    {
+      "name": "PineScatterEast",
       "density": 0.022,
-      "boundsMinX": 50, "boundsMinY": -150, "boundsMaxX": 150, "boundsMaxY": -50,
+      "boundsMinX": 350, "boundsMinY": -550, "boundsMaxX": 700, "boundsMaxY": -150,
+      "assets": ["PineTall", "PineSlender", "ShrubSparse"]
+    },
+    {
+      "name": "SpruceHighlandsNE",
+      "density": 0.030,
+      "boundsMinX": 300, "boundsMinY": -900, "boundsMaxX": 750, "boundsMaxY": -450,
       "assets": ["SpruceDense", "SpruceYoung", "PineSmall"]
     },
     {
-      "name": "WestBirchGlade",
-      "density": 0.020,
-      "boundsMinX": -150, "boundsMinY": -50, "boundsMaxX": -50, "boundsMaxY": 50,
+      "name": "SpruceValleySW",
+      "density": 0.025,
+      "boundsMinX": -800, "boundsMinY": 250, "boundsMaxX": -350, "boundsMaxY": 650,
+      "assets": ["SpruceDense", "SpruceYoung"]
+    },
+    {
+      "name": "BirchGladeNorth",
+      "density": 0.022,
+      "boundsMinX": -450, "boundsMinY": -650, "boundsMaxX": -150, "boundsMaxY": -350,
       "assets": ["BirchTall", "BirchYoung", "OakSapling"]
     },
     {
-      "name": "FarSouthEastMixed",
+      "name": "BirchMeadowSouth",
       "density": 0.020,
-      "boundsMinX": 150, "boundsMinY": 150, "boundsMaxX": 475, "boundsMaxY": 475,
-      "assets": ["MapleWide", "MapleYoung", "SpruceDense", "BirchTall"]
+      "boundsMinX": -200, "boundsMinY": 200, "boundsMaxX": 150, "boundsMaxY": 550,
+      "assets": ["BirchTall", "BirchYoung", "MapleYoung"]
     },
     {
-      "name": "CentralMixed",
+      "name": "BirchStandFarEast",
+      "density": 0.024,
+      "boundsMinX": 600, "boundsMinY": -200, "boundsMaxX": 900, "boundsMaxY": 200,
+      "assets": ["BirchTall", "BirchYoung"]
+    },
+    {
+      "name": "MapleGroveCenter",
+      "density": 0.022,
+      "boundsMinX": 60, "boundsMinY": -200, "boundsMaxX": 300, "boundsMaxY": 50,
+      "assets": ["MapleWide", "MapleYoung", "OakSapling"]
+    },
+    {
+      "name": "MapleForestSouth",
+      "density": 0.026,
+      "boundsMinX": 200, "boundsMinY": 350, "boundsMaxX": 600, "boundsMaxY": 750,
+      "assets": ["MapleWide", "MapleYoung", "CypressSmall"]
+    },
+    {
+      "name": "WillowCreekWest",
       "density": 0.018,
-      "boundsMinX": -50, "boundsMinY": -50, "boundsMaxX": 50, "boundsMaxY": 50,
-      "assets": ["OakMature", "MapleWide", "BirchTall", "WillowSmall"]
+      "boundsMinX": -550, "boundsMinY": -100, "boundsMaxX": -200, "boundsMaxY": 200,
+      "assets": ["WillowLarge", "WillowSmall", "ShrubDense"]
+    },
+    {
+      "name": "WillowBottomSouth",
+      "density": 0.016,
+      "boundsMinX": -350, "boundsMinY": 400, "boundsMaxX": 50, "boundsMaxY": 800,
+      "assets": ["WillowLarge", "WillowSmall", "FernPatch"]
+    },
+    {
+      "name": "CypressRidgeEast",
+      "density": 0.025,
+      "boundsMinX": 450, "boundsMinY": 50, "boundsMaxX": 700, "boundsMaxY": 400,
+      "assets": ["CypressColumn", "CypressSmall"]
+    },
+    {
+      "name": "CypressRowNorth",
+      "density": 0.020,
+      "boundsMinX": -100, "boundsMinY": -350, "boundsMaxX": 250, "boundsMaxY": -150,
+      "assets": ["CypressColumn", "CypressSmall", "PineSlender"]
+    },
+    {
+      "name": "ShrublandsWide",
+      "density": 0.040,
+      "boundsMinX": -300, "boundsMinY": 80, "boundsMaxX": -50, "boundsMaxY": 350,
+      "assets": ["ShrubDense", "ShrubSparse", "FernPatch"]
+    },
+    {
+      "name": "FernUnderstoryNW",
+      "density": 0.035,
+      "boundsMinX": -650, "boundsMinY": -600, "boundsMaxX": -300, "boundsMaxY": -300,
+      "assets": ["ShrubDense", "FernPatch", "ShrubSparse"]
+    },
+    {
+      "name": "MixedWoodlandNear",
+      "density": 0.020,
+      "boundsMinX": -200, "boundsMinY": -200, "boundsMaxX": -60, "boundsMaxY": 80,
+      "assets": ["OakMature", "BirchTall", "MapleWide", "ShrubSparse"]
+    },
+    {
+      "name": "TransitionZoneNE",
+      "density": 0.018,
+      "boundsMinX": 100, "boundsMinY": -400, "boundsMaxX": 400, "boundsMaxY": -150,
+      "assets": ["PineTall", "SpruceDense", "BirchYoung", "OakSapling"]
+    },
+    {
+      "name": "FarNorthTundra",
+      "density": 0.028,
+      "boundsMinX": -600, "boundsMinY": -950, "boundsMaxX": 100, "boundsMaxY": -650,
+      "assets": ["SpruceYoung", "PineSmall", "ShrubSparse"]
+    },
+    {
+      "name": "FarNorthEastPine",
+      "density": 0.030,
+      "boundsMinX": 100, "boundsMinY": -950, "boundsMaxX": 600, "boundsMaxY": -600,
+      "assets": ["PineTall", "PineSlender", "SpruceDense"]
+    },
+    {
+      "name": "FarWestWillow",
+      "density": 0.018,
+      "boundsMinX": -950, "boundsMinY": -400, "boundsMaxX": -550, "boundsMaxY": 100,
+      "assets": ["WillowLarge", "WillowSmall", "BirchYoung", "ShrubDense"]
+    },
+    {
+      "name": "FarWestSpruce",
+      "density": 0.025,
+      "boundsMinX": -950, "boundsMinY": -750, "boundsMaxX": -600, "boundsMaxY": -350,
+      "assets": ["SpruceDense", "SpruceYoung", "PineSmall"]
+    },
+    {
+      "name": "FarEastOakMaple",
+      "density": 0.022,
+      "boundsMinX": 700, "boundsMinY": -500, "boundsMaxX": 950, "boundsMaxY": 0,
+      "assets": ["OakMature", "OakAged", "MapleWide"]
+    },
+    {
+      "name": "FarEastCypress",
+      "density": 0.024,
+      "boundsMinX": 700, "boundsMinY": 0, "boundsMaxX": 950, "boundsMaxY": 500,
+      "assets": ["CypressColumn", "CypressSmall", "MapleYoung"]
+    },
+    {
+      "name": "FarSouthMixed",
+      "density": 0.022,
+      "boundsMinX": -200, "boundsMinY": 600, "boundsMaxX": 300, "boundsMaxY": 950,
+      "assets": ["OakMature", "MapleWide", "WillowSmall", "BirchTall"]
+    },
+    {
+      "name": "FarSouthWestFern",
+      "density": 0.035,
+      "boundsMinX": -800, "boundsMinY": 500, "boundsMaxX": -300, "boundsMaxY": 900,
+      "assets": ["FernPatch", "ShrubDense", "WillowSmall"]
+    },
+    {
+      "name": "FarSouthEastPine",
+      "density": 0.028,
+      "boundsMinX": 400, "boundsMinY": 500, "boundsMaxX": 850, "boundsMaxY": 900,
+      "assets": ["PineTall", "PineSlender", "MapleYoung", "ShrubSparse"]
+    },
+    {
+      "name": "NorthwestCornerDense",
+      "density": 0.032,
+      "boundsMinX": -950, "boundsMinY": -950, "boundsMaxX": -550, "boundsMaxY": -600,
+      "assets": ["PineTall", "SpruceDense", "SpruceYoung"]
+    },
+    {
+      "name": "NortheastCornerSpruce",
+      "density": 0.030,
+      "boundsMinX": 600, "boundsMinY": -950, "boundsMaxX": 950, "boundsMaxY": -550,
+      "assets": ["SpruceDense", "SpruceYoung", "PineTall"]
+    },
+    {
+      "name": "SouthwestCornerWillow",
+      "density": 0.020,
+      "boundsMinX": -950, "boundsMinY": 600, "boundsMaxX": -550, "boundsMaxY": 950,
+      "assets": ["WillowLarge", "WillowSmall", "ShrubDense", "FernPatch"]
+    },
+    {
+      "name": "SoutheastCornerMaple",
+      "density": 0.024,
+      "boundsMinX": 550, "boundsMinY": 600, "boundsMaxX": 950, "boundsMaxY": 950,
+      "assets": ["MapleWide", "MapleYoung", "OakAged", "CypressColumn"]
+    },
+    {
+      "name": "ScatteredOakSouth",
+      "density": 0.015,
+      "boundsMinX": 50, "boundsMinY": 80, "boundsMaxX": 350, "boundsMaxY": 350,
+      "assets": ["OakMature", "OakSapling", "ShrubSparse"]
+    },
+    {
+      "name": "WestFlankPine",
+      "density": 0.022,
+      "boundsMinX": -700, "boundsMinY": 50, "boundsMaxX": -350, "boundsMaxY": 350,
+      "assets": ["PineTall", "PineSmall", "ShrubDense"]
     }
   ]
 }

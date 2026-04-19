@@ -44,29 +44,32 @@ if (NVRHI_WITH_DX12)
         DESTINATION "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/D3D12/")
 endif()
 
+set(${PROJECT_NAME}_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src")
+set(${PROJECT_NAME}_INCLUDE_DIR "${${PROJECT_NAME}_SOURCE_DIR}/include")
+# for 32 bit indices
+add_compile_definitions(IMGUI_USER_CONFIG="${${PROJECT_NAME}_INCLUDE_DIR}/xylem_imgui_config.h")
+
 # Include the Donut framework
 add_subdirectory(Donut)
 
-set(source_folder src)
-
 include(donut/compileshaders.cmake)
-file(GLOB shaders "${source_folder}/shaders/*.hlsl")
-file(GLOB sources "${source_folder}/*.cpp")
+# file(GLOB SHADERS "${SOURCE_DIR}/shaders/*.hlsl")
+file(GLOB ${PROJECT_NAME}_SOURCES "${${PROJECT_NAME}_SOURCE_DIR}/*.cpp")
 
 donut_compile_shaders_all_platforms(
     TARGET ${PROJECT_NAME}_shaders
     PROJECT_NAME ${PROJECT_NAME}
     FOLDER ${PROJECT_NAME}
-    CONFIG ${CMAKE_CURRENT_SOURCE_DIR}/${source_folder}/shaders/shaders.cfg
+    CONFIG ${${PROJECT_NAME}_SOURCE_DIR}/shaders/shaders.cfg
     OUTPUT_BASE ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders/custom
     SHADER_MODEL 6_5
 )
 
-add_executable(${PROJECT_NAME} WIN32 ${sources}
+add_executable(${PROJECT_NAME} WIN32 ${${PROJECT_NAME}_SOURCES}
     Donut/thirdparty/imgui/misc/cpp/imgui_stdlib.cpp
 )
 
-target_compile_definitions(Xylem PRIVATE DONUT_SHADERS_OUTPUT_SUBDIR="${DONUT_SHADERS_OUTPUT_SUBDIR}")
+target_compile_definitions(${PROJECT_NAME} PRIVATE DONUT_SHADERS_OUTPUT_SUBDIR="${DONUT_SHADERS_OUTPUT_SUBDIR}")
 
 if (DONUT_WITH_AFTERMATH)
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
@@ -85,7 +88,7 @@ if (DONUT_WITH_AFTERMATH)
 endif()
 
 target_include_directories(${PROJECT_NAME} PRIVATE 
-    "${source_folder}/include"
+    "${${PROJECT_NAME}_INCLUDE_DIR}"
     "${DONUT_D3D_AGILITY_SDK_PATH}/build/native/include"
 )
 if (DONUT_WITH_AFTERMATH)

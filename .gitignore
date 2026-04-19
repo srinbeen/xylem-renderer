@@ -1,5 +1,9 @@
 .vscode/
+.claude/
 bin/
 build/
 media/
 examples/
+RenderDoc/
+CLAUDE.md
+todo.txt

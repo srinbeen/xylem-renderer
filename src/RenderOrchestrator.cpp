@@ -9,6 +9,7 @@ void RenderOrchestrator::SetShaderFactory(std::shared_ptr<engine::ShaderFactory>
     m_ShaderFactory = sf;
     m_Traditional.SetShaderFactory(sf);
     m_Compute.SetShaderFactory(sf);
+    m_MeshShader.SetShaderFactory(sf);
 }
 
 bool RenderOrchestrator::Init()
@@ -19,12 +20,13 @@ bool RenderOrchestrator::Init()
 
     bool traditionalOk = m_Traditional.Init();
     bool computeOk     = m_Compute.Init();
-    if (!traditionalOk || !computeOk) {
-        donut::log::error("RenderOrchestrator: no pipeline could be initialised");
+    bool meshShaderOk  = m_MeshShader.Init();
+    if (!traditionalOk || !computeOk || !meshShaderOk) {
+        donut::log::error("RenderOrchestrator: one or more pipelines failed to initialise");
         return false;
     }
 
-    m_UI.activePipeline = m_UI.requestedPipeline = Pipeline::ComputeCull;
+    m_UI.activePipeline = m_UI.requestedPipeline = Pipeline::MeshShader;
     m_UIPass.Init(m_ShaderFactory);
     return true;
 }
@@ -32,10 +34,12 @@ bool RenderOrchestrator::Init()
 app::IRenderPass* RenderOrchestrator::_activePass()
 {
     switch (m_UI.activePipeline) {
-        case Pipeline::Traditional: 
+        case Pipeline::Traditional:
             return static_cast<app::IRenderPass*>(&m_Traditional);
-        case Pipeline::ComputeCull: 
+        case Pipeline::Compute:
             return static_cast<app::IRenderPass*>(&m_Compute);
+        case Pipeline::MeshShader:
+            return static_cast<app::IRenderPass*>(&m_MeshShader);
         default:
             return nullptr;
     }
@@ -67,6 +71,7 @@ void RenderOrchestrator::BackBufferResizing()
 {
     m_Traditional.BackBufferResizing();
     m_Compute.BackBufferResizing();
+    m_MeshShader.BackBufferResizing();
     m_UIPass.BackBufferResizing();
 }
 

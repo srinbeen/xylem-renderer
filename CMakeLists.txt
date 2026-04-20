@@ -27,7 +27,7 @@ set(DONUT_WITH_VULKAN OFF CACHE BOOL "" FORCE)
 
 set(DONUT_FORCE_DISCRETE_GPU ON CACHE BOOL "" FORCE)
 
-set(DONUT_WITH_AFTERMATH OFF CACHE BOOL "" FORCE)
+set(DONUT_WITH_AFTERMATH ON CACHE BOOL "" FORCE)
 
 if (DONUT_WITH_AFTERMATH)
     set(AFTERMATH_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build/_deps/aftermath-src")
@@ -51,6 +51,8 @@ add_compile_definitions(IMGUI_USER_CONFIG="${${PROJECT_NAME}_INCLUDE_DIR}/xylem_
 
 # Include the Donut framework
 add_subdirectory(Donut)
+# Include meshoptimizer
+add_subdirectory(meshoptimizer)
 
 include(donut/compileshaders.cmake)
 # file(GLOB SHADERS "${SOURCE_DIR}/shaders/*.hlsl")
@@ -80,7 +82,7 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
 endif()
 
 add_dependencies(${PROJECT_NAME} ${PROJECT_NAME}_shaders)
-target_link_libraries(${PROJECT_NAME} PRIVATE donut_app donut_render donut_engine donut_core)
+target_link_libraries(${PROJECT_NAME} PRIVATE donut_app donut_render donut_engine donut_core meshoptimizer)
 if (DONUT_WITH_AFTERMATH)
     target_link_libraries(${PROJECT_NAME} PRIVATE
         "${AFTERMATH_SDK_DIR}/lib/x64/GFSDK_Aftermath_Lib.x64.lib"

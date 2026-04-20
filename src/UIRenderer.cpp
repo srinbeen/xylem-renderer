@@ -27,9 +27,9 @@ void UIRenderer::buildUI() {
     // PERFORMANCE METRICS
     // =====================================================================
     if (ImGui::CollapsingHeader("Performance Metrics", ImGuiTreeNodeFlags_DefaultOpen)) {
-        static const char* pipelineNames[] = { "Traditional (CPU cull)", "Compute Cull (GPU cull)" };
+        static const char* pipelineNames[] = { "Traditional (CPU cull)", "Compute Cull (GPU cull)", "Mesh Shader (AS/MS)" };
         int pipelineIdx = static_cast<int>(m_ui.requestedPipeline);
-        if (ImGui::Combo("Pipeline", &pipelineIdx, pipelineNames, 2))
+        if (ImGui::Combo("Pipeline", &pipelineIdx, pipelineNames, IM_ARRAYSIZE(pipelineNames)))
             m_ui.requestedPipeline = static_cast<Pipeline>(pipelineIdx);
         if (m_ui.activePipeline != m_ui.requestedPipeline)
             ImGui::TextDisabled("(switching...)");

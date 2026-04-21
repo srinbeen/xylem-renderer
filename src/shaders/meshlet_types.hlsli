@@ -36,13 +36,6 @@ struct AssetLodRange {
     uint _pad2;
 };
 
-struct VisibleInstance {
-    uint instanceIdx;
-    uint assetLod;
-    uint meshletChunkBase;
-    uint _pad1;
-};
-
 // AS -> MS payload. Keep small (<= 16KB total).
 struct ASPayload {
     uint instanceIdx;

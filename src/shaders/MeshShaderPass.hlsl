@@ -14,6 +14,13 @@ cbuffer CB : register(b0)
     float4   cascadeSplits;
 };
 
+// Root constant (PushConstants): slot identity forwarded by the command signature's
+// CONSTANT argument. Each ExecuteIndirect record rewrites this before DISPATCH_MESH.
+cbuffer PushC : register(b1)
+{
+    uint g_SlotIdx;
+};
+
 struct InstanceRenderData
 {
     float4x4 model;     // offset   0, size 64
@@ -22,57 +29,35 @@ struct InstanceRenderData
 };
 
 // Mega-buffers
-StructuredBuffer<float3>            g_Positions     : register(t0);
-StructuredBuffer<float3>            g_Normals       : register(t1);
-StructuredBuffer<float3>            g_Tangents      : register(t2);
-StructuredBuffer<float3>            g_Bitangents    : register(t3);
-StructuredBuffer<float2>            g_UVs           : register(t4);
-StructuredBuffer<uint>              g_MeshletVertIdx: register(t5);
-ByteAddressBuffer                   g_MeshletPrimIdx: register(t6);
-StructuredBuffer<MeshletDesc>       g_Meshlets      : register(t7);
-StructuredBuffer<AssetLodRange>     g_AssetLodRanges: register(t8);
-StructuredBuffer<VisibleInstance>   g_VisibleInsts  : register(t9);
-StructuredBuffer<InstanceRenderData> g_Instances    : register(t10);
+StructuredBuffer<float3>             g_Positions      : register(t0);
+StructuredBuffer<float3>             g_Normals        : register(t1);
+StructuredBuffer<float3>             g_Tangents       : register(t2);
+StructuredBuffer<float3>             g_Bitangents     : register(t3);
+StructuredBuffer<float2>             g_UVs            : register(t4);
+StructuredBuffer<uint>               g_MeshletVertIdx : register(t5);
+ByteAddressBuffer                    g_MeshletPrimIdx : register(t6);
+StructuredBuffer<MeshletDesc>        g_Meshlets       : register(t7);
+StructuredBuffer<AssetLodRange>      g_AssetLodRanges : register(t8);
 
-Texture2D              t_Diffuse                   : register(t11);
-Texture2D              t_NormalMap                 : register(t12);
-SamplerState           s_Sampler                   : register(s0);
+// GPU-cull outputs
+StructuredBuffer<uint>               g_VisBuf           : register(t9);   // compacted persistent-inst indices
+StructuredBuffer<uint>               g_SlotOffsets      : register(t10);  // per-slot base into g_VisBuf
+StructuredBuffer<uint>               g_SlotCounts       : register(t11);  // per-slot visible instance count
+StructuredBuffer<InstanceRenderData> g_Instances        : register(t12);  // persistent instance buffer
+StructuredBuffer<uint>               g_ASInvocsPerSlot  : register(t13);  // ceil(meshletCount / AS_GROUP_SIZE)
 
-// Frustum sphere test using 6 planes derived from viewProj.
-// Plane form: dot(plane.xyz, p) + plane.w >= 0 means "inside".
-void extractFrustumPlanes(out float4 planes[6])
-{
-    // Row-major viewProj: rows are basis vectors.
-    float4 r0 = float4(viewProj._11, viewProj._21, viewProj._31, viewProj._41);
-    float4 r1 = float4(viewProj._12, viewProj._22, viewProj._32, viewProj._42);
-    float4 r2 = float4(viewProj._13, viewProj._23, viewProj._33, viewProj._43);
-    float4 r3 = float4(viewProj._14, viewProj._24, viewProj._34, viewProj._44);
-
-    planes[0] = r3 + r0; // left
-    planes[1] = r3 - r0; // right
-    planes[2] = r3 + r1; // bottom
-    planes[3] = r3 - r1; // top
-    planes[4] = r2;      // near (reverse-Z: z>=0 in clip)
-    planes[5] = r3 - r2; // far
-    [unroll] for (uint i = 0; i < 6; i++)
-    {
-        float len = length(planes[i].xyz);
-        if (len > 0.0) planes[i] /= len;
-    }
-}
-
-bool sphereInFrustum(float3 center, float radius, float4 planes[6])
-{
-    [unroll] for (uint i = 0; i < 6; i++)
-    {
-        if (dot(planes[i].xyz, center) + planes[i].w < -radius) return false;
-    }
-    return true;
-}
+Texture2D                            t_Diffuse        : register(t14);
+Texture2D                            t_NormalMap      : register(t15);
+SamplerState                         s_Sampler        : register(s0);
 
 // =============================================================================
-// Amplification Shader
+// Amplification Shader — pass-through (no cone / no Hi-Z)
 // =============================================================================
+//
+// One AS threadgroup = one "chunk" = up to XYLEM_AS_GROUP_SIZE meshlets of one
+// instance. gid.x is the flat chunk index within the slot (slot = asset*LOD).
+// Total groups.x per slot = visibleInstances * chunksPerSlot — produced by the
+// GPU cull pass into a DISPATCH_MESH_ARGUMENTS record.
 
 groupshared ASPayload s_payload;
 groupshared uint      s_survivors;
@@ -84,50 +69,30 @@ void main_as(uint3 gid  : SV_GroupID,
     if (gtid == 0) s_survivors = 0;
     GroupMemoryBarrierWithGroupSync();
 
-    // 2D dispatch: reconstruct a flat work-item index. CPU launches
-    // dispatchMesh(min(W, XYLEM_DISPATCH_X), ceil(W / XYLEM_DISPATCH_X), 1).
-    // Tail groups past the last real work item leave s_survivors at 0 — the
-    // final DispatchMesh emits zero mesh groups. Guarded rather than early-
-    // returned to keep DispatchMesh the single dominating call (DXC requires it).
-    uint workIdx        = gid.y * XYLEM_DISPATCH_X + gid.x;
-    uint totalWorkItems = asuint(_pad0);
-    bool validWork      = (workIdx < totalWorkItems);
+    uint slotIdx            = g_SlotIdx;
+    uint ASInvocsPerInst    = max(1u, g_ASInvocsPerSlot[slotIdx]);
+    uint visibleCount       = g_SlotCounts[slotIdx];
 
-    if (validWork)
+    uint instanceInSlot = gid.x / ASInvocsPerInst;
+    uint invocIdx       = gid.x % ASInvocsPerInst;
+
+    if (instanceInSlot < visibleCount)
     {
-        // Each work item = one chunk of up to XYLEM_AS_GROUP_SIZE meshlets of
-        // one instance. Multiple chunks per instance share instanceIdx + assetLod.
-        VisibleInstance    vi   = g_VisibleInsts[workIdx];
-        AssetLodRange      al   = g_AssetLodRanges[vi.assetLod];
-        InstanceRenderData inst = g_Instances[vi.instanceIdx];
+        uint persistentInstIdx = g_VisBuf[g_SlotOffsets[slotIdx] + instanceInSlot];
+        AssetLodRange al = g_AssetLodRanges[slotIdx];
 
         if (gtid == 0)
         {
-            s_payload.instanceIdx = vi.instanceIdx;
-            s_payload.assetLod    = vi.assetLod;
+            s_payload.instanceIdx = persistentInstIdx;
+            s_payload.assetLod    = slotIdx;
         }
 
-        uint meshletLocalIdx = vi.meshletChunkBase + gtid;
+        uint meshletLocalIdx = invocIdx * XYLEM_AS_GROUP_SIZE + gtid;
         if (meshletLocalIdx < al.meshletCount)
         {
-            MeshletDesc m = g_Meshlets[al.meshletOffset + meshletLocalIdx];
-
-            // Transform sphere to world space using the instance model matrix.
-            // Radius scaled by max axis length (approx; OK for uniform scales).
-            float3 centerWS = mul(float4(m.bounds.xyz, 1.0), inst.model).xyz;
-            float  scale = max(max(length(inst.model._11_12_13),
-                                    length(inst.model._21_22_23)),
-                               length(inst.model._31_32_33));
-            float  radiusWS = m.bounds.w * scale;
-
-            float4 planes[6];
-            extractFrustumPlanes(planes);
-            if (sphereInFrustum(centerWS, radiusWS, planes))
-            {
-                uint slot;
-                InterlockedAdd(s_survivors, 1, slot);
-                s_payload.meshletIndices[slot] = meshletLocalIdx;
-            }
+            uint slot;
+            InterlockedAdd(s_survivors, 1, slot);
+            s_payload.meshletIndices[slot] = meshletLocalIdx;
         }
     }
     GroupMemoryBarrierWithGroupSync();
@@ -166,10 +131,9 @@ void main_ms(
 
     SetMeshOutputCounts(m.vertexCount, m.triangleCount);
 
-    // Emit vertices
     if (gtid < m.vertexCount)
     {
-        uint localVertIdx = g_MeshletVertIdx[al.meshletVertBase + m.vertexOffset + gtid];
+        uint localVertIdx  = g_MeshletVertIdx[al.meshletVertBase + m.vertexOffset + gtid];
         uint globalVertIdx = al.vertexAttribBase + localVertIdx;
 
         float3 p  = g_Positions[globalVertIdx];
@@ -190,19 +154,14 @@ void main_ms(
         o_verts[gtid] = v;
     }
 
-    // Emit triangles. Packed 3 bytes per triangle in g_MeshletPrimIdx at byte
-    // (al.meshletPrimBase + m.triangleOffset + gtid*3). Load as 4 bytes and mask.
     if (gtid < m.triangleCount)
     {
         uint triByteOffset = al.meshletPrimBase + m.triangleOffset + gtid * 3u;
-        // Align-down to 4 bytes and extract the 3 bytes spanning the boundary.
         uint alignedOffset = triByteOffset & ~3u;
         uint byteShift     = (triByteOffset - alignedOffset) * 8u;
 
-        // Load two u32s to cover any boundary crossing (triByte occupies 3 bytes).
         uint w0 = g_MeshletPrimIdx.Load(alignedOffset);
         uint w1 = g_MeshletPrimIdx.Load(alignedOffset + 4u);
-        // Combine to a 64-bit-ish chunk and extract bytes [byteShift, byteShift+24) bits.
         uint lo = (w0 >> byteShift);
         uint hi = (byteShift == 0) ? 0 : (w1 << (32u - byteShift));
         uint tri24 = (lo | hi) & 0x00FFFFFFu;
@@ -214,7 +173,7 @@ void main_ms(
 }
 
 // =============================================================================
-// Pixel Shader (MVP: ambient + Lambert + bark + normal map; no shadows)
+// Pixel Shader (ambient + Lambert + bark + normal map; no shadows)
 // =============================================================================
 
 void main_ps(in V2P i_v, out float4 o_color : SV_Target0)

@@ -26,7 +26,6 @@ using namespace Xylem;
 void ComputeRenderPass::_UploadAsset(
     const TreeAssetDef& assetDef,
     GPUTreeAsset& gpuAsset,
-    nvrhi::IDevice* device,
     nvrhi::ICommandList* commandList)
 {
     gpuAsset.textureSetIdx = assetDef.textureSetIdx;
@@ -47,7 +46,7 @@ void ComputeRenderPass::_UploadAsset(
         auto uploadVB = [&](const auto& data, const char* suffix, nvrhi::BufferHandle& out) {
             vDesc.debugName = "VB_" + assetDef.name + lodSuffix + suffix;
             vDesc.byteSize  = data.size() * sizeof(data[0]);
-            out = device->createBuffer(vDesc);
+            out = GetDevice()->createBuffer(vDesc);
             commandList->beginTrackingBufferState(out, nvrhi::ResourceStates::CopyDest);
             commandList->writeBuffer(out, data.data(), vDesc.byteSize);
             commandList->setPermanentBufferState(out, nvrhi::ResourceStates::VertexBuffer);
@@ -61,7 +60,7 @@ void ComputeRenderPass::_UploadAsset(
 
         iDesc.debugName = "IB_" + assetDef.name + lodSuffix;
         iDesc.byteSize  = lodDef.indices.size() * sizeof(uint32_t);
-        auto iBuf = device->createBuffer(iDesc);
+        auto iBuf = GetDevice()->createBuffer(iDesc);
         commandList->beginTrackingBufferState(iBuf, nvrhi::ResourceStates::CopyDest);
         commandList->writeBuffer(iBuf, lodDef.indices.data(), iDesc.byteSize);
         commandList->setPermanentBufferState(iBuf, nvrhi::ResourceStates::IndexBuffer);
@@ -73,13 +72,13 @@ void ComputeRenderPass::_UploadAsset(
     }
 }
 
-void ComputeRenderPass::_UploadAllAssets(nvrhi::IDevice* device, nvrhi::ICommandList* commandList) {
+void ComputeRenderPass::_UploadAllAssets(nvrhi::ICommandList* commandList) {
     const auto& assets = m_Registry.getAssets();
     m_GPUAssets.resize(assets.size());
     m_AssetIdToGPUIndex.clear();
 
     for (size_t i = 0; i < assets.size(); i++) {
-        _UploadAsset(assets[i], m_GPUAssets[i], device, commandList);
+        _UploadAsset(assets[i], m_GPUAssets[i], commandList);
         m_AssetIdToGPUIndex[assets[i].id] = i;
     }
 }
@@ -896,7 +895,7 @@ bool ComputeRenderPass::Init() {
         nvrhi::CommandListHandle initCL = GetDevice()->createCommandList();
         initCL->open();
 
-        _UploadAllAssets(GetDevice(), initCL);
+        _UploadAllAssets(initCL);
 
         if (!_InitShared())                                return false;
         if (!_InitShadowPass())                            return false;
@@ -980,16 +979,16 @@ void ComputeRenderPass::onAssetsDirty(const std::vector<size_t>& dirtyAssetIndic
     // If the GPU asset count doesn't match the registry (asset was removed),
     // re-upload everything from scratch so phantom entries are cleared.
     if (m_GPUAssets.size() != assets.size()) {
-        _UploadAllAssets(GetDevice(), cl);
+        _UploadAllAssets(cl);
     } else {
         for (size_t idx : dirtyAssetIndices) {
             const auto& assetDef = assets[idx];
             auto it = m_AssetIdToGPUIndex.find(assetDef.id);
             if (it != m_AssetIdToGPUIndex.end()) {
-                _UploadAsset(assetDef, m_GPUAssets[it->second], GetDevice(), cl);
+                _UploadAsset(assetDef, m_GPUAssets[it->second], cl);
             } else {
                 GPUTreeAsset gpuAsset;
-                _UploadAsset(assetDef, gpuAsset, GetDevice(), cl);
+                _UploadAsset(assetDef, gpuAsset, cl);
                 m_AssetIdToGPUIndex[assetDef.id] = m_GPUAssets.size();
                 m_GPUAssets.push_back(std::move(gpuAsset));
             }
@@ -1130,7 +1129,7 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     const auto& lodDistances = m_Registry.getLodDistances();
     constants.numLods = static_cast<uint32_t>(m_Registry.getLodSegments().size());
     for (uint32_t i = 0; i < constants.numLods; i++)
-        constants.lodDistances[i].x = lodDistances[i];
+        constants.lodDistances[i] = lodDistances[i];
 
     // Hi-Z fields — bypass when camera looks steeply downward (bird's-eye view)
     float downwardness = -m_ViewHandler.camera.GetDir().y;  // 0 = horizontal, 1 = straight down

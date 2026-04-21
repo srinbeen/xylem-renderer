@@ -246,9 +246,8 @@ private:
     bool _InitSDSMPass();
     // bool _InitTimerQueries();
 
-    void _UploadAllAssets(nvrhi::IDevice* device, nvrhi::ICommandList* commandList);
-    void _UploadAsset(const TreeAssetDef& assetDef, GPUTreeAsset& gpuAsset,
-                      nvrhi::IDevice* device, nvrhi::ICommandList* commandList);
+    void _UploadAllAssets(nvrhi::ICommandList* commandList);
+    void _UploadAsset(const TreeAssetDef& assetDef, GPUTreeAsset& gpuAsset, nvrhi::ICommandList* commandList);
     void _BuildRegionWindows();
     void _BuildSlotLayout();
     void _UploadCullBuffers(nvrhi::ICommandList* commandList);

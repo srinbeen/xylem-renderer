@@ -22,13 +22,18 @@ namespace Xylem {
 
 using namespace donut;
 
-// GPU-driven mesh-shader pipeline. Per-instance cull runs on the GPU
-// (MeshCullCS fork of CullCS), writes D3D12_DISPATCH_MESH_ARGUMENTS into a
-// per-slot indirect buffer, and ExecuteIndirect launches one DispatchMesh per
-// (asset × LOD) slot. Hi-Z + shadow paths deferred.
+// GPU-driven mesh-shader pipeline. Mirrors ComputeRenderPass feature-for-feature:
+//   1. Depth prepass via mesh pipeline -> D32 depth target
+//   2. Hi-Z mip chain (RG32_FLOAT: .r=farthest, .g=nearest for SDSM)
+//   3. SDSM cascade build (consumes reduced Hi-Z depth)
+//   4. GPU region + instance cull (MeshCullCS) -> per-slot DISPATCH_MESH args
+//   5. Shadow pass: 4 cascades into Texture2DArray via mesh pipeline
+//   6. Terrain + sky via traditional raster pipelines (reusing the compute path's shaders)
+//   7. Main color pass via mesh pipeline with AS-side meshlet cone + Hi-Z cull + PCF shadows
 class MeshShaderRenderPass : public app::IRenderPass {
 public:
     static constexpr uint32_t k_QueuedFrames  = 3;
+    static constexpr uint32_t k_ShadowRes     = 2048;
     static constexpr float    k_CapacitySlack = 1.5f;
 
     MeshShaderRenderPass(app::DeviceManager* dm, SceneRegistry& registry, UIData& ui, ViewHandler& vh)
@@ -56,21 +61,34 @@ private:
         uint32_t count;
     };
 
+    // Secondary CB (b2 in MeshShaderPass.hlsl) — written each frame and consumed
+    // by the amplification shader for cone + Hi-Z meshlet cull.
+    struct ASCullCBEntry {
+        dm::float3 cameraPos;
+        uint32_t   hizEnabled;
+        dm::float2 hizDimensions;
+        float      maxHiZMip;
+        uint32_t   asConeCullEnabled;
+    };
+    static constexpr size_t c_ASCullCBSize =
+        (sizeof(ASCullCBEntry) + (nvrhi::c_ConstantBufferOffsetSizeAlignment - 1))
+        & ~(nvrhi::c_ConstantBufferOffsetSizeAlignment - 1);
+
     struct SharedResources {
-        nvrhi::BufferHandle constantBuffer;  // CullConstantBufferEntry — prefix is ConstantBufferEntry
+        nvrhi::BufferHandle constantBuffer;   // CullConstantBufferEntry
+        nvrhi::BufferHandle asCullCB;         // ASCullCBEntry
     };
 
-    // CPU-side meshlet mega-buffers (concatenation of per-(asset × LOD) data)
     struct MeshletResources {
         nvrhi::BufferHandle positions;
         nvrhi::BufferHandle normals;
         nvrhi::BufferHandle tangents;
         nvrhi::BufferHandle bitangents;
         nvrhi::BufferHandle uvs;
-        nvrhi::BufferHandle meshletVertIdx;   // uint32 SRV
-        nvrhi::BufferHandle meshletPrimIdx;   // raw byte buffer (ByteAddressBuffer in HLSL)
-        nvrhi::BufferHandle meshletDescs;     // MeshletDesc SRV
-        nvrhi::BufferHandle assetLodRanges;   // MeshOffsets SRV
+        nvrhi::BufferHandle meshletVertIdx;
+        nvrhi::BufferHandle meshletPrimIdx;   // raw byte buffer
+        nvrhi::BufferHandle meshletDescs;
+        nvrhi::BufferHandle assetLodRanges;
 
         uint32_t totalVertices     = 0;
         uint32_t totalMeshlets     = 0;
@@ -79,26 +97,38 @@ private:
         uint32_t numAssetLods      = 0;
     };
 
-    // GPU cull pass resources — mirrors ComputeRenderPass::CullPassResources,
-    // but without shadows and with a custom 16-byte-per-slot dispatch-args buffer
-    // (slotIdx + 3× uint for D3D12_DISPATCH_MESH_ARGUMENTS).
+    // GPU cull pass resources. 16-byte DISPATCH_MESH records per slot
+    // (slotIdx + groupsX/Y/Z).
     struct CullPassResources {
         nvrhi::ShaderHandle              mainCS;
         nvrhi::ShaderHandle              regionCS;
+        nvrhi::ShaderHandle              shadowCS;
         nvrhi::ComputePipelineHandle     mainPipeline;
         nvrhi::ComputePipelineHandle     regionPipeline;
+        nvrhi::ComputePipelineHandle     shadowPipeline;
         nvrhi::BindingLayoutHandle       bindingLayout;
         nvrhi::BindingSetHandle          bindingSet;
 
-        nvrhi::BufferHandle              persistentInstBuffer;  // SRV InstanceBufferEntry[totalCapacity]
-        nvrhi::BufferHandle              cullDataBuffer;        // SRV CullInstanceData[totalCapacity]
-        nvrhi::BufferHandle              cullRegionDataBuffer;  // SRV CullRegionData[numRegions]
-        nvrhi::BufferHandle              slotOffsetBuffer;      // SRV uint32[numSlots]
-        nvrhi::BufferHandle              ASInvocsPerSlotBuffer; // SRV uint32[numSlots]
-        nvrhi::BufferHandle              regionVisibleBuffer;   // UAV uint32[numRegions]
-        nvrhi::BufferHandle              countBuffer;           // UAV uint32[numSlots]
-        nvrhi::BufferHandle              visibilityBuffer;      // UAV uint32[visBufferSize]
-        nvrhi::BufferHandle              dispatchArgsBuffer;    // UAV raw + indirect, 16 bytes per slot
+        nvrhi::BufferHandle              persistentInstBuffer;
+        nvrhi::BufferHandle              cullDataBuffer;
+        nvrhi::BufferHandle              cullRegionDataBuffer;
+
+        // Main slot buffers (numMainSlots = numAssets * numLods)
+        nvrhi::BufferHandle              mainSlotOffsetBuffer;
+        nvrhi::BufferHandle              mainASInvocsPerSlotBuffer;
+        nvrhi::BufferHandle              mainCountBuffer;
+        nvrhi::BufferHandle              mainVisBuffer;
+        nvrhi::BufferHandle              mainDispatchArgsBuffer;
+
+        // Shadow slot buffers (numShadowSlots = numAssets * NUM_CASCADES, LOD 0 only)
+        nvrhi::BufferHandle              shadowSlotOffsetBuffer;
+        nvrhi::BufferHandle              shadowASInvocsPerSlotBuffer;
+        nvrhi::BufferHandle              shadowCountBuffer;
+        nvrhi::BufferHandle              shadowVisBuffer;
+        nvrhi::BufferHandle              shadowDispatchArgsBuffer;
+        nvrhi::BufferHandle              shadowUniqueCounter;   // UAV raw, single uint32
+
+        nvrhi::BufferHandle              regionVisibleBuffer;
     };
 
     struct DrawResources {
@@ -107,9 +137,88 @@ private:
         nvrhi::ShaderHandle              pixelShader;
         std::vector<TextureSet>          textureSets;
         nvrhi::SamplerHandle             sampler;
+        nvrhi::SamplerHandle             shadowSampler;
+        nvrhi::SamplerHandle             hizSampler;
         nvrhi::BindingLayoutHandle       bindingLayout;
         nvrhi::BindingSetHandle          bindingSet;
         nvrhi::MeshletPipelineHandle     pipeline;
+    };
+
+    struct ShadowPassResources {
+        nvrhi::TextureHandle                                              depthTexture;   // Texture2DArray, 4 cascades
+        std::array<nvrhi::FramebufferHandle, Render::c_NumCascades>       framebuffers;
+        std::array<nvrhi::TextureHandle,     Render::c_NumCascades>       debugTextures;
+
+        nvrhi::ShaderHandle              amplificationShader;  // shadow_as
+        nvrhi::ShaderHandle              meshShader;           // shadow_ms
+        nvrhi::BindingLayoutHandle       bindingLayout;
+        nvrhi::BindingSetHandle          bindingSet;
+        nvrhi::MeshletPipelineHandle     pipeline;
+
+        nvrhi::RefCountPtr<ID3D12CommandSignature> dispatchMeshSignature;
+    };
+
+    struct DepthPrepassResources {
+        nvrhi::TextureHandle             depthTexture;   // D32
+        nvrhi::FramebufferHandle         framebuffer;    // depth-only
+
+        nvrhi::ShaderHandle              amplificationShader;  // main_as
+        nvrhi::ShaderHandle              meshShader;           // depth_ms
+        nvrhi::BindingLayoutHandle       bindingLayout;
+        nvrhi::BindingSetHandle          bindingSet;
+        nvrhi::MeshletPipelineHandle     pipeline;
+
+        nvrhi::RefCountPtr<ID3D12CommandSignature> dispatchMeshSignature;
+
+        // Terrain into the same depth target via traditional VS
+        nvrhi::ShaderHandle              terrainVS;
+        nvrhi::InputLayoutHandle         terrainInputLayout;
+        nvrhi::GraphicsPipelineHandle    terrainPipeline;
+        nvrhi::BindingLayoutHandle       terrainBindingLayout;
+        nvrhi::BindingSetHandle          terrainBindingSet;
+    };
+
+    struct HiZPassResources {
+        nvrhi::TextureHandle                   hizTexture;
+        uint32_t                               numMips = 0;
+        nvrhi::ShaderHandle                    copyCS;
+        nvrhi::ShaderHandle                    buildCS;
+        nvrhi::ComputePipelineHandle           copyPipeline;
+        nvrhi::ComputePipelineHandle           buildPipeline;
+        nvrhi::BindingLayoutHandle             buildBindingLayout;
+        std::vector<nvrhi::BindingSetHandle>   buildBindingSets;
+        nvrhi::SamplerHandle                   pointSampler;
+        std::vector<nvrhi::TextureHandle>      debugMipTextures;
+    };
+
+    struct SDSMPassResources {
+        nvrhi::ShaderHandle                    buildCS;
+        nvrhi::ComputePipelineHandle           buildPipeline;
+        nvrhi::BindingLayoutHandle             buildBindingLayout;
+        nvrhi::BindingSetHandle                buildBindingSet;
+        nvrhi::BufferHandle                    inputCB;
+        nvrhi::BufferHandle                    cascadeDataBuffer;
+    };
+
+    struct TerrainPassResources {
+        nvrhi::ShaderHandle                    vertexShader;
+        nvrhi::ShaderHandle                    pixelShader;
+        nvrhi::InputLayoutHandle               inputLayout;
+        nvrhi::BufferHandle                    vertexBuffer;
+        nvrhi::BufferHandle                    indexBuffer;
+        uint32_t                               indexCount = 0;
+        nvrhi::BindingLayoutHandle             bindingLayout;
+        nvrhi::BindingSetHandle                bindingSet;
+        nvrhi::GraphicsPipelineHandle          pipeline;
+    };
+
+    struct SkyPassResources {
+        nvrhi::ShaderHandle                    vertexShader;
+        nvrhi::ShaderHandle                    pixelShader;
+        nvrhi::BufferHandle                    constantBuffer;
+        nvrhi::BindingLayoutHandle             bindingLayout;
+        nvrhi::BindingSetHandle                bindingSet;
+        nvrhi::GraphicsPipelineHandle          pipeline;
     };
 
     // -----------------------------------------------------------------------
@@ -119,6 +228,12 @@ private:
     MeshletResources                                  m_Meshlet;
     CullPassResources                                 m_Cull;
     DrawResources                                     m_Draw;
+    ShadowPassResources                               m_Shadow;
+    DepthPrepassResources                             m_DepthPrepass;
+    HiZPassResources                                  m_HiZ;
+    SDSMPassResources                                 m_SDSM;
+    TerrainPassResources                              m_TerrainPass;
+    SkyPassResources                                  m_SkyPass;
 
     nvrhi::CommandListHandle                          m_CommandList;
     ViewHandler&                                      m_ViewHandler;
@@ -127,36 +242,42 @@ private:
     UIData&                                           m_UI;
     SceneRegistry&                                    m_Registry;
 
-    // Native D3D12 command signature for ExecuteIndirect(DISPATCH_MESH).
-    // NVRHI does not expose dispatchMeshIndirect; this is invoked directly on the
-    // native graphics command list after setMeshletState().
+    // Native D3D12 command signature for ExecuteIndirect(DISPATCH_MESH) on the
+    // main color pipeline.
     nvrhi::RefCountPtr<ID3D12CommandSignature>        m_DispatchMeshSignature;
 
-    // CPU mirror of mega-buffer layout — rebuilt on asset dirty.
+    // CPU mirror of mega-buffer layout
     Render::MeshletMegabuffers                        m_MeshletMegabuffers;
 
     // Persistent instance buffer bookkeeping
     std::vector<RegionBufferWindow>                   m_RegionWindows;
-    uint32_t                                          m_TotalCapacity;
+    uint32_t                                          m_TotalCapacity = 0;
     std::vector<Render::InstanceBufferEntry>          m_InstanceStaging;
     std::vector<Render::CullInstanceData>             m_CullDataStaging;
     std::vector<Render::CullRegionData>               m_RegionStaging;
 
-    // Slot (asset × lod) layout
-    uint32_t                                          m_NumSlots = 0;
-    std::vector<uint32_t>                             m_SlotOffsets;
-    std::vector<uint32_t>                             m_ASInvocsPerSlot;
-    uint32_t                                          m_VisBufferSize = 0;
+    // Main slot layout (asset × LOD)
+    uint32_t                                          m_NumMainSlots = 0;
+    std::vector<uint32_t>                             m_MainSlotOffsets;
+    std::vector<uint32_t>                             m_MainASInvocsPerSlot;
+    uint32_t                                          m_MainVisBufferSize = 0;
 
-    // Each frame-initial record for dispatchArgsBuffer: { slotIdx, 0, 1, 1 }.
-    // Layout matches the command signature: u32 slotIdx (consumed by root
-    // constant), then u32 groupsX/Y/Z consumed by DISPATCH_MESH.
+    // Shadow slot layout (asset × cascade, always LOD 0)
+    uint32_t                                          m_NumShadowSlots = 0;
+    std::vector<uint32_t>                             m_ShadowSlotOffsets;
+    std::vector<uint32_t>                             m_ShadowASInvocsPerSlot;
+    uint32_t                                          m_ShadowVisBufferSize = 0;
+
+    // Dispatch arg templates (re-uploaded each frame to reset groupsX to 0).
     struct DispatchRecord { uint32_t slotIdx; uint32_t gx; uint32_t gy; uint32_t gz; };
-    std::vector<DispatchRecord>                       m_DispatchArgsStaging;
+    std::vector<DispatchRecord>                       m_MainDispatchArgsStaging;
+    std::vector<DispatchRecord>                       m_ShadowDispatchArgsStaging;
 
-    // Readback ring for visible-instance count (UI stats)
+    // Readback ring: [main counts][shadow counts][shadow unique]
     nvrhi::BufferHandle                               m_ReadbackBuffers[k_QueuedFrames];
-    uint32_t                                          m_ReadbackFrameIndex = 0;
+    uint32_t                                          m_ReadbackFrameIndex    = 0;
+    uint32_t                                          m_ReadbackMainEntries   = 0;
+    uint32_t                                          m_ReadbackShadowEntries = 0;
 
     // -----------------------------------------------------------------------
     // Init helpers
@@ -164,6 +285,12 @@ private:
     bool _InitShared();
     bool _InitDrawResources();
     bool _InitCullResources();
+    bool _InitShadowPass();
+    bool _InitDepthPrepass();
+    bool _InitHiZShaders();
+    bool _InitSDSMPass();
+    bool _InitTerrainPass(nvrhi::ICommandList* initCL);
+    bool _InitSkyPass();
     bool _LoadBarkTextures(nvrhi::ICommandList* initCL, engine::CommonRenderPasses& commonPasses);
 
     void _RebuildMeshletMegabuffers(nvrhi::ICommandList* cl);
@@ -173,9 +300,26 @@ private:
     void _UploadCullBuffers(nvrhi::ICommandList* cl);
     void _RebuildCullBindingSet();
     void _RebuildDrawBindingSet();
+    void _RebuildShadowBindingSet();
+    void _RebuildDepthPrepassBindingSet();
 
-    void _CreatePipelineIfNeeded(nvrhi::IFramebuffer* framebuffer);
-    void _EnsureDispatchMeshSignature();
+    void _CreateMainPipelineIfNeeded(nvrhi::IFramebuffer* framebuffer);
+    void _CreateShadowPipelineIfNeeded();
+    void _CreateDepthPrepassPipelineIfNeeded();
+    void _EnsureDispatchMeshSignatures();
+
+    // Per-frame helpers
+    void _EnsureHiZResources(uint32_t width, uint32_t height);
+    void _RenderDepthPrepass();
+    void _BuildHiZMipChain();
+    void _RunSDSMBuildCascades(const dm::box3& sceneBbox, float aspectRatio, float fovY,
+                               float regionEnvelopeNear, float regionEnvelopeFar);
+    void _ComputeRegionEnvelope(const dm::frustum& viewFrustum,
+                                const dm::float3& camPos, const dm::float3& camDir,
+                                float& outNearZ, float& outFarZ) const;
+    void _RenderSkyPass(nvrhi::IFramebuffer* framebuffer);
+    void _RenderShadowPass();
+    void _RenderScenePass(nvrhi::IFramebuffer* framebuffer);
 };
 
 } // namespace Xylem

@@ -17,6 +17,9 @@
 #include "UIData.hpp"
 #include "ViewHandler.hpp"
 #include "Meshlet.hpp"
+#include "shaders/ShaderContracts.hpp"
+#include "frame/FrameContracts.hpp"
+#include "frame/FrameStages.hpp"
 
 namespace Xylem {
 
@@ -30,7 +33,7 @@ using namespace donut;
 //   5. Shadow pass: 4 cascades into Texture2DArray via mesh pipeline
 //   6. Terrain + sky via traditional raster pipelines (reusing the compute path's shaders)
 //   7. Main color pass via mesh pipeline with AS-side meshlet cone + Hi-Z cull + PCF shadows
-class MeshShaderRenderPass : public app::IRenderPass {
+class MeshShaderRenderPass : public app::IRenderPass, public frame::IFrameStagedPass {
 public:
     static constexpr uint32_t k_QueuedFrames  = 3;
     static constexpr uint32_t k_ShadowRes     = 2048;
@@ -45,6 +48,7 @@ public:
     void Animate(float seconds) override;
     void BackBufferResizing() override;
     void Render(nvrhi::IFramebuffer* framebuffer) override;
+    const frame::FrameStageOrder& GetFrameStageOrder() const override { return frame::kDefaultFrameStageOrder; }
 
     void onAssetsDirty(const std::vector<size_t>& dirtyAssetIndices);
     void onRegionsDirty(const std::vector<size_t>& dirtyRegionIndices);
@@ -61,22 +65,9 @@ private:
         uint32_t count;
     };
 
-    // Secondary CB (b2 in MeshShaderPass.hlsl) — written each frame and consumed
-    // by the amplification shader for cone + Hi-Z meshlet cull.
-    struct ASCullCBEntry {
-        dm::float3 cameraPos;
-        uint32_t   hizEnabled;
-        dm::float2 hizDimensions;
-        float      maxHiZMip;
-        uint32_t   asConeCullEnabled;
-    };
-    static constexpr size_t c_ASCullCBSize =
-        (sizeof(ASCullCBEntry) + (nvrhi::c_ConstantBufferOffsetSizeAlignment - 1))
-        & ~(nvrhi::c_ConstantBufferOffsetSizeAlignment - 1);
-
     struct SharedResources {
         nvrhi::BufferHandle constantBuffer;   // CullConstantBufferEntry
-        nvrhi::BufferHandle asCullCB;         // ASCullCBEntry
+        nvrhi::BufferHandle asCullCB;         // shader::cb::MeshASCullConstants
     };
 
     struct MeshletResources {
@@ -140,7 +131,7 @@ private:
         nvrhi::SamplerHandle             shadowSampler;
         nvrhi::SamplerHandle             hizSampler;
         nvrhi::BindingLayoutHandle       bindingLayout;
-        nvrhi::BindingSetHandle          bindingSet;
+        std::vector<nvrhi::BindingSetHandle> bindingSets;
         nvrhi::MeshletPipelineHandle     pipeline;
     };
 
@@ -224,16 +215,21 @@ private:
     // -----------------------------------------------------------------------
     // Members
     // -----------------------------------------------------------------------
-    SharedResources                                   m_Shared;
-    MeshletResources                                  m_Meshlet;
-    CullPassResources                                 m_Cull;
-    DrawResources                                     m_Draw;
-    ShadowPassResources                               m_Shadow;
-    DepthPrepassResources                             m_DepthPrepass;
-    HiZPassResources                                  m_HiZ;
-    SDSMPassResources                                 m_SDSM;
-    TerrainPassResources                              m_TerrainPass;
-    SkyPassResources                                  m_SkyPass;
+    struct StageOwnedResources {
+        SharedResources       frameShared;
+        MeshletResources      sceneMeshletData;
+        CullPassResources     cull;
+        DrawResources         sceneDraw;
+        ShadowPassResources   shadow;
+        DepthPrepassResources depthPrepass;
+        HiZPassResources      hiz;
+        SDSMPassResources     sdsm;
+        TerrainPassResources  sceneTerrain;
+        SkyPassResources      sky;
+    };
+
+    StageOwnedResources                               m_StageResources;
+    frame::StageOutputs                               m_StageOutputs;
 
     nvrhi::CommandListHandle                          m_CommandList;
     ViewHandler&                                      m_ViewHandler;
@@ -256,13 +252,14 @@ private:
     std::vector<Render::CullInstanceData>             m_CullDataStaging;
     std::vector<Render::CullRegionData>               m_RegionStaging;
 
-    // Main slot layout (asset × LOD)
+    // Main slot layout (asset x LOD)
     uint32_t                                          m_NumMainSlots = 0;
     std::vector<uint32_t>                             m_MainSlotOffsets;
     std::vector<uint32_t>                             m_MainASInvocsPerSlot;
+    std::vector<uint32_t>                             m_MainSlotTextureSet;
     uint32_t                                          m_MainVisBufferSize = 0;
 
-    // Shadow slot layout (asset × cascade, always LOD 0)
+    // Shadow slot layout (asset x cascade, always LOD 0)
     uint32_t                                          m_NumShadowSlots = 0;
     std::vector<uint32_t>                             m_ShadowSlotOffsets;
     std::vector<uint32_t>                             m_ShadowASInvocsPerSlot;
@@ -325,3 +322,7 @@ private:
 } // namespace Xylem
 
 #endif // XYLEM_MESH_SHADER_RENDER_PASS_H
+
+
+
+

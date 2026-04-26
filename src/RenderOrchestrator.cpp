@@ -45,6 +45,20 @@ app::IRenderPass* RenderOrchestrator::_activePass()
     }
 }
 
+frame::IFrameStagedPass* RenderOrchestrator::_activeStagedPass()
+{
+    switch (m_UI.activePipeline) {
+        case Pipeline::Traditional:
+            return static_cast<frame::IFrameStagedPass*>(&m_Traditional);
+        case Pipeline::Compute:
+            return static_cast<frame::IFrameStagedPass*>(&m_Compute);
+        case Pipeline::MeshShader:
+            return static_cast<frame::IFrameStagedPass*>(&m_MeshShader);
+        default:
+            return nullptr;
+    }
+}
+
 void RenderOrchestrator::_switchPipelineIfNeeded()
 {
     if (m_UI.requestedPipeline == m_UI.activePipeline) return;
@@ -77,6 +91,13 @@ void RenderOrchestrator::BackBufferResizing()
 
 void RenderOrchestrator::Render(nvrhi::IFramebuffer* framebuffer)
 {
+    // Stage-aware orchestration hook. The active pass owns stage execution;
+    // the orchestrator provides a single stage-order contract point.
+    if (auto* staged = _activeStagedPass()) {
+        const auto& stages = staged->GetFrameStageOrder();
+        (void)stages;
+    }
+
     _activePass()->Render(framebuffer);
     m_UIPass.Render(framebuffer);
 }

@@ -17,12 +17,14 @@
 #include "Render.hpp"
 #include "UIData.hpp"
 #include "ViewHandler.hpp"
+#include "frame/FrameContracts.hpp"
+#include "frame/FrameStages.hpp"
 
 namespace Xylem {
 
 using namespace donut;
 
-class ComputeRenderPass : public app::IRenderPass {
+class ComputeRenderPass : public app::IRenderPass, public frame::IFrameStagedPass {
 public:
     static constexpr uint32_t k_QueuedFrames  = 3;
     static constexpr uint32_t k_ShadowRes     = 2048;
@@ -38,6 +40,7 @@ public:
     void Animate(float seconds) override;
     void BackBufferResizing() override;
     void Render(nvrhi::IFramebuffer* framebuffer) override;
+    const frame::FrameStageOrder& GetFrameStageOrder() const override { return frame::kDefaultFrameStageOrder; }
 
     void onAssetsDirty(const std::vector<size_t>& dirtyAssetIndices);
     void onRegionsDirty(const std::vector<size_t>& dirtyRegionIndices);
@@ -92,7 +95,7 @@ private:
         nvrhi::BufferHandle              regionVisibleBuffer;      // SRV uint32[numRegions], CPU-written each frame
     };
 
-    // Tree draw pass — uses visibility indirection via structured buffers
+    // Tree draw pass - uses visibility indirection via structured buffers
     struct TreePassResources {
         nvrhi::ShaderHandle                    vertexShader;
         nvrhi::ShaderHandle                    pixelShader;
@@ -182,15 +185,20 @@ private:
     // -----------------------------------------------------------------------
     // Members
     // -----------------------------------------------------------------------
-    SharedResources                                    m_Shared;
-    CullPassResources                                  m_CullPass;
-    TreePassResources                                  m_TreePass;
-    ShadowPassResources                                m_ShadowPass;
-    TerrainPassResources                               m_TerrainPass;
-    SkyPassResources                                   m_SkyPass;
-    DepthPrepassResources                              m_DepthPrepass;
-    HiZPassResources                                   m_HiZ;
-    SDSMPassResources                                  m_SDSM;
+    struct StageOwnedResources {
+        SharedResources       frameShared;
+        DepthPrepassResources depthPrepass;
+        HiZPassResources      hiz;
+        SDSMPassResources     sdsm;
+        CullPassResources     cull;
+        ShadowPassResources   shadow;
+        SkyPassResources      sky;
+        TreePassResources     sceneTree;
+        TerrainPassResources  sceneTerrain;
+    };
+
+    StageOwnedResources                                m_StageResources;
+    frame::StageOutputs                                m_StageOutputs;
 
     nvrhi::CommandListHandle                           m_CommandList;
     ViewHandler&                                       m_ViewHandler;
@@ -216,7 +224,7 @@ private:
     std::vector<Render::CullInstanceData>              m_CullDataStaging;
     std::vector<Render::CullRegionData>                m_RegionStaging;
 
-    // Slot layout (main pass: numAssets × numLods slots)
+    // Slot layout (main pass: numAssets x numLods slots)
     uint32_t                                           m_NumSlots = 0;
     std::vector<uint32_t>                              m_SlotOffsets;       // prefix sums [numSlots]
     std::vector<uint32_t>                              m_MaxSlotCounts;     // max instances per slot [numSlots]
@@ -272,3 +280,7 @@ private:
 } // namespace Xylem
 
 #endif // XYLEM_COMPUTE_CULL_RENDER_PASS_H
+
+
+
+

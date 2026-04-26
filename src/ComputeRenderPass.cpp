@@ -2,6 +2,8 @@
 #include "include/Globals.hpp"
 #include "include/macros.h"
 #include "include/Terrain.hpp"
+#include "include/shaders/ShaderContracts.hpp"
+#include "include/frame/FrameLifecycle.hpp"
 
 
 #include <nvrhi/utils.h>
@@ -18,6 +20,8 @@ using namespace donut::math;
 #include <filesystem>
 
 using namespace Xylem;
+namespace shader_cb = Xylem::shader::cb;
+namespace compute_reg = Xylem::shader::reg::Compute;
 
 // ===========================================================================
 // GPU asset upload helpers (identical to P0)
@@ -84,7 +88,7 @@ void ComputeRenderPass::_UploadAllAssets(nvrhi::ICommandList* commandList) {
 }
 
 // ===========================================================================
-// Region windows — gapped persistent buffer layout
+// Region windows - gapped persistent buffer layout
 // ===========================================================================
 
 void ComputeRenderPass::_BuildRegionWindows() {
@@ -140,7 +144,7 @@ void ComputeRenderPass::_BuildRegionWindows() {
 }
 
 // ===========================================================================
-// Slot layout — compute slot offsets and visibility buffer sizing
+// Slot layout - compute slot offsets and visibility buffer sizing
 // ===========================================================================
 
 void ComputeRenderPass::_BuildSlotLayout() {
@@ -178,7 +182,7 @@ void ComputeRenderPass::_BuildSlotLayout() {
 
     m_VisBufferSize = std::max(1u, m_VisBufferSize);
 
-    // Shadow slot layout — numAssets × NUM_CASCADES slots, interleaved as
+    // Shadow slot layout - numAssets x NUM_CASCADES slots, interleaved as
     // slot = ai * NUM_CASCADES + c. Each slot reserves livePerAsset[ai] vis entries
     // (worst case: every instance lives in that cascade).
     const uint32_t numShadowSlots = numAssets * Render::c_NumCascades;
@@ -193,7 +197,7 @@ void ComputeRenderPass::_BuildSlotLayout() {
     }
     m_ShadowVisBufferSize = std::max(1u, m_ShadowVisBufferSize);
 
-    // Build indirect args staging — pre-fill with indexCount, instanceCount=0
+    // Build indirect args staging - pre-fill with indexCount, instanceCount=0
     m_IndirectArgsStaging.resize(std::max(1u, m_NumSlots));
     for (uint32_t ai = 0; ai < numAssets; ai++) {
         for (uint32_t lodi = 0; lodi < numLods; lodi++) {
@@ -207,7 +211,7 @@ void ComputeRenderPass::_BuildSlotLayout() {
         }
     }
 
-    // Shadow indirect args — one per (asset × cascade), using lowest LOD.
+    // Shadow indirect args - one per (asset x cascade), using lowest LOD.
     // Slot indexing matches m_ShadowSlotOffsets: slot = ai * NUM_CASCADES + c.
     const uint32_t lowestLOD = numLods > 0 ? numLods - 1 : 0;
     m_ShadowIndirectArgsStaging.resize(std::max(1u, numShadowSlots));
@@ -232,8 +236,8 @@ void ComputeRenderPass::_UploadCullBuffers(nvrhi::ICommandList* commandList) {
     auto device = GetDevice();
     const uint32_t numRegions = static_cast<uint32_t>(m_Registry.getRegions().size());
 
-    // PersistentInstanceBuffer — SRV structured buffer (permanent ShaderResource after upload)
-    m_CullPass.persistentInstBuffer = device->createBuffer(
+    // PersistentInstanceBuffer - SRV structured buffer (permanent ShaderResource after upload)
+    m_StageResources.cull.persistentInstBuffer = device->createBuffer(
         nvrhi::BufferDesc()
             .setByteSize(m_TotalCapacity * sizeof(Render::InstanceBufferEntry))
             .setStructStride(sizeof(Render::InstanceBufferEntry))
@@ -241,14 +245,14 @@ void ComputeRenderPass::_UploadCullBuffers(nvrhi::ICommandList* commandList) {
             .setCanHaveUAVs(false)
             .setInitialState(nvrhi::ResourceStates::CopyDest)
     );
-    commandList->beginTrackingBufferState(m_CullPass.persistentInstBuffer, nvrhi::ResourceStates::CopyDest);
-    commandList->writeBuffer(m_CullPass.persistentInstBuffer,
+    commandList->beginTrackingBufferState(m_StageResources.cull.persistentInstBuffer, nvrhi::ResourceStates::CopyDest);
+    commandList->writeBuffer(m_StageResources.cull.persistentInstBuffer,
         m_InstanceStaging.data(),
         m_TotalCapacity * sizeof(Render::InstanceBufferEntry));
-    commandList->setPermanentBufferState(m_CullPass.persistentInstBuffer, nvrhi::ResourceStates::ShaderResource);
+    commandList->setPermanentBufferState(m_StageResources.cull.persistentInstBuffer, nvrhi::ResourceStates::ShaderResource);
 
-    // CullDataBuffer — SRV structured buffer (permanent ShaderResource after upload)
-    m_CullPass.cullDataBuffer = device->createBuffer(
+    // CullDataBuffer - SRV structured buffer (permanent ShaderResource after upload)
+    m_StageResources.cull.cullDataBuffer = device->createBuffer(
         nvrhi::BufferDesc()
             .setByteSize(m_TotalCapacity * sizeof(Render::CullInstanceData))
             .setStructStride(sizeof(Render::CullInstanceData))
@@ -256,14 +260,14 @@ void ComputeRenderPass::_UploadCullBuffers(nvrhi::ICommandList* commandList) {
             .setCanHaveUAVs(false)
             .setInitialState(nvrhi::ResourceStates::CopyDest)
     );
-    commandList->beginTrackingBufferState(m_CullPass.cullDataBuffer, nvrhi::ResourceStates::CopyDest);
-    commandList->writeBuffer(m_CullPass.cullDataBuffer,
+    commandList->beginTrackingBufferState(m_StageResources.cull.cullDataBuffer, nvrhi::ResourceStates::CopyDest);
+    commandList->writeBuffer(m_StageResources.cull.cullDataBuffer,
         m_CullDataStaging.data(),
         m_TotalCapacity * sizeof(Render::CullInstanceData));
-    commandList->setPermanentBufferState(m_CullPass.cullDataBuffer, nvrhi::ResourceStates::ShaderResource);
+    commandList->setPermanentBufferState(m_StageResources.cull.cullDataBuffer, nvrhi::ResourceStates::ShaderResource);
 
-    // CullRegionDataBuffer — SRV structured buffer (permanent ShaderResource after upload)
-    m_CullPass.cullRegionDataBuffer = device->createBuffer(
+    // CullRegionDataBuffer - SRV structured buffer (permanent ShaderResource after upload)
+    m_StageResources.cull.cullRegionDataBuffer = device->createBuffer(
         nvrhi::BufferDesc()
             .setByteSize(numRegions * sizeof(Render::CullRegionData))
             .setStructStride(sizeof(Render::CullRegionData))
@@ -271,14 +275,14 @@ void ComputeRenderPass::_UploadCullBuffers(nvrhi::ICommandList* commandList) {
             .setCanHaveUAVs(false)
             .setInitialState(nvrhi::ResourceStates::CopyDest)
     );
-    commandList->beginTrackingBufferState(m_CullPass.cullRegionDataBuffer, nvrhi::ResourceStates::CopyDest);
-    commandList->writeBuffer(m_CullPass.cullRegionDataBuffer,
+    commandList->beginTrackingBufferState(m_StageResources.cull.cullRegionDataBuffer, nvrhi::ResourceStates::CopyDest);
+    commandList->writeBuffer(m_StageResources.cull.cullRegionDataBuffer,
         m_RegionStaging.data(),
         numRegions * sizeof(Render::CullRegionData));
-    commandList->setPermanentBufferState(m_CullPass.cullRegionDataBuffer, nvrhi::ResourceStates::ShaderResource);
+    commandList->setPermanentBufferState(m_StageResources.cull.cullRegionDataBuffer, nvrhi::ResourceStates::ShaderResource);
 
-    // SlotOffsetBuffer — SRV structured buffer (permanent ShaderResource after upload)
-    m_CullPass.slotOffsetBuffer = device->createBuffer(
+    // SlotOffsetBuffer - SRV structured buffer (permanent ShaderResource after upload)
+    m_StageResources.cull.slotOffsetBuffer = device->createBuffer(
         nvrhi::BufferDesc()
             .setByteSize(std::max(1u, m_NumSlots) * sizeof(uint32_t))
             .setStructStride(sizeof(uint32_t))
@@ -286,14 +290,14 @@ void ComputeRenderPass::_UploadCullBuffers(nvrhi::ICommandList* commandList) {
             .setCanHaveUAVs(false)
             .setInitialState(nvrhi::ResourceStates::CopyDest)
     );
-    commandList->beginTrackingBufferState(m_CullPass.slotOffsetBuffer, nvrhi::ResourceStates::CopyDest);
+    commandList->beginTrackingBufferState(m_StageResources.cull.slotOffsetBuffer, nvrhi::ResourceStates::CopyDest);
     if (m_NumSlots > 0)
-        commandList->writeBuffer(m_CullPass.slotOffsetBuffer,
+        commandList->writeBuffer(m_StageResources.cull.slotOffsetBuffer,
             m_SlotOffsets.data(), m_NumSlots * sizeof(uint32_t));
-    commandList->setPermanentBufferState(m_CullPass.slotOffsetBuffer, nvrhi::ResourceStates::ShaderResource);
+    commandList->setPermanentBufferState(m_StageResources.cull.slotOffsetBuffer, nvrhi::ResourceStates::ShaderResource);
 
-    // CountBuffer — UAV structured buffer (cleared each frame, read as SRV by draw passes)
-    m_CullPass.countBuffer = device->createBuffer(
+    // CountBuffer - UAV structured buffer (cleared each frame, read as SRV by draw passes)
+    m_StageResources.cull.countBuffer = device->createBuffer(
         nvrhi::BufferDesc()
             .setByteSize(std::max(1u, m_NumSlots) * sizeof(uint32_t))
             .setStructStride(sizeof(uint32_t))
@@ -302,8 +306,8 @@ void ComputeRenderPass::_UploadCullBuffers(nvrhi::ICommandList* commandList) {
             .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess)
     );
 
-    // VisibilityBuffer — UAV structured buffer (written by CS, read as SRV by draw passes)
-    m_CullPass.visibilityBuffer = device->createBuffer(
+    // VisibilityBuffer - UAV structured buffer (written by CS, read as SRV by draw passes)
+    m_StageResources.cull.visibilityBuffer = device->createBuffer(
         nvrhi::BufferDesc()
             .setByteSize(m_VisBufferSize * sizeof(uint32_t))
             .setStructStride(sizeof(uint32_t))
@@ -315,8 +319,8 @@ void ComputeRenderPass::_UploadCullBuffers(nvrhi::ICommandList* commandList) {
     const uint32_t numAssets      = static_cast<uint32_t>(m_GPUAssets.size());
     const uint32_t numShadowSlots = numAssets * Render::c_NumCascades;
 
-    // ShadowCountBuffer — UAV uint32[numShadowSlots], one counter per (asset × cascade)
-    m_CullPass.shadowCountBuffer = device->createBuffer(
+    // ShadowCountBuffer - UAV uint32[numShadowSlots], one counter per (asset x cascade)
+    m_StageResources.cull.shadowCountBuffer = device->createBuffer(
         nvrhi::BufferDesc()
             .setByteSize(std::max(1u, numShadowSlots) * sizeof(uint32_t))
             .setStructStride(sizeof(uint32_t))
@@ -325,8 +329,8 @@ void ComputeRenderPass::_UploadCullBuffers(nvrhi::ICommandList* commandList) {
             .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess)
     );
 
-    // ShadowVisBuffer — UAV uint32[shadowVisBufferSize], per-(asset × cascade) windows
-    m_CullPass.shadowVisBuffer = device->createBuffer(
+    // ShadowVisBuffer - UAV uint32[shadowVisBufferSize], per-(asset x cascade) windows
+    m_StageResources.cull.shadowVisBuffer = device->createBuffer(
         nvrhi::BufferDesc()
             .setByteSize(m_ShadowVisBufferSize * sizeof(uint32_t))
             .setStructStride(sizeof(uint32_t))
@@ -335,8 +339,8 @@ void ComputeRenderPass::_UploadCullBuffers(nvrhi::ICommandList* commandList) {
             .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess)
     );
 
-    // ShadowSlotOffsetBuffer — SRV uint32[numShadowSlots], prefix sums into ShadowVisBuffer
-    m_CullPass.shadowSlotOffsetBuffer = device->createBuffer(
+    // ShadowSlotOffsetBuffer - SRV uint32[numShadowSlots], prefix sums into ShadowVisBuffer
+    m_StageResources.cull.shadowSlotOffsetBuffer = device->createBuffer(
         nvrhi::BufferDesc()
             .setByteSize(std::max(1u, numShadowSlots) * sizeof(uint32_t))
             .setStructStride(sizeof(uint32_t))
@@ -344,16 +348,16 @@ void ComputeRenderPass::_UploadCullBuffers(nvrhi::ICommandList* commandList) {
             .setCanHaveUAVs(false)
             .setInitialState(nvrhi::ResourceStates::CopyDest)
     );
-    commandList->beginTrackingBufferState(m_CullPass.shadowSlotOffsetBuffer, nvrhi::ResourceStates::CopyDest);
+    commandList->beginTrackingBufferState(m_StageResources.cull.shadowSlotOffsetBuffer, nvrhi::ResourceStates::CopyDest);
     if (numShadowSlots > 0)
-        commandList->writeBuffer(m_CullPass.shadowSlotOffsetBuffer,
+        commandList->writeBuffer(m_StageResources.cull.shadowSlotOffsetBuffer,
             m_ShadowSlotOffsets.data(), numShadowSlots * sizeof(uint32_t));
-    commandList->setPermanentBufferState(m_CullPass.shadowSlotOffsetBuffer, nvrhi::ResourceStates::ShaderResource);
+    commandList->setPermanentBufferState(m_StageResources.cull.shadowSlotOffsetBuffer, nvrhi::ResourceStates::ShaderResource);
 
-    // IndirectArgsBuffer — UAV + indirect draw args, DrawIndexedIndirectArguments[numSlots]
+    // IndirectArgsBuffer - UAV + indirect draw args, DrawIndexedIndirectArguments[numSlots]
     // Pre-filled with indexCount per slot, instanceCount=0 (CS atomically increments each frame).
     uint32_t indirectArgsBufSize = std::max(1u, m_NumSlots) * sizeof(nvrhi::DrawIndexedIndirectArguments);
-    m_CullPass.indirectArgsBuffer = device->createBuffer(
+    m_StageResources.cull.indirectArgsBuffer = device->createBuffer(
         nvrhi::BufferDesc()
             .setByteSize(indirectArgsBufSize)
             .setDebugName("IndirectArgsBuffer")
@@ -363,9 +367,9 @@ void ComputeRenderPass::_UploadCullBuffers(nvrhi::ICommandList* commandList) {
             .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess)
     );
 
-    // ShadowIndirectArgsBuffer — UAV + indirect draw args, DrawIndexedIndirectArguments[numShadowSlots]
+    // ShadowIndirectArgsBuffer - UAV + indirect draw args, DrawIndexedIndirectArguments[numShadowSlots]
     uint32_t shadowIndirectArgsBufSize = std::max(1u, numShadowSlots) * sizeof(nvrhi::DrawIndexedIndirectArguments);
-    m_CullPass.shadowIndirectArgsBuffer = device->createBuffer(
+    m_StageResources.cull.shadowIndirectArgsBuffer = device->createBuffer(
         nvrhi::BufferDesc()
             .setByteSize(shadowIndirectArgsBufSize)
             .setDebugName("ShadowIndirectArgsBuffer")
@@ -375,10 +379,10 @@ void ComputeRenderPass::_UploadCullBuffers(nvrhi::ICommandList* commandList) {
             .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess)
     );
 
-    // ShadowUniqueCounter — single uint32, incremented once per instance that
+    // ShadowUniqueCounter - single uint32, incremented once per instance that
     // passes at least one cascade. Used by UI to report unique-caster count
     // distinct from the per-cascade summed count (which double-counts).
-    m_CullPass.shadowUniqueCounter = device->createBuffer(
+    m_StageResources.cull.shadowUniqueCounter = device->createBuffer(
         nvrhi::BufferDesc()
             .setByteSize(sizeof(uint32_t))
             .setDebugName("ShadowUniqueCounter")
@@ -387,9 +391,9 @@ void ComputeRenderPass::_UploadCullBuffers(nvrhi::ICommandList* commandList) {
             .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess)
     );
 
-    // RegionVisibleBuffer — SRV uint32[numRegions], CPU-written each frame via writeBuffer
+    // RegionVisibleBuffer - SRV uint32[numRegions], CPU-written each frame via writeBuffer
     m_RegionVisibleStaging.assign(std::max(1u, numRegions), 1u);
-    m_CullPass.regionVisibleBuffer = device->createBuffer(
+    m_StageResources.cull.regionVisibleBuffer = device->createBuffer(
         nvrhi::BufferDesc()
             .setByteSize(std::max(1u, numRegions) * sizeof(uint32_t))
             .setStructStride(sizeof(uint32_t))
@@ -398,7 +402,7 @@ void ComputeRenderPass::_UploadCullBuffers(nvrhi::ICommandList* commandList) {
             .enableAutomaticStateTracking(nvrhi::ResourceStates::ShaderResource)
     );
 
-    // Readback ring buffers — combined [countBuffer | shadowCountBuffer | shadowUniqueCounter] per slot
+    // Readback ring buffers - combined [countBuffer | shadowCountBuffer | shadowUniqueCounter] per slot
     m_ReadbackCountEntries  = std::max(1u, m_NumSlots);
     m_ReadbackShadowEntries = std::max(1u, numShadowSlots);
     // Layout: [main counts (m_ReadbackCountEntries)][shadow per-slot counts (m_ReadbackShadowEntries)][1 unique counter]
@@ -427,65 +431,65 @@ void ComputeRenderPass::_RebuildCullBindings() {
     // Cull compute binding set
     nvrhi::BindingSetDesc cullBSD;
     cullBSD.bindings = {
-        nvrhi::BindingSetItem::ConstantBuffer(0, m_Shared.constantBuffer,
-            nvrhi::BufferRange(0, Render::c_CullConstantBufferSize)),
+        nvrhi::BindingSetItem::ConstantBuffer(compute_reg::Cull::kCB_Frame, m_StageResources.frameShared.constantBuffer,
+            nvrhi::BufferRange(0, shader_cb::kCullFrameSize)),
 
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_CullPass.cullRegionDataBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_CullPass.cullDataBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_CullPass.slotOffsetBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(3, m_CullPass.shadowSlotOffsetBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::Cull::kSRV_RegionData, m_StageResources.cull.cullRegionDataBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::Cull::kSRV_InstanceData, m_StageResources.cull.cullDataBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::Cull::kSRV_MainSlotOffsets, m_StageResources.cull.slotOffsetBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::Cull::kSRV_ShadowSlotOffsets, m_StageResources.cull.shadowSlotOffsetBuffer),
 
-        nvrhi::BindingSetItem::StructuredBuffer_UAV(0, m_CullPass.regionVisibleBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_UAV(1, m_CullPass.countBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_UAV(2, m_CullPass.visibilityBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_UAV(3, m_CullPass.shadowCountBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_UAV(4, m_CullPass.shadowVisBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(compute_reg::Cull::kUAV_MainRegionVis, m_StageResources.cull.regionVisibleBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(compute_reg::Cull::kUAV_MainSlotCount, m_StageResources.cull.countBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(compute_reg::Cull::kUAV_MainVis, m_StageResources.cull.visibilityBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(compute_reg::Cull::kUAV_ShadowSlotCount, m_StageResources.cull.shadowCountBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(compute_reg::Cull::kUAV_ShadowVis, m_StageResources.cull.shadowVisBuffer),
 
-        nvrhi::BindingSetItem::RawBuffer_UAV(5, m_CullPass.indirectArgsBuffer),
-        nvrhi::BindingSetItem::RawBuffer_UAV(6, m_CullPass.shadowIndirectArgsBuffer),
-        nvrhi::BindingSetItem::RawBuffer_UAV(7, m_CullPass.shadowUniqueCounter),
+        nvrhi::BindingSetItem::RawBuffer_UAV(compute_reg::Cull::kUAV_MainIndirectArgs, m_StageResources.cull.indirectArgsBuffer),
+        nvrhi::BindingSetItem::RawBuffer_UAV(compute_reg::Cull::kUAV_ShadowIndirectArgs, m_StageResources.cull.shadowIndirectArgsBuffer),
+        nvrhi::BindingSetItem::RawBuffer_UAV(compute_reg::Cull::kUAV_ShadowUniqueCounter, m_StageResources.cull.shadowUniqueCounter),
 
-        nvrhi::BindingSetItem::Texture_SRV(4, m_HiZ.hizTexture),
-        nvrhi::BindingSetItem::Sampler(0, m_HiZ.pointSampler),
+        nvrhi::BindingSetItem::Texture_SRV(compute_reg::Cull::kSRV_HiZ, m_StageResources.hiz.hizTexture),
+        nvrhi::BindingSetItem::Sampler(compute_reg::Cull::kSampler_HiZ, m_StageResources.hiz.pointSampler),
     };
 
-    m_CullPass.bindingSet = device->createBindingSet(cullBSD, m_CullPass.bindingLayout);
+    m_StageResources.cull.bindingSet = device->createBindingSet(cullBSD, m_StageResources.cull.bindingLayout);
 
-    // Tree pass binding sets — visibility/instance/slotOffset SRVs + textures
-    m_TreePass.bindingSets.resize(m_TreePass.textureSets.size());
-    for (size_t i = 0; i < m_TreePass.textureSets.size(); i++) {
+    // Tree pass binding sets - visibility/instance/slotOffset SRVs + textures
+    m_StageResources.sceneTree.bindingSets.resize(m_StageResources.sceneTree.textureSets.size());
+    for (size_t i = 0; i < m_StageResources.sceneTree.textureSets.size(); i++) {
         nvrhi::BindingSetDesc bsd;
         bsd.bindings = {
-            nvrhi::BindingSetItem::ConstantBuffer(0, m_Shared.constantBuffer,
-                nvrhi::BufferRange(0, Render::c_CullConstantBufferSize)),
-            nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t)),
+            nvrhi::BindingSetItem::ConstantBuffer(compute_reg::Scene::kCB_Frame, m_StageResources.frameShared.constantBuffer,
+                nvrhi::BufferRange(0, shader_cb::kCullFrameSize)),
+            nvrhi::BindingSetItem::PushConstants(compute_reg::Scene::kPushC_Slot, sizeof(uint32_t)),
 
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_CullPass.visibilityBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_CullPass.persistentInstBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_CullPass.slotOffsetBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::Scene::kSRV_Vis, m_StageResources.cull.visibilityBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::Scene::kSRV_Instances, m_StageResources.cull.persistentInstBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::Scene::kSRV_SlotOffsets, m_StageResources.cull.slotOffsetBuffer),
 
-            nvrhi::BindingSetItem::Texture_SRV(3, m_TreePass.textureSets[i].diffuse),
-            nvrhi::BindingSetItem::Texture_SRV(4, m_TreePass.textureSets[i].normalMap),
-            nvrhi::BindingSetItem::Texture_SRV(5, m_ShadowPass.depthTexture),
+            nvrhi::BindingSetItem::Texture_SRV(compute_reg::Scene::kTex_Diffuse, m_StageResources.sceneTree.textureSets[i].diffuse),
+            nvrhi::BindingSetItem::Texture_SRV(compute_reg::Scene::kTex_NormalMap, m_StageResources.sceneTree.textureSets[i].normalMap),
+            nvrhi::BindingSetItem::Texture_SRV(compute_reg::Scene::kTex_ShadowMap, m_StageResources.shadow.depthTexture),
 
-            nvrhi::BindingSetItem::Sampler(0, m_TreePass.sampler),
-            nvrhi::BindingSetItem::Sampler(1, m_ShadowPass.comparisonSampler),
+            nvrhi::BindingSetItem::Sampler(compute_reg::Scene::kSampler_Main, m_StageResources.sceneTree.sampler),
+            nvrhi::BindingSetItem::Sampler(compute_reg::Scene::kSampler_Shadow, m_StageResources.shadow.comparisonSampler),
         };
-        m_TreePass.bindingSets[i] = device->createBindingSet(bsd, m_TreePass.bindingLayout);
+        m_StageResources.sceneTree.bindingSets[i] = device->createBindingSet(bsd, m_StageResources.sceneTree.bindingLayout);
     }
 
     // Shadow pass binding set
     nvrhi::BindingSetDesc shadowBSD;
     shadowBSD.bindings = {
-        nvrhi::BindingSetItem::ConstantBuffer(0, m_Shared.constantBuffer,
-            nvrhi::BufferRange(0, Render::c_CullConstantBufferSize)),
-        nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t) * 2),
+        nvrhi::BindingSetItem::ConstantBuffer(compute_reg::Shadow::kCB_Frame, m_StageResources.frameShared.constantBuffer,
+            nvrhi::BufferRange(0, shader_cb::kCullFrameSize)),
+        nvrhi::BindingSetItem::PushConstants(compute_reg::Shadow::kPushC_AssetCascade, sizeof(uint32_t) * 2),
 
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_CullPass.shadowVisBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_CullPass.persistentInstBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_CullPass.shadowSlotOffsetBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::Shadow::kSRV_Vis, m_StageResources.cull.shadowVisBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::Shadow::kSRV_Instances, m_StageResources.cull.persistentInstBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::Shadow::kSRV_SlotOffsets, m_StageResources.cull.shadowSlotOffsetBuffer),
     };
-    m_ShadowPass.bindingSet = device->createBindingSet(shadowBSD, m_ShadowPass.bindingLayout);
+    m_StageResources.shadow.bindingSet = device->createBindingSet(shadowBSD, m_StageResources.shadow.bindingLayout);
 }
 
 // ===========================================================================
@@ -494,8 +498,8 @@ void ComputeRenderPass::_RebuildCullBindings() {
 
 void ComputeRenderPass::_EnsureHiZResources(uint32_t width, uint32_t height) {
     // Skip if already at the right size
-    if (m_DepthPrepass.depthTexture) {
-        auto desc = m_DepthPrepass.depthTexture->getDesc();
+    if (m_StageResources.depthPrepass.depthTexture) {
+        auto desc = m_StageResources.depthPrepass.depthTexture->getDesc();
         if (desc.width == width && desc.height == height)
             return;
     }
@@ -503,7 +507,7 @@ void ComputeRenderPass::_EnsureHiZResources(uint32_t width, uint32_t height) {
     auto device = GetDevice();
 
     // --- Depth prepass texture + framebuffer ---
-    m_DepthPrepass.depthTexture = device->createTexture(
+    m_StageResources.depthPrepass.depthTexture = device->createTexture(
         nvrhi::TextureDesc()
             .setWidth(width).setHeight(height)
             .setFormat(nvrhi::Format::D32)
@@ -518,19 +522,19 @@ void ComputeRenderPass::_EnsureHiZResources(uint32_t width, uint32_t height) {
             .setKeepInitialState(true)
             .setDebugName("DepthPrepass_Depth")
     );
-    m_DepthPrepass.framebuffer = device->createFramebuffer(
-        nvrhi::FramebufferDesc().setDepthAttachment(m_DepthPrepass.depthTexture));
+    m_StageResources.depthPrepass.framebuffer = device->createFramebuffer(
+        nvrhi::FramebufferDesc().setDepthAttachment(m_StageResources.depthPrepass.depthTexture));
 
     // Invalidate pipelines (resolution-dependent)
-    m_DepthPrepass.treePipeline    = nullptr;
-    m_DepthPrepass.terrainPipeline = nullptr;
+    m_StageResources.depthPrepass.treePipeline    = nullptr;
+    m_StageResources.depthPrepass.terrainPipeline = nullptr;
 
     // --- Hi-Z texture with full mip chain (RG32: .r=farthest for Hi-Z, .g=nearest for SDSM) ---
-    m_HiZ.numMips = static_cast<uint32_t>(std::floor(std::log2(std::max(width, height)))) + 1;
-    m_HiZ.hizTexture = device->createTexture(
+    m_StageResources.hiz.numMips = static_cast<uint32_t>(std::floor(std::log2(std::max(width, height)))) + 1;
+    m_StageResources.hiz.hizTexture = device->createTexture(
         nvrhi::TextureDesc()
             .setWidth(width).setHeight(height)
-            .setMipLevels(m_HiZ.numMips)
+            .setMipLevels(m_StageResources.hiz.numMips)
             .setFormat(nvrhi::Format::RG32_FLOAT)
             .setIsUAV(true)
             .setInitialState(nvrhi::ResourceStates::ShaderResource)
@@ -539,45 +543,45 @@ void ComputeRenderPass::_EnsureHiZResources(uint32_t width, uint32_t height) {
     );
 
     // --- Per-mip binding sets for Hi-Z build ---
-    m_HiZ.buildBindingSets.resize(m_HiZ.numMips);
+    m_StageResources.hiz.buildBindingSets.resize(m_StageResources.hiz.numMips);
 
     // Set 0: copy from depth prepass (D32 read as R32_FLOAT) -> Hi-Z mip 0 (RG32)
     // Shader seeds both channels from the single-channel source.
     {
         nvrhi::BindingSetDesc bsd;
         bsd.bindings = {
-            nvrhi::BindingSetItem::PushConstants(0, sizeof(uint32_t) * 2),
-            nvrhi::BindingSetItem::Texture_SRV(0, m_DepthPrepass.depthTexture,
+            nvrhi::BindingSetItem::PushConstants(compute_reg::HiZ::kPushC_DestDimensions, sizeof(uint32_t) * compute_reg::HiZ::kPushCDwordCount),
+            nvrhi::BindingSetItem::Texture_SRV(compute_reg::HiZ::kSRV_Source, m_StageResources.depthPrepass.depthTexture,
                 nvrhi::Format::R32_FLOAT,
                 nvrhi::TextureSubresourceSet(0, 1, 0, 1)),
-            nvrhi::BindingSetItem::Texture_UAV(0, m_HiZ.hizTexture,
+            nvrhi::BindingSetItem::Texture_UAV(compute_reg::HiZ::kUAV_Dest, m_StageResources.hiz.hizTexture,
                 nvrhi::Format::RG32_FLOAT,
                 nvrhi::TextureSubresourceSet(0, 1, 0, 1)),
         };
-        m_HiZ.buildBindingSets[0] = device->createBindingSet(bsd, m_HiZ.buildBindingLayout);
+        m_StageResources.hiz.buildBindingSets[0] = device->createBindingSet(bsd, m_StageResources.hiz.buildBindingLayout);
     }
 
     // Sets 1..N-1: downsample mip i-1 -> mip i (both RG32)
-    for (uint32_t mip = 1; mip < m_HiZ.numMips; mip++) {
+    for (uint32_t mip = 1; mip < m_StageResources.hiz.numMips; mip++) {
         nvrhi::BindingSetDesc bsd;
         bsd.bindings = {
-            nvrhi::BindingSetItem::PushConstants(0, sizeof(uint32_t) * 2),
-            nvrhi::BindingSetItem::Texture_SRV(0, m_HiZ.hizTexture,
+            nvrhi::BindingSetItem::PushConstants(compute_reg::HiZ::kPushC_DestDimensions, sizeof(uint32_t) * compute_reg::HiZ::kPushCDwordCount),
+            nvrhi::BindingSetItem::Texture_SRV(compute_reg::HiZ::kSRV_Source, m_StageResources.hiz.hizTexture,
                 nvrhi::Format::RG32_FLOAT,
                 nvrhi::TextureSubresourceSet(mip - 1, 1, 0, 1)),
-            nvrhi::BindingSetItem::Texture_UAV(0, m_HiZ.hizTexture,
+            nvrhi::BindingSetItem::Texture_UAV(compute_reg::HiZ::kUAV_Dest, m_StageResources.hiz.hizTexture,
                 nvrhi::Format::RG32_FLOAT,
                 nvrhi::TextureSubresourceSet(mip, 1, 0, 1)),
         };
-        m_HiZ.buildBindingSets[mip] = device->createBindingSet(bsd, m_HiZ.buildBindingLayout);
+        m_StageResources.hiz.buildBindingSets[mip] = device->createBindingSet(bsd, m_StageResources.hiz.buildBindingLayout);
     }
 
     // --- Per-mip debug view textures (single-mip, RG32_FLOAT, for ImGui display) ---
-    m_HiZ.debugMipTextures.resize(m_HiZ.numMips);
-    for (uint32_t mip = 0; mip < m_HiZ.numMips; mip++) {
+    m_StageResources.hiz.debugMipTextures.resize(m_StageResources.hiz.numMips);
+    for (uint32_t mip = 0; mip < m_StageResources.hiz.numMips; mip++) {
         uint32_t mipW = std::max(1u, width  >> mip);
         uint32_t mipH = std::max(1u, height >> mip);
-        m_HiZ.debugMipTextures[mip] = device->createTexture(
+        m_StageResources.hiz.debugMipTextures[mip] = device->createTexture(
             nvrhi::TextureDesc()
                 .setWidth(mipW).setHeight(mipH)
                 .setMipLevels(1)
@@ -591,32 +595,32 @@ void ComputeRenderPass::_EnsureHiZResources(uint32_t width, uint32_t height) {
     // --- Depth prepass binding set (references main cull vis/inst/slot buffers) ---
     nvrhi::BindingSetDesc prepassBSD;
     prepassBSD.bindings = {
-        nvrhi::BindingSetItem::ConstantBuffer(0, m_Shared.constantBuffer,
-            nvrhi::BufferRange(0, Render::c_CullConstantBufferSize)),
-        nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t)),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_CullPass.visibilityBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_CullPass.persistentInstBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_CullPass.slotOffsetBuffer),
+        nvrhi::BindingSetItem::ConstantBuffer(compute_reg::DepthPrepass::kCB_Frame, m_StageResources.frameShared.constantBuffer,
+            nvrhi::BufferRange(0, shader_cb::kCullFrameSize)),
+        nvrhi::BindingSetItem::PushConstants(compute_reg::DepthPrepass::kPushC_Slot, sizeof(uint32_t)),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::DepthPrepass::kSRV_Vis, m_StageResources.cull.visibilityBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::DepthPrepass::kSRV_Instances, m_StageResources.cull.persistentInstBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::DepthPrepass::kSRV_SlotOffsets, m_StageResources.cull.slotOffsetBuffer),
     };
-    m_DepthPrepass.bindingSet = device->createBindingSet(prepassBSD, m_DepthPrepass.bindingLayout);
+    m_StageResources.depthPrepass.bindingSet = device->createBindingSet(prepassBSD, m_StageResources.depthPrepass.bindingLayout);
 
     // Rebuild cull binding set to reference the new Hi-Z texture
     _RebuildCullBindings();
 
     // Rebuild SDSM binding set (reads top mip of Hi-Z texture)
-    if (m_SDSM.buildBindingLayout) {
+    if (m_StageResources.sdsm.buildBindingLayout) {
         nvrhi::BindingSetDesc bsd;
         bsd.bindings = {
-            nvrhi::BindingSetItem::ConstantBuffer(0, m_SDSM.inputCB),
-            nvrhi::BindingSetItem::Texture_SRV(0, m_HiZ.hizTexture),
-            nvrhi::BindingSetItem::StructuredBuffer_UAV(0, m_SDSM.cascadeDataBuffer),
+            nvrhi::BindingSetItem::ConstantBuffer(compute_reg::SDSM::kCB_Input, m_StageResources.sdsm.inputCB),
+            nvrhi::BindingSetItem::Texture_SRV(compute_reg::SDSM::kSRV_HiZ, m_StageResources.hiz.hizTexture),
+            nvrhi::BindingSetItem::StructuredBuffer_UAV(compute_reg::SDSM::kUAV_CascadeOut, m_StageResources.sdsm.cascadeDataBuffer),
         };
-        m_SDSM.buildBindingSet = device->createBindingSet(bsd, m_SDSM.buildBindingLayout);
+        m_StageResources.sdsm.buildBindingSet = device->createBindingSet(bsd, m_StageResources.sdsm.buildBindingLayout);
     }
 }
 
 // ===========================================================================
-// Depth prepass — draw last frame's visible set depth-only
+// Depth prepass - draw last frame's visible set depth-only
 // ===========================================================================
 
 void ComputeRenderPass::_RenderDepthPrepass() {
@@ -625,18 +629,18 @@ void ComputeRenderPass::_RenderDepthPrepass() {
     // Clear depth to far plane
 #if XYLEM_USE_REVERSE_Z
     nvrhi::utils::ClearDepthStencilAttachment(m_CommandList,
-        m_DepthPrepass.framebuffer, 0.f, 0);
+        m_StageResources.depthPrepass.framebuffer, 0.f, 0);
 #else
     nvrhi::utils::ClearDepthStencilAttachment(m_CommandList,
-        m_DepthPrepass.framebuffer, 1.f, 0);
+        m_StageResources.depthPrepass.framebuffer, 1.f, 0);
 #endif
 
     // Lazy pipeline creation
-    if (!m_DepthPrepass.treePipeline) {
+    if (!m_StageResources.depthPrepass.treePipeline) {
         nvrhi::GraphicsPipelineDesc pso;
-        pso.VS             = m_DepthPrepass.treeVS;
-        pso.inputLayout    = m_DepthPrepass.treeInputLayout;
-        pso.bindingLayouts = { m_DepthPrepass.bindingLayout };
+        pso.VS             = m_StageResources.depthPrepass.treeVS;
+        pso.inputLayout    = m_StageResources.depthPrepass.treeInputLayout;
+        pso.bindingLayouts = { m_StageResources.depthPrepass.bindingLayout };
         pso.primType       = nvrhi::PrimitiveType::TriangleList;
     #if XYLEM_USE_REVERSE_Z
         pso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Greater);
@@ -644,17 +648,17 @@ void ComputeRenderPass::_RenderDepthPrepass() {
         pso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
     #endif
         pso.renderState.rasterState.setCullBack();
-        m_DepthPrepass.treePipeline = GetDevice()->createGraphicsPipeline(
-            pso, m_DepthPrepass.framebuffer->getFramebufferInfo());
+        m_StageResources.depthPrepass.treePipeline = GetDevice()->createGraphicsPipeline(
+            pso, m_StageResources.depthPrepass.framebuffer->getFramebufferInfo());
     }
 
     // Draw trees using last frame's indirect args (not yet cleared)
     nvrhi::GraphicsState state;
-    state.pipeline    = m_DepthPrepass.treePipeline;
-    state.framebuffer = m_DepthPrepass.framebuffer;
+    state.pipeline    = m_StageResources.depthPrepass.treePipeline;
+    state.framebuffer = m_StageResources.depthPrepass.framebuffer;
     state.viewport    = m_ViewHandler.view.GetViewportState();
-    state.bindings    = { m_DepthPrepass.bindingSet };
-    state.indirectParams = m_CullPass.indirectArgsBuffer;
+    state.bindings    = { m_StageResources.depthPrepass.bindingSet };
+    state.indirectParams = m_StageResources.cull.indirectArgsBuffer;
 
     for (uint32_t ai = 0; ai < m_GPUAssets.size(); ai++) {
         for (uint32_t li = 0; li < numLods; li++) {
@@ -672,12 +676,12 @@ void ComputeRenderPass::_RenderDepthPrepass() {
     }
 
     // Draw terrain (non-instanced, always visible)
-    if (m_TerrainPass.indexCount > 0) {
-        if (!m_DepthPrepass.terrainPipeline) {
+    if (m_StageResources.sceneTerrain.indexCount > 0) {
+        if (!m_StageResources.depthPrepass.terrainPipeline) {
             nvrhi::GraphicsPipelineDesc pso;
-            pso.VS             = m_DepthPrepass.terrainVS;
-            pso.inputLayout    = m_DepthPrepass.terrainInputLayout;
-            pso.bindingLayouts = { m_DepthPrepass.bindingLayout };
+            pso.VS             = m_StageResources.depthPrepass.terrainVS;
+            pso.inputLayout    = m_StageResources.depthPrepass.terrainInputLayout;
+            pso.bindingLayouts = { m_StageResources.depthPrepass.bindingLayout };
             pso.primType       = nvrhi::PrimitiveType::TriangleList;
         #if XYLEM_USE_REVERSE_Z
             pso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Greater);
@@ -685,23 +689,23 @@ void ComputeRenderPass::_RenderDepthPrepass() {
             pso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
         #endif
             pso.renderState.rasterState.setCullNone();
-            m_DepthPrepass.terrainPipeline = GetDevice()->createGraphicsPipeline(
-                pso, m_DepthPrepass.framebuffer->getFramebufferInfo());
+            m_StageResources.depthPrepass.terrainPipeline = GetDevice()->createGraphicsPipeline(
+                pso, m_StageResources.depthPrepass.framebuffer->getFramebufferInfo());
         }
 
         nvrhi::GraphicsState terrState;
-        terrState.pipeline    = m_DepthPrepass.terrainPipeline;
-        terrState.framebuffer = m_DepthPrepass.framebuffer;
+        terrState.pipeline    = m_StageResources.depthPrepass.terrainPipeline;
+        terrState.framebuffer = m_StageResources.depthPrepass.framebuffer;
         terrState.viewport    = m_ViewHandler.view.GetViewportState();
-        terrState.bindings    = { m_DepthPrepass.bindingSet };
-        terrState.vertexBuffers = { { m_TerrainPass.vertexBuffer, 0, 0 } };
-        terrState.indexBuffer   = { m_TerrainPass.indexBuffer, nvrhi::Format::R32_UINT, 0 };
+        terrState.bindings    = { m_StageResources.depthPrepass.bindingSet };
+        terrState.vertexBuffers = { { m_StageResources.sceneTerrain.vertexBuffer, 0, 0 } };
+        terrState.indexBuffer   = { m_StageResources.sceneTerrain.indexBuffer, nvrhi::Format::R32_UINT, 0 };
         m_CommandList->setGraphicsState(terrState);
 
         uint32_t c = 0;
         m_CommandList->setPushConstants(&c, sizeof(c));
         m_CommandList->drawIndexed(
-            nvrhi::DrawArguments().setVertexCount(m_TerrainPass.indexCount));
+            nvrhi::DrawArguments().setVertexCount(m_StageResources.sceneTerrain.indexCount));
     }
 }
 
@@ -710,7 +714,7 @@ void ComputeRenderPass::_RenderDepthPrepass() {
 // ===========================================================================
 
 void ComputeRenderPass::_BuildHiZMipChain() {
-    auto desc = m_DepthPrepass.depthTexture->getDesc();
+    auto desc = m_StageResources.depthPrepass.depthTexture->getDesc();
     uint32_t w = desc.width;
     uint32_t h = desc.height;
 
@@ -718,67 +722,40 @@ void ComputeRenderPass::_BuildHiZMipChain() {
     {
         uint32_t dims[2] = { w, h };
         nvrhi::ComputeState cs;
-        cs.pipeline = m_HiZ.copyPipeline;
-        cs.bindings = { m_HiZ.buildBindingSets[0] };
+        cs.pipeline = m_StageResources.hiz.copyPipeline;
+        cs.bindings = { m_StageResources.hiz.buildBindingSets[0] };
         m_CommandList->setComputeState(cs);
         m_CommandList->setPushConstants(dims, sizeof(dims));
         m_CommandList->dispatch((w + 7) / 8, (h + 7) / 8, 1);
     }
 
     // Passes 1..N-1: Downsample mip i-1 -> mip i
-    for (uint32_t mip = 1; mip < m_HiZ.numMips; mip++) {
+    for (uint32_t mip = 1; mip < m_StageResources.hiz.numMips; mip++) {
         uint32_t mipW = std::max(1u, w >> mip);
         uint32_t mipH = std::max(1u, h >> mip);
         uint32_t dims[2] = { mipW, mipH };
 
         nvrhi::ComputeState cs;
-        cs.pipeline = m_HiZ.buildPipeline;
-        cs.bindings = { m_HiZ.buildBindingSets[mip] };
+        cs.pipeline = m_StageResources.hiz.buildPipeline;
+        cs.bindings = { m_StageResources.hiz.buildBindingSets[mip] };
         m_CommandList->setComputeState(cs);
         m_CommandList->setPushConstants(dims, sizeof(dims));
         m_CommandList->dispatch((mipW + 7) / 8, (mipH + 7) / 8, 1);
     }
 
     // Copy each mip into its debug view texture (for ImGui display)
-    if (m_UI.showHiZ && !m_HiZ.debugMipTextures.empty()) {
-        for (uint32_t mip = 0; mip < m_HiZ.numMips; mip++) {
+    if (m_UI.showHiZ && !m_StageResources.hiz.debugMipTextures.empty()) {
+        for (uint32_t mip = 0; mip < m_StageResources.hiz.numMips; mip++) {
             m_CommandList->copyTexture(
-                m_HiZ.debugMipTextures[mip], nvrhi::TextureSlice(),
-                m_HiZ.hizTexture,           nvrhi::TextureSlice().setMipLevel(mip));
+                m_StageResources.hiz.debugMipTextures[mip], nvrhi::TextureSlice(),
+                m_StageResources.hiz.hizTexture,           nvrhi::TextureSlice().setMipLevel(mip));
         }
     }
 }
 
 // ===========================================================================
-// SDSM — GPU cascade construction
+// SDSM - GPU cascade construction
 // ===========================================================================
-
-namespace {
-    struct SDSMInput {
-        dm::float4x4 worldToLight;
-        dm::float4x4 viewToWorldToLight;
-        dm::float4   sceneBboxMinLS;
-        dm::float4   sceneBboxMaxLS;
-        float        tanHalfFovX;
-        float        tanHalfFovY;
-        float        projA;
-        float        projB;
-        float        regionEnvelopeNear;
-        float        regionEnvelopeFar;
-        float        cameraNearPlane;
-        uint32_t     shadowRes;
-        uint32_t     maxHiZMip;
-        float        pssmLambda;
-        float        _pad[2];
-    };
-
-    struct SDSMCascadeOut {
-        dm::float4x4 lightViewProj[Render::c_NumCascades];
-        dm::float4   cascadeSplits;
-        dm::float4   shadowCasterMinLS[Render::c_NumCascades];
-        dm::float4   shadowCasterMaxLS[Render::c_NumCascades];
-    };
-}
 
 void ComputeRenderPass::_ComputeRegionEnvelope(const dm::frustum& viewFrustum,
                                                     const dm::float3& camPos,
@@ -811,8 +788,8 @@ void ComputeRenderPass::_RunSDSMBuildCascades(const dm::box3& sceneBbox,
                                                    float aspectRatio, float fovY,
                                                    float regionEnvelopeNear,
                                                    float regionEnvelopeFar) {
-    // Pack invariants into SDSMInput CB
-    SDSMInput input{};
+    // Pack invariants into the SDSM cascade-build input CB.
+    shader_cb::SDSMCascadeBuildInput input{};
 
     dm::affine3 worldToLightAff = m_ViewHandler.worldToLight;
     dm::affine3 viewToWorldToLightAff = m_ViewHandler.view.GetInverseViewMatrix() * worldToLightAff;
@@ -837,16 +814,16 @@ void ComputeRenderPass::_RunSDSMBuildCascades(const dm::box3& sceneBbox,
     input.regionEnvelopeFar  = regionEnvelopeFar;
     input.cameraNearPlane    = 0.1f;
     input.shadowRes          = k_ShadowRes;
-    input.maxHiZMip          = (m_HiZ.numMips > 0) ? (m_HiZ.numMips - 1) : 0;
+    input.maxHiZMip          = (m_StageResources.hiz.numMips > 0) ? (m_StageResources.hiz.numMips - 1) : 0;
     input.pssmLambda         = m_UI.pssmLambda;
 
-    m_CommandList->writeBuffer(m_SDSM.inputCB, &input, sizeof(SDSMInput));
+    m_CommandList->writeBuffer(m_StageResources.sdsm.inputCB, &input, sizeof(shader_cb::SDSMCascadeBuildInput));
 
-    // Dispatch — one threadgroup, NUM_CASCADES threads
+    // Dispatch - one threadgroup, NUM_CASCADES threads
     {
         nvrhi::ComputeState cs;
-        cs.pipeline = m_SDSM.buildPipeline;
-        cs.bindings = { m_SDSM.buildBindingSet };
+        cs.pipeline = m_StageResources.sdsm.buildPipeline;
+        cs.bindings = { m_StageResources.sdsm.buildBindingSet };
         m_CommandList->setComputeState(cs);
         m_CommandList->dispatch(1, 1, 1);
     }
@@ -857,22 +834,22 @@ void ComputeRenderPass::_RunSDSMBuildCascades(const dm::box3& sceneBbox,
     constexpr size_t kOffShadowCasterMin   = offsetof(Render::CullConstantBufferEntry, shadowCasterMinLS);
     constexpr size_t kOffShadowCasterMax   = offsetof(Render::CullConstantBufferEntry, shadowCasterMaxLS);
 
-    constexpr size_t kSrcLightViewProj     = offsetof(SDSMCascadeOut, lightViewProj);
-    constexpr size_t kSrcCascadeSplits     = offsetof(SDSMCascadeOut, cascadeSplits);
-    constexpr size_t kSrcShadowCasterMin   = offsetof(SDSMCascadeOut, shadowCasterMinLS);
-    constexpr size_t kSrcShadowCasterMax   = offsetof(SDSMCascadeOut, shadowCasterMaxLS);
+    constexpr size_t kSrcLightViewProj     = offsetof(shader_cb::SDSMCascadeBuildOutput, lightViewProj);
+    constexpr size_t kSrcCascadeSplits     = offsetof(shader_cb::SDSMCascadeBuildOutput, cascadeSplits);
+    constexpr size_t kSrcShadowCasterMin   = offsetof(shader_cb::SDSMCascadeBuildOutput, shadowCasterMinLS);
+    constexpr size_t kSrcShadowCasterMax   = offsetof(shader_cb::SDSMCascadeBuildOutput, shadowCasterMaxLS);
 
-    m_CommandList->copyBuffer(m_Shared.constantBuffer, kOffLightViewProj,
-                              m_SDSM.cascadeDataBuffer, kSrcLightViewProj,
+    m_CommandList->copyBuffer(m_StageResources.frameShared.constantBuffer, kOffLightViewProj,
+                              m_StageResources.sdsm.cascadeDataBuffer, kSrcLightViewProj,
                               sizeof(dm::float4x4) * Render::c_NumCascades);
-    m_CommandList->copyBuffer(m_Shared.constantBuffer, kOffCascadeSplits,
-                              m_SDSM.cascadeDataBuffer, kSrcCascadeSplits,
+    m_CommandList->copyBuffer(m_StageResources.frameShared.constantBuffer, kOffCascadeSplits,
+                              m_StageResources.sdsm.cascadeDataBuffer, kSrcCascadeSplits,
                               sizeof(dm::float4));
-    m_CommandList->copyBuffer(m_Shared.constantBuffer, kOffShadowCasterMin,
-                              m_SDSM.cascadeDataBuffer, kSrcShadowCasterMin,
+    m_CommandList->copyBuffer(m_StageResources.frameShared.constantBuffer, kOffShadowCasterMin,
+                              m_StageResources.sdsm.cascadeDataBuffer, kSrcShadowCasterMin,
                               sizeof(dm::float4) * Render::c_NumCascades);
-    m_CommandList->copyBuffer(m_Shared.constantBuffer, kOffShadowCasterMax,
-                              m_SDSM.cascadeDataBuffer, kSrcShadowCasterMax,
+    m_CommandList->copyBuffer(m_StageResources.frameShared.constantBuffer, kOffShadowCasterMax,
+                              m_StageResources.sdsm.cascadeDataBuffer, kSrcShadowCasterMax,
                               sizeof(dm::float4) * Render::c_NumCascades);
 }
 
@@ -931,38 +908,26 @@ bool ComputeRenderPass::Init() {
 
 void ComputeRenderPass::Animate(float seconds) {
     GetDeviceManager()->SetInformativeWindowTitle(g_WindowTitle);
-
-    if (!m_Registry.anyDirty()) return;
-
-    auto dirtyAssets  = m_Registry.getDirtyAssetIndices();
-    auto dirtyRegions = m_Registry.getDirtyRegionIndices();
-
-    m_Registry.rebuildDirtyAssets();
-    m_Registry.rebuildDirtyRegions();
-
-    if (!dirtyAssets.empty())  onAssetsDirty(dirtyAssets);
-    if (!dirtyRegions.empty()) onRegionsDirty(dirtyRegions);
-
-    m_Registry.clearDirtyFlags();
+    frame::RunDirtyCycle(m_Registry, *this);
 }
 
 void ComputeRenderPass::BackBufferResizing() {
-    m_TreePass.pipeline          = nullptr;
-    m_TerrainPass.pipeline       = nullptr;
-    m_ShadowPass.treePipeline    = nullptr;
-    m_ShadowPass.terrainPipeline = nullptr;
-    m_SkyPass.pipeline           = nullptr;
+    m_StageResources.sceneTree.pipeline          = nullptr;
+    m_StageResources.sceneTerrain.pipeline       = nullptr;
+    m_StageResources.shadow.treePipeline    = nullptr;
+    m_StageResources.shadow.terrainPipeline = nullptr;
+    m_StageResources.sky.pipeline           = nullptr;
 
-    // Hi-Z resources are resolution-dependent — force recreation
-    m_DepthPrepass.treePipeline    = nullptr;
-    m_DepthPrepass.terrainPipeline = nullptr;
-    m_DepthPrepass.depthTexture    = nullptr;
-    m_DepthPrepass.framebuffer     = nullptr;
-    m_DepthPrepass.bindingSet      = nullptr;
+    // Hi-Z resources are resolution-dependent - force recreation
+    m_StageResources.depthPrepass.treePipeline    = nullptr;
+    m_StageResources.depthPrepass.terrainPipeline = nullptr;
+    m_StageResources.depthPrepass.depthTexture    = nullptr;
+    m_StageResources.depthPrepass.framebuffer     = nullptr;
+    m_StageResources.depthPrepass.bindingSet      = nullptr;
 
-    m_HiZ.buildBindingSets.clear();
-    m_HiZ.debugMipTextures.clear();
-    m_HiZ.numMips = 0;
+    m_StageResources.hiz.buildBindingSets.clear();
+    m_StageResources.hiz.debugMipTextures.clear();
+    m_StageResources.hiz.numMips = 0;
     m_UI.hizMipTextures.clear();
 }
 
@@ -995,7 +960,7 @@ void ComputeRenderPass::onAssetsDirty(const std::vector<size_t>& dirtyAssetIndic
         }
     }
 
-    // Re-upload CullDataBuffer bboxes (asset geometry changed → bboxes changed)
+    // Re-upload CullDataBuffer bboxes (asset geometry changed -> bboxes changed)
     _BuildRegionWindows();
     _BuildSlotLayout();
     _UploadCullBuffers(cl);
@@ -1025,47 +990,26 @@ void ComputeRenderPass::onRegionsDirty(const std::vector<size_t>& /*dirtyRegionI
 // ===========================================================================
 
 void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
-    m_UI.shadowMapTexture = m_ShadowPass.depthTexture.Get();
-    m_UI.shadowCascadeTextures.resize(Render::c_NumCascades);
-    for (uint32_t c = 0; c < Render::c_NumCascades; c++)
-        m_UI.shadowCascadeTextures[c] = m_ShadowPass.debugTextures[c].Get();
-    // Populate Hi-Z debug pointers for the UI (pointers are stable between resizes)
-    m_UI.hizMipTextures.resize(m_HiZ.debugMipTextures.size());
-    for (size_t i = 0; i < m_HiZ.debugMipTextures.size(); i++)
-        m_UI.hizMipTextures[i] = m_HiZ.debugMipTextures[i].Get();
+    frame::SetShadowDebugOutputs(
+        m_StageOutputs,
+        m_StageResources.shadow.depthTexture.Get(),
+        m_StageResources.shadow.debugTextures);
+    frame::SetHiZDebugOutputs(m_StageOutputs, m_StageResources.hiz.debugMipTextures);
+    frame::PublishStageOutputsToUI(m_StageOutputs, m_UI);
 
     app::HiResTimer cpuTimer;
     cpuTimer.Start();
 
-    const nvrhi::FramebufferInfoEx& fbinfo = framebuffer->getFramebufferInfo();
-
-    if (!m_TreePass.pipeline) {
-        m_ViewHandler.view.SetViewport({ float(fbinfo.width), float(fbinfo.height) });
-        m_ViewHandler.view.SetProjectionMatrix(
-        #if XYLEM_USE_REVERSE_Z
-            dm::perspProjD3DStyleReverse(
-                dm::radians(60.f),
-                float(fbinfo.width)/float(fbinfo.height),
-                0.1f
-            )
-        #else
-            dm::perspProjD3DStyle(
-                dm::radians(60.f),
-                float(fbinfo.width)/float(fbinfo.height),
-                0.1f,
-                1000.0f
-            )
-        #endif
-        );
-    }
+    frame::FrameContext frameContext = frame::BuildFrameContext(
+        m_Registry,
+        m_ViewHandler,
+        framebuffer,
+        !m_StageResources.sceneTree.pipeline);
 
     m_CommandList->open();
     // m_CommandList->beginTimerQuery(m_GpuTimers[m_NextTimerIdx]);
 
     // m_CommandList->beginMarker("Frame");
-
-    m_ViewHandler.view.SetViewMatrix(m_ViewHandler.camera.GetWorldToViewMatrix());
-    m_ViewHandler.view.UpdateCache();
 
     nvrhi::utils::ClearColorAttachment(m_CommandList, framebuffer, 0, nvrhi::Color(0.f));
     #if XYLEM_USE_REVERSE_Z
@@ -1075,44 +1019,25 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         m_ViewHandler.view.GetProjectionFrustum().farPlane().distance, 0);
     #endif
 
-    dm::box3 sceneBbox = dm::box3::empty();
-    for (const auto& region : m_Registry.getRegions())
-        sceneBbox |= region.cullBox;
-    const auto* terrain = m_Registry.getTerrain();
-    if (terrain)
-        sceneBbox |= terrain->getBbox();
-
-    // Compute max shadow distance from scene bbox (same logic as P0)
     const dm::float3& camPos = m_ViewHandler.camera.GetPosition();
     const dm::float3& camDir = m_ViewHandler.camera.GetDir();
-    float maxShadowDist = 0.f;
-    for (int i = 0; i < dm::box3::numCorners; i++) {
-        dm::float3 corner = sceneBbox.getCorner(i);
-        dm::float3 camToCorner = corner - camPos;
-        float cornerDir = dm::dot(camToCorner, camDir);
-        if (cornerDir > 0.0f) maxShadowDist = dm::max(maxShadowDist, cornerDir);
-    }
-    maxShadowDist = dm::max(maxShadowDist, 1.f);
-
-    float aspectRatio = float(fbinfo.width) / float(fbinfo.height);
-    m_ViewHandler.computeCascades(sceneBbox, m_Registry.getSunDirection(),
-        0.1f, maxShadowDist, aspectRatio, dm::radians(60.f), k_ShadowRes, m_UI.pssmLambda);
+    frame::ComputeCascades(
+        frameContext,
+        m_ViewHandler,
+        m_Registry,
+        k_ShadowRes,
+        m_UI.pssmLambda);
 
     // --- Fill CullConstantBufferEntry ---
     Render::CullConstantBufferEntry constants{};
-    constants.viewProj    = m_ViewHandler.view.GetViewProjectionMatrix();
-    constants.viewMatrix  = dm::affineToHomogeneous(m_ViewHandler.view.GetViewMatrix());
-    for (uint32_t c = 0; c < Render::c_NumCascades; c++)
-        constants.lightViewProj[c] = m_ViewHandler.cascades[c].lightViewProj;
-    constants.sunLightDir   = m_Registry.getSunDirection();
-    constants.cascadeSplits = m_ViewHandler.cascadeSplitDistances;
+    frame::FillCommonFrameConstants(constants, m_ViewHandler, m_Registry.getSunDirection());
 
     constants.viewFrustum  = m_ViewHandler.view.GetViewFrustum();
     constants.worldToLight = dm::affineToHomogeneous(m_ViewHandler.worldToLight);
     for (uint32_t c = 0; c < Render::c_NumCascades; c++) {
         const dm::box3& cBbox = m_ViewHandler.cascades[c].shadowCasterBboxLS;
         if (cBbox.isempty()) {
-            // Empty cascade — CullCS detects this via (min > max)
+            // Empty cascade - CullCS detects this via (min > max)
             constants.shadowCasterMinLS[c] = dm::float4( 1e30f,  1e30f,  1e30f, 0.f);
             constants.shadowCasterMaxLS[c] = dm::float4(-1e30f, -1e30f, -1e30f, 0.f);
         } else {
@@ -1131,20 +1056,20 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     for (uint32_t i = 0; i < constants.numLods; i++)
         constants.lodDistances[i] = lodDistances[i];
 
-    // Hi-Z fields — bypass when camera looks steeply downward (bird's-eye view)
+    // Hi-Z fields - bypass when camera looks steeply downward (bird's-eye view)
     float downwardness = -m_ViewHandler.camera.GetDir().y;  // 0 = horizontal, 1 = straight down
     bool hizActive = downwardness < m_UI.hizBypassAngle;
     m_UI.hizActiveThisFrame = hizActive;
 
-    constants.hizDimensions = dm::float2(static_cast<float>(fbinfo.width),
-                                         static_cast<float>(fbinfo.height));
-    constants.maxHiZMip     = static_cast<float>(m_HiZ.numMips - 1);
+    constants.hizDimensions = dm::float2(static_cast<float>(frameContext.frameWidth),
+                                         static_cast<float>(frameContext.frameHeight));
+    constants.maxHiZMip     = static_cast<float>(m_StageResources.hiz.numMips - 1);
     constants.hizEnabled    = hizActive ? 1u : 0u;
 
-    m_CommandList->writeBuffer(m_Shared.constantBuffer, &constants, Render::c_CullConstantBufferSize);
+    m_CommandList->writeBuffer(m_StageResources.frameShared.constantBuffer, &constants, shader_cb::kCullFrameSize);
 
     // --- Ensure Hi-Z resources at current resolution ---
-    _EnsureHiZResources(fbinfo.width, fbinfo.height);
+    _EnsureHiZResources(frameContext.frameWidth, frameContext.frameHeight);
 
     // --- Depth prepass + Hi-Z build (skip entirely when bypassed) ---
     if (hizActive) {
@@ -1160,27 +1085,27 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
 
         m_CommandList->endMarker(); // HiZ
 
-        // SDSM — GPU replaces cascade fields in the shared CB from the reduced depth.
+        // SDSM - GPU replaces cascade fields in the shared CB from the reduced depth.
         m_CommandList->beginMarker("SDSM");
         float regionNear, regionFar;
         _ComputeRegionEnvelope(m_ViewHandler.view.GetViewFrustum(), camPos, camDir,
                                regionNear, regionFar);
-        _RunSDSMBuildCascades(sceneBbox, aspectRatio, dm::radians(60.f),
+        _RunSDSMBuildCascades(frameContext.sceneBounds, frameContext.aspectRatio, dm::radians(60.f),
                               regionNear, regionFar);
         m_CommandList->endMarker();
     }
 
     // --- GPU Cull Dispatch ---
     // Clear UAV counters (AFTER depth prepass which reads last frame's data)
-    m_CommandList->clearBufferUInt(m_CullPass.countBuffer, 0);
-    m_CommandList->clearBufferUInt(m_CullPass.shadowCountBuffer, 0);
-    m_CommandList->clearBufferUInt(m_CullPass.shadowUniqueCounter, 0);
+    m_CommandList->clearBufferUInt(m_StageResources.cull.countBuffer, 0);
+    m_CommandList->clearBufferUInt(m_StageResources.cull.shadowCountBuffer, 0);
+    m_CommandList->clearBufferUInt(m_StageResources.cull.shadowUniqueCounter, 0);
 
     // Reset indirect args buffers (re-upload staging with instanceCount=0)
-    m_CommandList->writeBuffer(m_CullPass.indirectArgsBuffer,
+    m_CommandList->writeBuffer(m_StageResources.cull.indirectArgsBuffer,
         m_IndirectArgsStaging.data(),
         m_IndirectArgsStaging.size() * sizeof(nvrhi::DrawIndexedIndirectArguments));
-    m_CommandList->writeBuffer(m_CullPass.shadowIndirectArgsBuffer,
+    m_CommandList->writeBuffer(m_StageResources.cull.shadowIndirectArgsBuffer,
         m_ShadowIndirectArgsStaging.data(),
         m_ShadowIndirectArgsStaging.size() * sizeof(nvrhi::DrawIndexedIndirectArguments));
 
@@ -1190,8 +1115,8 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_CommandList->beginMarker("RegionDispatch");
     {
         nvrhi::ComputeState cs;
-        cs.pipeline = m_CullPass.regionPipeline;
-        cs.bindings = { m_CullPass.bindingSet };
+        cs.pipeline = m_StageResources.cull.regionPipeline;
+        cs.bindings = { m_StageResources.cull.bindingSet };
         m_CommandList->setComputeState(cs);
         m_CommandList->dispatch(
             (constants.numRegions + 63) / 64, 1, 1);
@@ -1202,8 +1127,8 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_CommandList->beginMarker("MainDispatch");
     {
         nvrhi::ComputeState cs;
-        cs.pipeline = m_CullPass.mainPipeline;
-        cs.bindings = { m_CullPass.bindingSet };
+        cs.pipeline = m_StageResources.cull.mainPipeline;
+        cs.bindings = { m_StageResources.cull.bindingSet };
         m_CommandList->setComputeState(cs);
         m_CommandList->dispatch(
             (m_TotalCapacity + 255) / 256, 1, 1);
@@ -1214,8 +1139,8 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_CommandList->beginMarker("ShadowDispatch");
     {
         nvrhi::ComputeState cs;
-        cs.pipeline = m_CullPass.shadowPipeline;
-        cs.bindings = { m_CullPass.bindingSet };
+        cs.pipeline = m_StageResources.cull.shadowPipeline;
+        cs.bindings = { m_StageResources.cull.bindingSet };
         m_CommandList->setComputeState(cs);
         m_CommandList->dispatch(
             (m_TotalCapacity + 255) / 256, 1, 1);
@@ -1231,14 +1156,14 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         uint64_t shadowSize = m_ReadbackShadowEntries * sizeof(uint32_t);
 
         m_CommandList->copyBuffer(m_ReadbackBuffers[ringSlot], 0,
-                                  m_CullPass.countBuffer, 0, countSize);
+                                  m_StageResources.cull.countBuffer, 0, countSize);
         m_CommandList->copyBuffer(m_ReadbackBuffers[ringSlot], countSize,
-                                  m_CullPass.shadowCountBuffer, 0, shadowSize);
+                                  m_StageResources.cull.shadowCountBuffer, 0, shadowSize);
         m_CommandList->copyBuffer(m_ReadbackBuffers[ringSlot], countSize + shadowSize,
-                                  m_CullPass.shadowUniqueCounter, 0, sizeof(uint32_t));
+                                  m_StageResources.cull.shadowUniqueCounter, 0, sizeof(uint32_t));
     }
 
-    // --- Draw passes (auto barriers: UAV→SRV transitions handled by setGraphicsState) ---
+    // --- Draw passes (auto barriers: UAV->SRV transitions handled by setGraphicsState) ---
     m_CommandList->beginMarker("Draw");
 
     m_CommandList->beginMarker("Sky");
@@ -1311,11 +1236,11 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
 // ===========================================================================
 
 void ComputeRenderPass::_RenderSkyPass(nvrhi::IFramebuffer* framebuffer) {
-    if (!m_SkyPass.pipeline) {
+    if (!m_StageResources.sky.pipeline) {
         nvrhi::GraphicsPipelineDesc pso;
-        pso.VS             = m_SkyPass.vertexShader;
-        pso.PS             = m_SkyPass.pixelShader;
-        pso.bindingLayouts = { m_SkyPass.bindingLayout };
+        pso.VS             = m_StageResources.sky.vertexShader;
+        pso.PS             = m_StageResources.sky.pixelShader;
+        pso.bindingLayouts = { m_StageResources.sky.bindingLayout };
         pso.primType       = nvrhi::PrimitiveType::TriangleStrip;
         pso.renderState.rasterState.setCullNone();
         pso.renderState.depthStencilState
@@ -1327,7 +1252,7 @@ void ComputeRenderPass::_RenderSkyPass(nvrhi::IFramebuffer* framebuffer) {
     #else
             .setDepthFunc(nvrhi::ComparisonFunc::LessOrEqual);
     #endif
-        m_SkyPass.pipeline = GetDevice()->createGraphicsPipeline(
+        m_StageResources.sky.pipeline = GetDevice()->createGraphicsPipeline(
             pso, framebuffer->getFramebufferInfo());
     }
 
@@ -1352,50 +1277,50 @@ void ComputeRenderPass::_RenderSkyPass(nvrhi::IFramebuffer* framebuffer) {
     p.glowSharpness     = 4.f;
     p.directionUp       = dm::float3(0.f, 1.f, 0.f);
 
-    m_CommandList->writeBuffer(m_SkyPass.constantBuffer, &skyConstants, sizeof(skyConstants));
+    m_CommandList->writeBuffer(m_StageResources.sky.constantBuffer, &skyConstants, sizeof(skyConstants));
 
     nvrhi::GraphicsState skyState;
-    skyState.pipeline    = m_SkyPass.pipeline;
+    skyState.pipeline    = m_StageResources.sky.pipeline;
     skyState.framebuffer = framebuffer;
     skyState.viewport    = m_ViewHandler.view.GetViewportState();
-    skyState.bindings    = { m_SkyPass.bindingSet };
+    skyState.bindings    = { m_StageResources.sky.bindingSet };
     m_CommandList->setGraphicsState(skyState);
     m_CommandList->draw(nvrhi::DrawArguments().setVertexCount(4));
 }
 
 // ===========================================================================
-// Shadow pass — GPU cull results, visibility buffer indirection in VS
+// Shadow pass - GPU cull results, visibility buffer indirection in VS
 // ===========================================================================
 
 void ComputeRenderPass::_RenderShadowPass() {
     if (m_ViewHandler.shadowCasterBboxLS.isempty())
         return;
 
-    if (!m_ShadowPass.treePipeline) {
+    if (!m_StageResources.shadow.treePipeline) {
         nvrhi::GraphicsPipelineDesc pso;
-        pso.VS             = m_ShadowPass.treeVS;
-        pso.inputLayout    = m_ShadowPass.treeInputLayout;
-        pso.bindingLayouts = { m_ShadowPass.bindingLayout };
+        pso.VS             = m_StageResources.shadow.treeVS;
+        pso.inputLayout    = m_StageResources.shadow.treeInputLayout;
+        pso.bindingLayouts = { m_StageResources.shadow.bindingLayout };
         pso.primType       = nvrhi::PrimitiveType::TriangleList;
         pso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
         pso.renderState.rasterState.setCullFront();
         pso.renderState.rasterState.depthBias            = 2;
         pso.renderState.rasterState.slopeScaledDepthBias = 2.0f;
-        m_ShadowPass.treePipeline = GetDevice()->createGraphicsPipeline(
-            pso, m_ShadowPass.framebuffers[0]->getFramebufferInfo());
+        m_StageResources.shadow.treePipeline = GetDevice()->createGraphicsPipeline(
+            pso, m_StageResources.shadow.framebuffers[0]->getFramebufferInfo());
     }
-    if (!m_ShadowPass.terrainPipeline && m_TerrainPass.indexCount > 0) {
+    if (!m_StageResources.shadow.terrainPipeline && m_StageResources.sceneTerrain.indexCount > 0) {
         nvrhi::GraphicsPipelineDesc pso;
-        pso.VS             = m_ShadowPass.terrainVS;
-        pso.inputLayout    = m_ShadowPass.terrainInputLayout;
-        pso.bindingLayouts = { m_ShadowPass.bindingLayout };
+        pso.VS             = m_StageResources.shadow.terrainVS;
+        pso.inputLayout    = m_StageResources.shadow.terrainInputLayout;
+        pso.bindingLayouts = { m_StageResources.shadow.bindingLayout };
         pso.primType       = nvrhi::PrimitiveType::TriangleList;
         pso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
         pso.renderState.rasterState.setCullBack();
         pso.renderState.rasterState.depthBias            = 2;
         pso.renderState.rasterState.slopeScaledDepthBias = 2.0f;
-        m_ShadowPass.terrainPipeline = GetDevice()->createGraphicsPipeline(
-            pso, m_ShadowPass.framebuffers[0]->getFramebufferInfo());
+        m_StageResources.shadow.terrainPipeline = GetDevice()->createGraphicsPipeline(
+            pso, m_StageResources.shadow.framebuffers[0]->getFramebufferInfo());
     }
 
     nvrhi::Viewport shadowVP(static_cast<float>(k_ShadowRes), static_cast<float>(k_ShadowRes));
@@ -1412,16 +1337,16 @@ void ComputeRenderPass::_RenderShadowPass() {
         if (cBbox.isempty()) continue;
 
         nvrhi::utils::ClearDepthStencilAttachment(m_CommandList,
-            m_ShadowPass.framebuffers[cascade], 1.0f, 0);
+            m_StageResources.shadow.framebuffers[cascade], 1.0f, 0);
 
-        // Trees: one indirect draw per asset, reading its per-(asset × cascade)
+        // Trees: one indirect draw per asset, reading its per-(asset x cascade)
         // window in shadowVisBuf via shadowSlotOffsets[ai * NUM_CASCADES + cascade].
         nvrhi::GraphicsState shadowState;
-        shadowState.pipeline    = m_ShadowPass.treePipeline;
-        shadowState.framebuffer = m_ShadowPass.framebuffers[cascade];
+        shadowState.pipeline    = m_StageResources.shadow.treePipeline;
+        shadowState.framebuffer = m_StageResources.shadow.framebuffers[cascade];
         shadowState.viewport    = shadowVPState;
-        shadowState.bindings    = { m_ShadowPass.bindingSet };
-        shadowState.indirectParams = m_CullPass.shadowIndirectArgsBuffer;
+        shadowState.bindings    = { m_StageResources.shadow.bindingSet };
+        shadowState.indirectParams = m_StageResources.cull.shadowIndirectArgsBuffer;
 
         for (uint32_t ai = 0; ai < m_GPUAssets.size(); ai++) {
             uint32_t maxCount = m_MaxSlotCounts[ai * numLods];  // livePerAsset[ai]
@@ -1441,16 +1366,16 @@ void ComputeRenderPass::_RenderShadowPass() {
                 slot * sizeof(nvrhi::DrawIndexedIndirectArguments));
         }
 
-        // Terrain shadow — only if terrain bbox intersects this cascade's LS bbox.
-        if (m_TerrainPass.indexCount > 0 && terrainPtr
+        // Terrain shadow - only if terrain bbox intersects this cascade's LS bbox.
+        if (m_StageResources.sceneTerrain.indexCount > 0 && terrainPtr
             && (terrainPtr->getBbox() * m_ViewHandler.worldToLight).intersects(cBbox)) {
             nvrhi::GraphicsState terrShadow;
-            terrShadow.pipeline    = m_ShadowPass.terrainPipeline;
-            terrShadow.framebuffer = m_ShadowPass.framebuffers[cascade];
+            terrShadow.pipeline    = m_StageResources.shadow.terrainPipeline;
+            terrShadow.framebuffer = m_StageResources.shadow.framebuffers[cascade];
             terrShadow.viewport    = shadowVPState;
-            terrShadow.bindings    = { m_ShadowPass.bindingSet };
-            terrShadow.vertexBuffers = { { m_TerrainPass.vertexBuffer, 0, 0 } };
-            terrShadow.indexBuffer   = { m_TerrainPass.indexBuffer, nvrhi::Format::R32_UINT, 0 };
+            terrShadow.bindings    = { m_StageResources.shadow.bindingSet };
+            terrShadow.vertexBuffers = { { m_StageResources.sceneTerrain.vertexBuffer, 0, 0 } };
+            terrShadow.indexBuffer   = { m_StageResources.sceneTerrain.indexBuffer, nvrhi::Format::R32_UINT, 0 };
             m_CommandList->setGraphicsState(terrShadow);
 
             // Terrain VS only reads cascadeIdx; assetIndex unused but required for root sig.
@@ -1458,7 +1383,7 @@ void ComputeRenderPass::_RenderShadowPass() {
             m_CommandList->setPushConstants(pushConstants, sizeof(pushConstants));
 
             m_CommandList->drawIndexed(
-                nvrhi::DrawArguments().setVertexCount(m_TerrainPass.indexCount));
+                nvrhi::DrawArguments().setVertexCount(m_StageResources.sceneTerrain.indexCount));
         }
     }
 
@@ -1466,42 +1391,42 @@ void ComputeRenderPass::_RenderShadowPass() {
     if (m_UI.showShadowMap) {
         for (uint32_t c = 0; c < Render::c_NumCascades; c++) {
             m_CommandList->copyTexture(
-                m_ShadowPass.debugTextures[c], nvrhi::TextureSlice(),
-                m_ShadowPass.depthTexture, nvrhi::TextureSlice().setArraySlice(c));
+                m_StageResources.shadow.debugTextures[c], nvrhi::TextureSlice(),
+                m_StageResources.shadow.depthTexture, nvrhi::TextureSlice().setArraySlice(c));
         }
     }
 }
 
 // ===========================================================================
-// Scene pass — GPU cull results, visibility buffer indirection in VS
+// Scene pass - GPU cull results, visibility buffer indirection in VS
 // ===========================================================================
 
 void ComputeRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
     const nvrhi::FramebufferInfoEx& fbinfo = framebuffer->getFramebufferInfo();
     const uint32_t numLods = static_cast<uint32_t>(m_Registry.getLodSegments().size());
 
-    if (!m_TreePass.pipeline) {
+    if (!m_StageResources.sceneTree.pipeline) {
         nvrhi::GraphicsPipelineDesc psoDesc;
-        psoDesc.VS           = m_TreePass.vertexShader;
-        psoDesc.PS           = m_TreePass.pixelShader;
-        psoDesc.inputLayout  = m_TreePass.inputLayout;
-        psoDesc.bindingLayouts = { m_TreePass.bindingLayout };
+        psoDesc.VS           = m_StageResources.sceneTree.vertexShader;
+        psoDesc.PS           = m_StageResources.sceneTree.pixelShader;
+        psoDesc.inputLayout  = m_StageResources.sceneTree.inputLayout;
+        psoDesc.bindingLayouts = { m_StageResources.sceneTree.bindingLayout };
         psoDesc.primType     = nvrhi::PrimitiveType::TriangleList;
     #if XYLEM_USE_REVERSE_Z
         psoDesc.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Greater);
     #else
         psoDesc.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
     #endif
-        m_TreePass.pipeline = GetDevice()->createGraphicsPipeline(psoDesc, fbinfo);
+        m_StageResources.sceneTree.pipeline = GetDevice()->createGraphicsPipeline(psoDesc, fbinfo);
     }
 
     nvrhi::GraphicsState state;
-    state.pipeline    = m_TreePass.pipeline;
+    state.pipeline    = m_StageResources.sceneTree.pipeline;
     state.framebuffer = framebuffer;
     state.viewport    = m_ViewHandler.view.GetViewportState();
-    state.indirectParams = m_CullPass.indirectArgsBuffer;
+    state.indirectParams = m_StageResources.cull.indirectArgsBuffer;
 
-    // Indirect draw: one call per slot (asset × LOD).
+    // Indirect draw: one call per slot (asset x LOD).
     // Instance count comes from the indirect args buffer (written by the cull CS).
     for (uint32_t ai = 0; ai < m_GPUAssets.size(); ai++) {
         for (uint32_t li = 0; li < numLods; li++) {
@@ -1510,7 +1435,7 @@ void ComputeRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
 
             const auto& lod = m_GPUAssets[ai].lods[li];
 
-            state.bindings = { m_TreePass.bindingSets[m_GPUAssets[ai].textureSetIdx] };
+            state.bindings = { m_StageResources.sceneTree.bindingSets[m_GPUAssets[ai].textureSetIdx] };
             state.vertexBuffers = {
                 { lod.vbs.position,  0, 0 },
                 { lod.vbs.normal,    1, 0 },
@@ -1529,13 +1454,13 @@ void ComputeRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
     }
 
     // Terrain color pass
-    if (m_TerrainPass.indexCount > 0) {
-        if (!m_TerrainPass.pipeline) {
+    if (m_StageResources.sceneTerrain.indexCount > 0) {
+        if (!m_StageResources.sceneTerrain.pipeline) {
             nvrhi::GraphicsPipelineDesc terrainPso;
-            terrainPso.VS = m_TerrainPass.vertexShader;
-            terrainPso.PS = m_TerrainPass.pixelShader;
-            terrainPso.inputLayout = m_TerrainPass.inputLayout;
-            terrainPso.bindingLayouts = { m_TerrainPass.bindingLayout };
+            terrainPso.VS = m_StageResources.sceneTerrain.vertexShader;
+            terrainPso.PS = m_StageResources.sceneTerrain.pixelShader;
+            terrainPso.inputLayout = m_StageResources.sceneTerrain.inputLayout;
+            terrainPso.bindingLayouts = { m_StageResources.sceneTerrain.bindingLayout };
             terrainPso.primType = nvrhi::PrimitiveType::TriangleList;
     #if XYLEM_USE_REVERSE_Z
             terrainPso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Greater);
@@ -1543,21 +1468,21 @@ void ComputeRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
             terrainPso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
     #endif
             terrainPso.renderState.rasterState.setCullNone();
-            m_TerrainPass.pipeline = GetDevice()->createGraphicsPipeline(terrainPso, fbinfo);
+            m_StageResources.sceneTerrain.pipeline = GetDevice()->createGraphicsPipeline(terrainPso, fbinfo);
         }
 
         nvrhi::GraphicsState terrainState;
-        terrainState.pipeline   = m_TerrainPass.pipeline;
+        terrainState.pipeline   = m_StageResources.sceneTerrain.pipeline;
         terrainState.framebuffer = framebuffer;
         terrainState.viewport   = m_ViewHandler.view.GetViewportState();
-        terrainState.bindings   = { m_TerrainPass.bindingSet };
-        terrainState.vertexBuffers = { { m_TerrainPass.vertexBuffer, 0, 0 } };
-        terrainState.indexBuffer   = { m_TerrainPass.indexBuffer, nvrhi::Format::R32_UINT, 0 };
+        terrainState.bindings   = { m_StageResources.sceneTerrain.bindingSet };
+        terrainState.vertexBuffers = { { m_StageResources.sceneTerrain.vertexBuffer, 0, 0 } };
+        terrainState.indexBuffer   = { m_StageResources.sceneTerrain.indexBuffer, nvrhi::Format::R32_UINT, 0 };
         m_CommandList->setGraphicsState(terrainState);
         
         m_CommandList->drawIndexed(
             nvrhi::DrawArguments()
-                .setVertexCount(m_TerrainPass.indexCount)
+                .setVertexCount(m_StageResources.sceneTerrain.indexCount)
         );
     }
 }
@@ -1567,79 +1492,79 @@ void ComputeRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
 // ===========================================================================
 
 bool ComputeRenderPass::_InitShared() {
-    m_Shared.constantBuffer = GetDevice()->createBuffer(
+    m_StageResources.frameShared.constantBuffer = GetDevice()->createBuffer(
         nvrhi::BufferDesc()
-            .setByteSize(Render::c_CullConstantBufferSize)
+            .setByteSize(shader_cb::kCullFrameSize)
             .setIsConstantBuffer(true)
             .setDebugName("CullConstantBuffer")
             .enableAutomaticStateTracking(nvrhi::ResourceStates::ConstantBuffer)
     );
-    return !!m_Shared.constantBuffer;
+    return !!m_StageResources.frameShared.constantBuffer;
 }
 
 bool ComputeRenderPass::_InitCullPass(nvrhi::ICommandList* /*initCL*/) {
     // Create compute shaders
-    m_CullPass.mainCS = m_ShaderFactory->CreateShader(
+    m_StageResources.cull.mainCS = m_ShaderFactory->CreateShader(
         "app/CullCS.hlsl", "CullMain", nullptr, nvrhi::ShaderType::Compute);
-    m_CullPass.shadowCS = m_ShaderFactory->CreateShader(
+    m_StageResources.cull.shadowCS = m_ShaderFactory->CreateShader(
         "app/CullCS.hlsl", "CullShadow", nullptr, nvrhi::ShaderType::Compute);
-    m_CullPass.regionCS = m_ShaderFactory->CreateShader(
+    m_StageResources.cull.regionCS = m_ShaderFactory->CreateShader(
         "app/CullCS.hlsl", "CullRegion", nullptr, nvrhi::ShaderType::Compute);
-    if (!m_CullPass.mainCS || !m_CullPass.shadowCS || !m_CullPass.regionCS) return false;
+    if (!m_StageResources.cull.mainCS || !m_StageResources.cull.shadowCS || !m_StageResources.cull.regionCS) return false;
 
     // Create cull binding layout
     nvrhi::BindingLayoutDesc cullLayoutDesc;
     cullLayoutDesc.visibility = nvrhi::ShaderType::All;
     cullLayoutDesc.bindings = {
-        nvrhi::BindingLayoutItem::ConstantBuffer(0),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0), // regionData
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1), // instanceData  
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2), // mainSlotOffsets  
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3), // shadowSlotOffsets
+        nvrhi::BindingLayoutItem::ConstantBuffer(compute_reg::Cull::kCB_Frame),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(compute_reg::Cull::kSRV_RegionData),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(compute_reg::Cull::kSRV_InstanceData),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(compute_reg::Cull::kSRV_MainSlotOffsets),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(compute_reg::Cull::kSRV_ShadowSlotOffsets),
 
-        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0), // mainRegionVisBuf
-        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(1), // mainSlotCountBuf
-        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(2), // mainVisBuf
-        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(3), // shadowSlotCountBuf
-        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(4), // shadowVisBuf
+        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(compute_reg::Cull::kUAV_MainRegionVis),
+        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(compute_reg::Cull::kUAV_MainSlotCount),
+        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(compute_reg::Cull::kUAV_MainVis),
+        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(compute_reg::Cull::kUAV_ShadowSlotCount),
+        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(compute_reg::Cull::kUAV_ShadowVis),
 
-        nvrhi::BindingLayoutItem::RawBuffer_UAV(5),        // mainIndirectArgs
-        nvrhi::BindingLayoutItem::RawBuffer_UAV(6),        // shadowIndirectArgs
-        nvrhi::BindingLayoutItem::RawBuffer_UAV(7),        // shadowUniqueCounter
+        nvrhi::BindingLayoutItem::RawBuffer_UAV(compute_reg::Cull::kUAV_MainIndirectArgs),
+        nvrhi::BindingLayoutItem::RawBuffer_UAV(compute_reg::Cull::kUAV_ShadowIndirectArgs),
+        nvrhi::BindingLayoutItem::RawBuffer_UAV(compute_reg::Cull::kUAV_ShadowUniqueCounter),
 
-        nvrhi::BindingLayoutItem::Texture_SRV(4),          // hizTexture
-        nvrhi::BindingLayoutItem::Sampler(0),              // hizSampler (point/clamp)
+        nvrhi::BindingLayoutItem::Texture_SRV(compute_reg::Cull::kSRV_HiZ),
+        nvrhi::BindingLayoutItem::Sampler(compute_reg::Cull::kSampler_HiZ),
     };
-    m_CullPass.bindingLayout = GetDevice()->createBindingLayout(cullLayoutDesc);
-    if (!m_CullPass.bindingLayout) return false;
+    m_StageResources.cull.bindingLayout = GetDevice()->createBindingLayout(cullLayoutDesc);
+    if (!m_StageResources.cull.bindingLayout) return false;
 
     // Create compute pipelines
     nvrhi::ComputePipelineDesc regionPsoDesc;
-    regionPsoDesc.CS = m_CullPass.regionCS;
-    regionPsoDesc.bindingLayouts = { m_CullPass.bindingLayout };
-    m_CullPass.regionPipeline = GetDevice()->createComputePipeline(regionPsoDesc);
+    regionPsoDesc.CS = m_StageResources.cull.regionCS;
+    regionPsoDesc.bindingLayouts = { m_StageResources.cull.bindingLayout };
+    m_StageResources.cull.regionPipeline = GetDevice()->createComputePipeline(regionPsoDesc);
     
     nvrhi::ComputePipelineDesc mainPsoDesc;
-    mainPsoDesc.CS = m_CullPass.mainCS;
-    mainPsoDesc.bindingLayouts = { m_CullPass.bindingLayout };
-    m_CullPass.mainPipeline = GetDevice()->createComputePipeline(mainPsoDesc);
+    mainPsoDesc.CS = m_StageResources.cull.mainCS;
+    mainPsoDesc.bindingLayouts = { m_StageResources.cull.bindingLayout };
+    m_StageResources.cull.mainPipeline = GetDevice()->createComputePipeline(mainPsoDesc);
 
     nvrhi::ComputePipelineDesc shadowPsoDesc;
-    shadowPsoDesc.CS = m_CullPass.shadowCS;
-    shadowPsoDesc.bindingLayouts = { m_CullPass.bindingLayout };
-    m_CullPass.shadowPipeline = GetDevice()->createComputePipeline(shadowPsoDesc);
+    shadowPsoDesc.CS = m_StageResources.cull.shadowCS;
+    shadowPsoDesc.bindingLayouts = { m_StageResources.cull.bindingLayout };
+    m_StageResources.cull.shadowPipeline = GetDevice()->createComputePipeline(shadowPsoDesc);
 
-    if (!m_CullPass.mainPipeline || !m_CullPass.shadowPipeline) return false;
+    if (!m_StageResources.cull.mainPipeline || !m_StageResources.cull.shadowPipeline) return false;
 
     return true;
 }
 
 bool ComputeRenderPass::_InitTreePass(nvrhi::ICommandList* initCL, engine::CommonRenderPasses& commonPasses) {
-    m_TreePass.vertexShader = m_ShaderFactory->CreateShader(
+    m_StageResources.sceneTree.vertexShader = m_ShaderFactory->CreateShader(
         "app/ComputeRenderPass.hlsl", "main_vs", nullptr, nvrhi::ShaderType::Vertex);
-    m_TreePass.pixelShader  = m_ShaderFactory->CreateShader(
+    m_StageResources.sceneTree.pixelShader  = m_ShaderFactory->CreateShader(
         "app/ComputeRenderPass.hlsl", "main_ps", nullptr, nvrhi::ShaderType::Pixel);
-    if (!m_TreePass.vertexShader || !m_TreePass.pixelShader) return false;
+    if (!m_StageResources.sceneTree.vertexShader || !m_StageResources.sceneTree.pixelShader) return false;
 
     nvrhi::VertexAttributeDesc attributes[] = {
         nvrhi::VertexAttributeDesc()
@@ -1673,14 +1598,14 @@ bool ComputeRenderPass::_InitTreePass(nvrhi::ICommandList* initCL, engine::Commo
             .setBufferIndex(4)
             .setElementStride(sizeof(dm::float2)),
     };
-    m_TreePass.inputLayout = GetDevice()->createInputLayout(
-        attributes, uint32_t(std::size(attributes)), m_TreePass.vertexShader);
-    if (!m_TreePass.inputLayout) return false;
+    m_StageResources.sceneTree.inputLayout = GetDevice()->createInputLayout(
+        attributes, uint32_t(std::size(attributes)), m_StageResources.sceneTree.vertexShader);
+    if (!m_StageResources.sceneTree.inputLayout) return false;
 
     // Load textures
     const auto& barkTextureSets = m_Registry.getBarkTextureSets();
     engine::TextureCache textureCache(GetDevice(), std::make_shared<vfs::NativeFileSystem>(), nullptr);
-    m_TreePass.textureSets.resize(barkTextureSets.size());
+    m_StageResources.sceneTree.textureSets.resize(barkTextureSets.size());
 
     for (size_t i = 0; i < barkTextureSets.size(); i++) {
         std::filesystem::path texDir = g_ProjectDirectory / "media" / barkTextureSets[i] / "textures";
@@ -1697,38 +1622,38 @@ bool ComputeRenderPass::_InitTreePass(nvrhi::ICommandList* initCL, engine::Commo
         auto diffLoaded = textureCache.LoadTextureFromFile(diffPath, true,  &commonPasses, initCL);
         auto normLoaded = textureCache.LoadTextureFromFile(normPath, false, &commonPasses, initCL);
 
-        m_TreePass.textureSets[i].diffuse   = diffLoaded->texture;
-        m_TreePass.textureSets[i].normalMap = normLoaded->texture;
+        m_StageResources.sceneTree.textureSets[i].diffuse   = diffLoaded->texture;
+        m_StageResources.sceneTree.textureSets[i].normalMap = normLoaded->texture;
 
-        if (!m_TreePass.textureSets[i].diffuse || !m_TreePass.textureSets[i].normalMap)
+        if (!m_StageResources.sceneTree.textureSets[i].diffuse || !m_StageResources.sceneTree.textureSets[i].normalMap)
             return false;
     }
 
-    m_TreePass.sampler = GetDevice()->createSampler(
+    m_StageResources.sceneTree.sampler = GetDevice()->createSampler(
         nvrhi::SamplerDesc()
             .setAllAddressModes(nvrhi::SamplerAddressMode::Wrap)
             .setAllFilters(true)
             .setMaxAnisotropy(8.f)
     );
-    if (!m_TreePass.sampler) return false;
+    if (!m_StageResources.sceneTree.sampler) return false;
 
     // Create tree pass binding layout (with push constants for slot index)
     nvrhi::BindingLayoutDesc treeLayoutDesc;
     treeLayoutDesc.visibility = nvrhi::ShaderType::All;
     treeLayoutDesc.bindings = {
-        nvrhi::BindingLayoutItem::ConstantBuffer(0),                    
-        nvrhi::BindingLayoutItem::PushConstants(1, sizeof(uint32_t)),   // slot
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0),              // visBuf
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1),              // instBuf
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2),              // slotOffsets
-        nvrhi::BindingLayoutItem::Texture_SRV(3),                       // t_Diffuse
-        nvrhi::BindingLayoutItem::Texture_SRV(4),                       // t_NormalMap
-        nvrhi::BindingLayoutItem::Texture_SRV(5),                       // t_ShadowMap
-        nvrhi::BindingLayoutItem::Sampler(0),                           // s_Sampler
-        nvrhi::BindingLayoutItem::Sampler(1),                           // s_ShadowSampler
+        nvrhi::BindingLayoutItem::ConstantBuffer(compute_reg::Scene::kCB_Frame),
+        nvrhi::BindingLayoutItem::PushConstants(compute_reg::Scene::kPushC_Slot, sizeof(uint32_t)),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(compute_reg::Scene::kSRV_Vis),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(compute_reg::Scene::kSRV_Instances),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(compute_reg::Scene::kSRV_SlotOffsets),
+        nvrhi::BindingLayoutItem::Texture_SRV(compute_reg::Scene::kTex_Diffuse),
+        nvrhi::BindingLayoutItem::Texture_SRV(compute_reg::Scene::kTex_NormalMap),
+        nvrhi::BindingLayoutItem::Texture_SRV(compute_reg::Scene::kTex_ShadowMap),
+        nvrhi::BindingLayoutItem::Sampler(compute_reg::Scene::kSampler_Main),
+        nvrhi::BindingLayoutItem::Sampler(compute_reg::Scene::kSampler_Shadow),
     };
-    m_TreePass.bindingLayout = GetDevice()->createBindingLayout(treeLayoutDesc);
-    if (!m_TreePass.bindingLayout) return false;
+    m_StageResources.sceneTree.bindingLayout = GetDevice()->createBindingLayout(treeLayoutDesc);
+    if (!m_StageResources.sceneTree.bindingLayout) return false;
 
     // Binding sets are created in _RebuildCullBindings after buffers exist
     return true;
@@ -1741,7 +1666,7 @@ bool ComputeRenderPass::_InitTreePass(nvrhi::ICommandList* initCL, engine::Commo
 // }
 
 bool ComputeRenderPass::_InitShadowPass() {
-    m_ShadowPass.depthTexture = GetDevice()->createTexture(
+    m_StageResources.shadow.depthTexture = GetDevice()->createTexture(
         nvrhi::TextureDesc()
             .setWidth(k_ShadowRes).setHeight(k_ShadowRes)
             .setArraySize(Render::c_NumCascades)
@@ -1754,17 +1679,17 @@ bool ComputeRenderPass::_InitShadowPass() {
             .setKeepInitialState(true)
             .setDebugName("ShadowMapArray")
     );
-    if (!m_ShadowPass.depthTexture) return false;
+    if (!m_StageResources.shadow.depthTexture) return false;
 
     for (uint32_t c = 0; c < Render::c_NumCascades; c++) {
-        m_ShadowPass.framebuffers[c] = GetDevice()->createFramebuffer(
+        m_StageResources.shadow.framebuffers[c] = GetDevice()->createFramebuffer(
             nvrhi::FramebufferDesc().setDepthAttachment(
                 nvrhi::FramebufferAttachment()
-                    .setTexture(m_ShadowPass.depthTexture)
+                    .setTexture(m_StageResources.shadow.depthTexture)
                     .setArraySlice(c)));
-        if (!m_ShadowPass.framebuffers[c]) return false;
+        if (!m_StageResources.shadow.framebuffers[c]) return false;
 
-        m_ShadowPass.debugTextures[c] = GetDevice()->createTexture(
+        m_StageResources.shadow.debugTextures[c] = GetDevice()->createTexture(
             nvrhi::TextureDesc()
                 .setWidth(k_ShadowRes).setHeight(k_ShadowRes)
                 .setFormat(nvrhi::Format::R32_FLOAT)
@@ -1774,13 +1699,13 @@ bool ComputeRenderPass::_InitShadowPass() {
         );
     }
 
-    m_ShadowPass.treeVS = m_ShaderFactory->CreateShader(
+    m_StageResources.shadow.treeVS = m_ShaderFactory->CreateShader(
         "app/shadow_compute.hlsl", "tree_vs", nullptr, nvrhi::ShaderType::Vertex);
-    m_ShadowPass.terrainVS = m_ShaderFactory->CreateShader(
+    m_StageResources.shadow.terrainVS = m_ShaderFactory->CreateShader(
         "app/shadow_compute.hlsl", "terrain_vs", nullptr, nvrhi::ShaderType::Vertex);
-    if (!m_ShadowPass.treeVS || !m_ShadowPass.terrainVS) return false;
+    if (!m_StageResources.shadow.treeVS || !m_StageResources.shadow.terrainVS) return false;
 
-    // Tree shadow input layout — position-only (instance data via SRV indirection)
+    // Tree shadow input layout - position-only (instance data via SRV indirection)
     nvrhi::VertexAttributeDesc treeShadowAttrs[] = {
         nvrhi::VertexAttributeDesc()
             .setName("POSITION")
@@ -1789,9 +1714,9 @@ bool ComputeRenderPass::_InitShadowPass() {
             .setBufferIndex(0)
             .setElementStride(sizeof(dm::float3)),
     };
-    m_ShadowPass.treeInputLayout = GetDevice()->createInputLayout(
-        treeShadowAttrs, uint32_t(std::size(treeShadowAttrs)), m_ShadowPass.treeVS);
-    if (!m_ShadowPass.treeInputLayout) return false;
+    m_StageResources.shadow.treeInputLayout = GetDevice()->createInputLayout(
+        treeShadowAttrs, uint32_t(std::size(treeShadowAttrs)), m_StageResources.shadow.treeVS);
+    if (!m_StageResources.shadow.treeInputLayout) return false;
 
     // Terrain shadow input layout
     nvrhi::VertexAttributeDesc terrainShadowAttrs[] = {
@@ -1802,11 +1727,11 @@ bool ComputeRenderPass::_InitShadowPass() {
             .setBufferIndex(0)
             .setElementStride(sizeof(Scene::TerrainVertex)),
     };
-    m_ShadowPass.terrainInputLayout = GetDevice()->createInputLayout(
-        terrainShadowAttrs, uint32_t(std::size(terrainShadowAttrs)), m_ShadowPass.terrainVS);
-    if (!m_ShadowPass.terrainInputLayout) return false;
+    m_StageResources.shadow.terrainInputLayout = GetDevice()->createInputLayout(
+        terrainShadowAttrs, uint32_t(std::size(terrainShadowAttrs)), m_StageResources.shadow.terrainVS);
+    if (!m_StageResources.shadow.terrainInputLayout) return false;
 
-    m_ShadowPass.comparisonSampler = GetDevice()->createSampler(
+    m_StageResources.shadow.comparisonSampler = GetDevice()->createSampler(
         nvrhi::SamplerDesc()
             .setMinFilter(true)
             .setMagFilter(true)
@@ -1815,20 +1740,20 @@ bool ComputeRenderPass::_InitShadowPass() {
             .setAllAddressModes(nvrhi::SamplerAddressMode::Border)
             .setBorderColor(nvrhi::Color(1.f))
     );
-    if (!m_ShadowPass.comparisonSampler) return false;
+    if (!m_StageResources.shadow.comparisonSampler) return false;
 
     // Shadow binding layout
     nvrhi::BindingLayoutDesc shadowLayoutDesc;
     shadowLayoutDesc.visibility = nvrhi::ShaderType::All;
     shadowLayoutDesc.bindings = {
-        nvrhi::BindingLayoutItem::ConstantBuffer(0),
-        nvrhi::BindingLayoutItem::PushConstants(1, sizeof(uint32_t) * 2),  // {assetIndex, cascadeIdx}
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0),                 // shadowVisBuf
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1),                 // instanceBuf
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2),                 // shadowSlotOffsets
+        nvrhi::BindingLayoutItem::ConstantBuffer(compute_reg::Shadow::kCB_Frame),
+        nvrhi::BindingLayoutItem::PushConstants(compute_reg::Shadow::kPushC_AssetCascade, sizeof(uint32_t) * 2),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(compute_reg::Shadow::kSRV_Vis),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(compute_reg::Shadow::kSRV_Instances),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(compute_reg::Shadow::kSRV_SlotOffsets),
     };
-    m_ShadowPass.bindingLayout = GetDevice()->createBindingLayout(shadowLayoutDesc);
-    if (!m_ShadowPass.bindingLayout) return false;
+    m_StageResources.shadow.bindingLayout = GetDevice()->createBindingLayout(shadowLayoutDesc);
+    if (!m_StageResources.shadow.bindingLayout) return false;
 
     // Binding set created in _RebuildCullBindings after buffers exist
     return true;
@@ -1842,11 +1767,11 @@ bool ComputeRenderPass::_InitTerrainPass(nvrhi::ICommandList* initCL) {
     const auto& indices = terrain->getIndices();
     if (verts.empty() || indices.empty()) return true;
 
-    m_TerrainPass.indexCount = static_cast<uint32_t>(indices.size());
+    m_StageResources.sceneTerrain.indexCount = static_cast<uint32_t>(indices.size());
 
-    m_TerrainPass.vertexShader = m_ShaderFactory->CreateShader("app/terrain_compute.hlsl", "terrain_vs", nullptr, nvrhi::ShaderType::Vertex);
-    m_TerrainPass.pixelShader  = m_ShaderFactory->CreateShader("app/terrain_compute.hlsl", "terrain_ps", nullptr, nvrhi::ShaderType::Pixel);
-    if (!m_TerrainPass.vertexShader || !m_TerrainPass.pixelShader) return false;
+    m_StageResources.sceneTerrain.vertexShader = m_ShaderFactory->CreateShader("app/terrain_compute.hlsl", "terrain_vs", nullptr, nvrhi::ShaderType::Vertex);
+    m_StageResources.sceneTerrain.pixelShader  = m_ShaderFactory->CreateShader("app/terrain_compute.hlsl", "terrain_ps", nullptr, nvrhi::ShaderType::Pixel);
+    if (!m_StageResources.sceneTerrain.vertexShader || !m_StageResources.sceneTerrain.pixelShader) return false;
 
     nvrhi::VertexAttributeDesc terrainAttrs[] = {
         nvrhi::VertexAttributeDesc()
@@ -1868,39 +1793,39 @@ bool ComputeRenderPass::_InitTerrainPass(nvrhi::ICommandList* initCL) {
             .setBufferIndex(0)
             .setElementStride(sizeof(Scene::TerrainVertex)),
     };
-    m_TerrainPass.inputLayout = GetDevice()->createInputLayout(
-        terrainAttrs, uint32_t(std::size(terrainAttrs)), m_TerrainPass.vertexShader);
-    if (!m_TerrainPass.inputLayout) return false;
+    m_StageResources.sceneTerrain.inputLayout = GetDevice()->createInputLayout(
+        terrainAttrs, uint32_t(std::size(terrainAttrs)), m_StageResources.sceneTerrain.vertexShader);
+    if (!m_StageResources.sceneTerrain.inputLayout) return false;
 
     nvrhi::BufferDesc vbDesc;
     vbDesc.isVertexBuffer = true;
     vbDesc.byteSize       = verts.size() * sizeof(Scene::TerrainVertex);
     vbDesc.debugName      = "TerrainVB";
     vbDesc.initialState   = nvrhi::ResourceStates::CopyDest;
-    m_TerrainPass.vertexBuffer = GetDevice()->createBuffer(vbDesc);
-    initCL->beginTrackingBufferState(m_TerrainPass.vertexBuffer, nvrhi::ResourceStates::CopyDest);
-    initCL->writeBuffer(m_TerrainPass.vertexBuffer, verts.data(), vbDesc.byteSize);
-    initCL->setPermanentBufferState(m_TerrainPass.vertexBuffer, nvrhi::ResourceStates::VertexBuffer);
+    m_StageResources.sceneTerrain.vertexBuffer = GetDevice()->createBuffer(vbDesc);
+    initCL->beginTrackingBufferState(m_StageResources.sceneTerrain.vertexBuffer, nvrhi::ResourceStates::CopyDest);
+    initCL->writeBuffer(m_StageResources.sceneTerrain.vertexBuffer, verts.data(), vbDesc.byteSize);
+    initCL->setPermanentBufferState(m_StageResources.sceneTerrain.vertexBuffer, nvrhi::ResourceStates::VertexBuffer);
 
     nvrhi::BufferDesc ibDesc;
     ibDesc.isIndexBuffer = true;
     ibDesc.byteSize      = indices.size() * sizeof(uint32_t);
     ibDesc.debugName     = "TerrainIB";
     ibDesc.initialState  = nvrhi::ResourceStates::CopyDest;
-    m_TerrainPass.indexBuffer = GetDevice()->createBuffer(ibDesc);
-    initCL->beginTrackingBufferState(m_TerrainPass.indexBuffer, nvrhi::ResourceStates::CopyDest);
-    initCL->writeBuffer(m_TerrainPass.indexBuffer, indices.data(), ibDesc.byteSize);
-    initCL->setPermanentBufferState(m_TerrainPass.indexBuffer, nvrhi::ResourceStates::IndexBuffer);
+    m_StageResources.sceneTerrain.indexBuffer = GetDevice()->createBuffer(ibDesc);
+    initCL->beginTrackingBufferState(m_StageResources.sceneTerrain.indexBuffer, nvrhi::ResourceStates::CopyDest);
+    initCL->writeBuffer(m_StageResources.sceneTerrain.indexBuffer, indices.data(), ibDesc.byteSize);
+    initCL->setPermanentBufferState(m_StageResources.sceneTerrain.indexBuffer, nvrhi::ResourceStates::IndexBuffer);
 
     nvrhi::BindingSetDesc bsd;
     bsd.bindings = {
-        nvrhi::BindingSetItem::ConstantBuffer(0, m_Shared.constantBuffer,
-            nvrhi::BufferRange(0, Render::c_CullConstantBufferSize)),
-        nvrhi::BindingSetItem::Sampler(0, m_ShadowPass.comparisonSampler),
-        nvrhi::BindingSetItem::Texture_SRV(0, m_ShadowPass.depthTexture),
+        nvrhi::BindingSetItem::ConstantBuffer(compute_reg::Terrain::kCB_Frame, m_StageResources.frameShared.constantBuffer,
+            nvrhi::BufferRange(0, shader_cb::kCullFrameSize)),
+        nvrhi::BindingSetItem::Sampler(compute_reg::Terrain::kSampler_Shadow, m_StageResources.shadow.comparisonSampler),
+        nvrhi::BindingSetItem::Texture_SRV(compute_reg::Terrain::kTex_ShadowMap, m_StageResources.shadow.depthTexture),
     };
     if (!nvrhi::utils::CreateBindingSetAndLayout(GetDevice(), nvrhi::ShaderType::All, 0,
-            bsd, m_TerrainPass.bindingLayout, m_TerrainPass.bindingSet))
+            bsd, m_StageResources.sceneTerrain.bindingLayout, m_StageResources.sceneTerrain.bindingSet))
         return false;
 
     return true;
@@ -1910,13 +1835,13 @@ bool ComputeRenderPass::_InitHiZShaders() {
     auto device = GetDevice();
 
     // --- Depth prepass shaders ---
-    m_DepthPrepass.treeVS = m_ShaderFactory->CreateShader(
+    m_StageResources.depthPrepass.treeVS = m_ShaderFactory->CreateShader(
         "app/DepthPrepass.hlsl", "tree_vs", nullptr, nvrhi::ShaderType::Vertex);
-    m_DepthPrepass.terrainVS = m_ShaderFactory->CreateShader(
+    m_StageResources.depthPrepass.terrainVS = m_ShaderFactory->CreateShader(
         "app/DepthPrepass.hlsl", "terrain_vs", nullptr, nvrhi::ShaderType::Vertex);
-    if (!m_DepthPrepass.treeVS || !m_DepthPrepass.terrainVS) return false;
+    if (!m_StageResources.depthPrepass.treeVS || !m_StageResources.depthPrepass.terrainVS) return false;
 
-    // Tree input layout — position-only
+    // Tree input layout - position-only
     nvrhi::VertexAttributeDesc treePrepassAttrs[] = {
         nvrhi::VertexAttributeDesc()
             .setName("POSITION")
@@ -1925,11 +1850,11 @@ bool ComputeRenderPass::_InitHiZShaders() {
             .setBufferIndex(0)
             .setElementStride(sizeof(dm::float3)),
     };
-    m_DepthPrepass.treeInputLayout = device->createInputLayout(
-        treePrepassAttrs, uint32_t(std::size(treePrepassAttrs)), m_DepthPrepass.treeVS);
-    if (!m_DepthPrepass.treeInputLayout) return false;
+    m_StageResources.depthPrepass.treeInputLayout = device->createInputLayout(
+        treePrepassAttrs, uint32_t(std::size(treePrepassAttrs)), m_StageResources.depthPrepass.treeVS);
+    if (!m_StageResources.depthPrepass.treeInputLayout) return false;
 
-    // Terrain input layout — pos+normal+uv (must match VB stride)
+    // Terrain input layout - pos+normal+uv (must match VB stride)
     nvrhi::VertexAttributeDesc terrainPrepassAttrs[] = {
         nvrhi::VertexAttributeDesc()
             .setName("POSITION")
@@ -1950,64 +1875,64 @@ bool ComputeRenderPass::_InitHiZShaders() {
             .setBufferIndex(0)
             .setElementStride(sizeof(Scene::TerrainVertex)),
     };
-    m_DepthPrepass.terrainInputLayout = device->createInputLayout(
-        terrainPrepassAttrs, uint32_t(std::size(terrainPrepassAttrs)), m_DepthPrepass.terrainVS);
-    if (!m_DepthPrepass.terrainInputLayout) return false;
+    m_StageResources.depthPrepass.terrainInputLayout = device->createInputLayout(
+        terrainPrepassAttrs, uint32_t(std::size(terrainPrepassAttrs)), m_StageResources.depthPrepass.terrainVS);
+    if (!m_StageResources.depthPrepass.terrainInputLayout) return false;
 
-    // Depth prepass binding layout — same shape as shadow pass
+    // Depth prepass binding layout - same shape as shadow pass
     nvrhi::BindingLayoutDesc prepassLayoutDesc;
     prepassLayoutDesc.visibility = nvrhi::ShaderType::All;
     prepassLayoutDesc.bindings = {
-        nvrhi::BindingLayoutItem::ConstantBuffer(0),
-        nvrhi::BindingLayoutItem::PushConstants(1, sizeof(uint32_t)),  // slot
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0),             // visBuf
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1),             // instBuf
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2),             // slotOffsets
+        nvrhi::BindingLayoutItem::ConstantBuffer(compute_reg::DepthPrepass::kCB_Frame),
+        nvrhi::BindingLayoutItem::PushConstants(compute_reg::DepthPrepass::kPushC_Slot, sizeof(uint32_t)),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(compute_reg::DepthPrepass::kSRV_Vis),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(compute_reg::DepthPrepass::kSRV_Instances),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(compute_reg::DepthPrepass::kSRV_SlotOffsets),
     };
-    m_DepthPrepass.bindingLayout = device->createBindingLayout(prepassLayoutDesc);
-    if (!m_DepthPrepass.bindingLayout) return false;
+    m_StageResources.depthPrepass.bindingLayout = device->createBindingLayout(prepassLayoutDesc);
+    if (!m_StageResources.depthPrepass.bindingLayout) return false;
 
     // --- Hi-Z build shaders ---
-    m_HiZ.copyCS = m_ShaderFactory->CreateShader(
+    m_StageResources.hiz.copyCS = m_ShaderFactory->CreateShader(
         "app/HiZBuild.hlsl", "HiZCopy", nullptr, nvrhi::ShaderType::Compute);
-    m_HiZ.buildCS = m_ShaderFactory->CreateShader(
+    m_StageResources.hiz.buildCS = m_ShaderFactory->CreateShader(
         "app/HiZBuild.hlsl", "HiZDownsample", nullptr, nvrhi::ShaderType::Compute);
-    if (!m_HiZ.copyCS || !m_HiZ.buildCS) return false;
+    if (!m_StageResources.hiz.copyCS || !m_StageResources.hiz.buildCS) return false;
 
     // Hi-Z build binding layout: push constants + SRV(source) + UAV(dest)
     nvrhi::BindingLayoutDesc hizBuildLayoutDesc;
     hizBuildLayoutDesc.visibility = nvrhi::ShaderType::Compute;
     hizBuildLayoutDesc.bindings = {
-        nvrhi::BindingLayoutItem::PushConstants(0, sizeof(uint32_t) * 2),  // destDimensions
-        nvrhi::BindingLayoutItem::Texture_SRV(0),                          // source
-        nvrhi::BindingLayoutItem::Texture_UAV(0),                          // dest
+        nvrhi::BindingLayoutItem::PushConstants(compute_reg::HiZ::kPushC_DestDimensions, sizeof(uint32_t) * compute_reg::HiZ::kPushCDwordCount),
+        nvrhi::BindingLayoutItem::Texture_SRV(compute_reg::HiZ::kSRV_Source),
+        nvrhi::BindingLayoutItem::Texture_UAV(compute_reg::HiZ::kUAV_Dest),
     };
-    m_HiZ.buildBindingLayout = device->createBindingLayout(hizBuildLayoutDesc);
-    if (!m_HiZ.buildBindingLayout) return false;
+    m_StageResources.hiz.buildBindingLayout = device->createBindingLayout(hizBuildLayoutDesc);
+    if (!m_StageResources.hiz.buildBindingLayout) return false;
 
     // Compute pipelines
     nvrhi::ComputePipelineDesc copyPso;
-    copyPso.CS = m_HiZ.copyCS;
-    copyPso.bindingLayouts = { m_HiZ.buildBindingLayout };
-    m_HiZ.copyPipeline = device->createComputePipeline(copyPso);
+    copyPso.CS = m_StageResources.hiz.copyCS;
+    copyPso.bindingLayouts = { m_StageResources.hiz.buildBindingLayout };
+    m_StageResources.hiz.copyPipeline = device->createComputePipeline(copyPso);
 
     nvrhi::ComputePipelineDesc buildPso;
-    buildPso.CS = m_HiZ.buildCS;
-    buildPso.bindingLayouts = { m_HiZ.buildBindingLayout };
-    m_HiZ.buildPipeline = device->createComputePipeline(buildPso);
+    buildPso.CS = m_StageResources.hiz.buildCS;
+    buildPso.bindingLayouts = { m_StageResources.hiz.buildBindingLayout };
+    m_StageResources.hiz.buildPipeline = device->createComputePipeline(buildPso);
 
-    if (!m_HiZ.copyPipeline || !m_HiZ.buildPipeline) return false;
+    if (!m_StageResources.hiz.copyPipeline || !m_StageResources.hiz.buildPipeline) return false;
 
     // Point/clamp sampler for Hi-Z reads in the cull shader
-    m_HiZ.pointSampler = device->createSampler(
+    m_StageResources.hiz.pointSampler = device->createSampler(
         nvrhi::SamplerDesc()
             .setAllFilters(false)
             .setAllAddressModes(nvrhi::SamplerAddressMode::Clamp)
     );
-    if (!m_HiZ.pointSampler) return false;
+    if (!m_StageResources.hiz.pointSampler) return false;
 
     // Create 1x1 placeholder Hi-Z texture so binding sets can reference it before first frame
-    m_HiZ.hizTexture = device->createTexture(
+    m_StageResources.hiz.hizTexture = device->createTexture(
         nvrhi::TextureDesc()
             .setWidth(1).setHeight(1)
             .setMipLevels(1)
@@ -2017,7 +1942,7 @@ bool ComputeRenderPass::_InitHiZShaders() {
             .setKeepInitialState(true)
             .setDebugName("HiZTexture_Placeholder")
     );
-    m_HiZ.numMips = 1;
+    m_StageResources.hiz.numMips = 1;
 
     return true;
 }
@@ -2025,67 +1950,64 @@ bool ComputeRenderPass::_InitHiZShaders() {
 bool ComputeRenderPass::_InitSDSMPass() {
     auto device = GetDevice();
 
-    m_SDSM.buildCS = m_ShaderFactory->CreateShader(
+    m_StageResources.sdsm.buildCS = m_ShaderFactory->CreateShader(
         "app/SDSMBuildCascades.hlsl", "BuildCascades", nullptr, nvrhi::ShaderType::Compute);
-    if (!m_SDSM.buildCS) return false;
+    if (!m_StageResources.sdsm.buildCS) return false;
 
     nvrhi::BindingLayoutDesc layoutDesc;
     layoutDesc.visibility = nvrhi::ShaderType::Compute;
     layoutDesc.bindings = {
-        nvrhi::BindingLayoutItem::ConstantBuffer(0),   // SDSMInput
-        nvrhi::BindingLayoutItem::Texture_SRV(0),      // hizTexture
-        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0),  // cascade data out
+        nvrhi::BindingLayoutItem::ConstantBuffer(compute_reg::SDSM::kCB_Input),
+        nvrhi::BindingLayoutItem::Texture_SRV(compute_reg::SDSM::kSRV_HiZ),
+        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(compute_reg::SDSM::kUAV_CascadeOut),
     };
-    m_SDSM.buildBindingLayout = device->createBindingLayout(layoutDesc);
-    if (!m_SDSM.buildBindingLayout) return false;
+    m_StageResources.sdsm.buildBindingLayout = device->createBindingLayout(layoutDesc);
+    if (!m_StageResources.sdsm.buildBindingLayout) return false;
 
     nvrhi::ComputePipelineDesc pso;
-    pso.CS = m_SDSM.buildCS;
-    pso.bindingLayouts = { m_SDSM.buildBindingLayout };
-    m_SDSM.buildPipeline = device->createComputePipeline(pso);
-    if (!m_SDSM.buildPipeline) return false;
+    pso.CS = m_StageResources.sdsm.buildCS;
+    pso.bindingLayouts = { m_StageResources.sdsm.buildBindingLayout };
+    m_StageResources.sdsm.buildPipeline = device->createComputePipeline(pso);
+    if (!m_StageResources.sdsm.buildPipeline) return false;
 
     // Input CB (non-volatile, state-tracked so writeBuffer works inside Render)
-    constexpr size_t kInputCBSize =
-        (sizeof(SDSMInput) + (nvrhi::c_ConstantBufferOffsetSizeAlignment - 1))
-        & ~(nvrhi::c_ConstantBufferOffsetSizeAlignment - 1);
-    m_SDSM.inputCB = device->createBuffer(
+    m_StageResources.sdsm.inputCB = device->createBuffer(
         nvrhi::BufferDesc()
-            .setByteSize(kInputCBSize)
+            .setByteSize(shader_cb::kSDSMCascadeBuildInputSize)
             .setIsConstantBuffer(true)
             .setDebugName("SDSMInputCB")
             .enableAutomaticStateTracking(nvrhi::ResourceStates::ConstantBuffer)
     );
-    if (!m_SDSM.inputCB) return false;
+    if (!m_StageResources.sdsm.inputCB) return false;
 
-    // Cascade output — structured UAV, single element holding all per-cascade data
-    m_SDSM.cascadeDataBuffer = device->createBuffer(
+    // Cascade output - structured UAV, single element holding all per-cascade data
+    m_StageResources.sdsm.cascadeDataBuffer = device->createBuffer(
         nvrhi::BufferDesc()
-            .setByteSize(sizeof(SDSMCascadeOut))
-            .setStructStride(sizeof(SDSMCascadeOut))
+            .setByteSize(sizeof(shader_cb::SDSMCascadeBuildOutput))
+            .setStructStride(sizeof(shader_cb::SDSMCascadeBuildOutput))
             .setDebugName("SDSMCascadeData")
             .setCanHaveUAVs(true)
             .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess)
     );
-    if (!m_SDSM.cascadeDataBuffer) return false;
+    if (!m_StageResources.sdsm.cascadeDataBuffer) return false;
 
     // Binding set references the placeholder Hi-Z texture; rebuilt in _EnsureHiZResources
     nvrhi::BindingSetDesc bsd;
     bsd.bindings = {
-        nvrhi::BindingSetItem::ConstantBuffer(0, m_SDSM.inputCB),
-        nvrhi::BindingSetItem::Texture_SRV(0, m_HiZ.hizTexture),
-        nvrhi::BindingSetItem::StructuredBuffer_UAV(0, m_SDSM.cascadeDataBuffer),
+        nvrhi::BindingSetItem::ConstantBuffer(compute_reg::SDSM::kCB_Input, m_StageResources.sdsm.inputCB),
+        nvrhi::BindingSetItem::Texture_SRV(compute_reg::SDSM::kSRV_HiZ, m_StageResources.hiz.hizTexture),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(compute_reg::SDSM::kUAV_CascadeOut, m_StageResources.sdsm.cascadeDataBuffer),
     };
-    m_SDSM.buildBindingSet = device->createBindingSet(bsd, m_SDSM.buildBindingLayout);
-    if (!m_SDSM.buildBindingSet) return false;
+    m_StageResources.sdsm.buildBindingSet = device->createBindingSet(bsd, m_StageResources.sdsm.buildBindingLayout);
+    if (!m_StageResources.sdsm.buildBindingSet) return false;
 
     return true;
 }
 
 bool ComputeRenderPass::_InitSkyPass() {
-    m_SkyPass.vertexShader = m_ShaderFactory->CreateShader("app/sky.hlsl", "sky_vs", nullptr, nvrhi::ShaderType::Vertex);
-    m_SkyPass.pixelShader  = m_ShaderFactory->CreateShader("app/sky.hlsl", "sky_ps", nullptr, nvrhi::ShaderType::Pixel);
-    if (!m_SkyPass.vertexShader || !m_SkyPass.pixelShader) return false;
+    m_StageResources.sky.vertexShader = m_ShaderFactory->CreateShader("app/sky.hlsl", "sky_vs", nullptr, nvrhi::ShaderType::Vertex);
+    m_StageResources.sky.pixelShader  = m_ShaderFactory->CreateShader("app/sky.hlsl", "sky_ps", nullptr, nvrhi::ShaderType::Pixel);
+    if (!m_StageResources.sky.vertexShader || !m_StageResources.sky.pixelShader) return false;
 
     nvrhi::BufferDesc cbDesc;
     cbDesc.byteSize         = sizeof(SkyConstants);
@@ -2093,16 +2015,21 @@ bool ComputeRenderPass::_InitSkyPass() {
     cbDesc.isVolatile       = true;
     cbDesc.maxVersions      = 16;
     cbDesc.debugName        = "SkyConstants";
-    m_SkyPass.constantBuffer = GetDevice()->createBuffer(cbDesc);
-    if (!m_SkyPass.constantBuffer) return false;
+    m_StageResources.sky.constantBuffer = GetDevice()->createBuffer(cbDesc);
+    if (!m_StageResources.sky.constantBuffer) return false;
 
     nvrhi::BindingSetDesc bsd;
     bsd.bindings = {
-        nvrhi::BindingSetItem::ConstantBuffer(0, m_SkyPass.constantBuffer),
+        nvrhi::BindingSetItem::ConstantBuffer(compute_reg::Sky::kCB_Sky, m_StageResources.sky.constantBuffer),
     };
     if (!nvrhi::utils::CreateBindingSetAndLayout(GetDevice(), nvrhi::ShaderType::All, 0,
-            bsd, m_SkyPass.bindingLayout, m_SkyPass.bindingSet))
+            bsd, m_StageResources.sky.bindingLayout, m_StageResources.sky.bindingSet))
         return false;
 
     return true;
 }
+
+
+
+
+

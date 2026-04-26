@@ -3,6 +3,8 @@
 #include "include/Globals.hpp"
 #include "include/Terrain.hpp"
 #include "include/macros.h"
+#include "include/shaders/ShaderContracts.hpp"
+#include "include/frame/FrameLifecycle.hpp"
 
 #include <nvrhi/utils.h>
 #include <donut/engine/TextureCache.h>
@@ -23,92 +25,8 @@ using namespace donut::math;
 #include <donut/shaders/sky_cb.h>
 
 using namespace Xylem;
-
-namespace {
-    // Matches SDSMBuildCascades.hlsl::SDSMInput
-    struct SDSMInput {
-        dm::float4x4 worldToLight;
-        dm::float4x4 viewToWorldToLight;
-        dm::float4   sceneBboxMinLS;
-        dm::float4   sceneBboxMaxLS;
-        float        tanHalfFovX;
-        float        tanHalfFovY;
-        float        projA;
-        float        projB;
-        float        regionEnvelopeNear;
-        float        regionEnvelopeFar;
-        float        cameraNearPlane;
-        uint32_t     shadowRes;
-        uint32_t     maxHiZMip;
-        float        pssmLambda;
-        float        _pad[2];
-    };
-
-    struct SDSMCascadeOut {
-        dm::float4x4 lightViewProj[Render::c_NumCascades];
-        dm::float4   cascadeSplits;
-        dm::float4   shadowCasterMinLS[Render::c_NumCascades];
-        dm::float4   shadowCasterMaxLS[Render::c_NumCascades];
-    };
-
-    constexpr size_t c_SDSMInputCBSize =
-        (sizeof(SDSMInput) + (nvrhi::c_ConstantBufferOffsetSizeAlignment - 1))
-        & ~(nvrhi::c_ConstantBufferOffsetSizeAlignment - 1);
-} // namespace
-
-namespace {
-
-// Draw-pass register assignments — kept in lockstep with MeshShaderPass.hlsl.
-constexpr uint32_t k_CB_Draw              = 0;
-constexpr uint32_t k_PushC_Draw           = 1;   // root constant b1 (slotIdx)
-constexpr uint32_t k_CB_ASCull            = 2;   // b2
-constexpr uint32_t k_PushCBytes           = sizeof(uint32_t);
-constexpr uint32_t k_SRV_Positions        = 0;
-constexpr uint32_t k_SRV_Normals          = 1;
-constexpr uint32_t k_SRV_Tangents         = 2;
-constexpr uint32_t k_SRV_Bitangents       = 3;
-constexpr uint32_t k_SRV_UVs              = 4;
-constexpr uint32_t k_SRV_MVertIdx         = 5;
-constexpr uint32_t k_SRV_MPrimIdx         = 6;
-constexpr uint32_t k_SRV_Meshlets         = 7;
-constexpr uint32_t k_SRV_AssetLods        = 8;
-constexpr uint32_t k_SRV_VisBuf           = 9;
-constexpr uint32_t k_SRV_SlotOffsets      = 10;
-constexpr uint32_t k_SRV_SlotCounts       = 11;
-constexpr uint32_t k_SRV_Instances        = 12;
-constexpr uint32_t k_SRV_ASInvocsPerSlot  = 13;
-constexpr uint32_t k_SRV_Diffuse          = 14;
-constexpr uint32_t k_SRV_NormalMap        = 15;
-constexpr uint32_t k_SRV_ShadowMap        = 16;
-constexpr uint32_t k_SRV_HiZTex           = 17;
-constexpr uint32_t k_Sampler_Draw         = 0;
-constexpr uint32_t k_Sampler_Shadow       = 1;
-constexpr uint32_t k_Sampler_HiZ          = 2;
-
-// Cull-pass register assignments — match MeshCullCS.hlsl.
-constexpr uint32_t k_CB_Cull                 = 0;
-constexpr uint32_t k_SRV_CullRegion          = 0;
-constexpr uint32_t k_SRV_CullInstance        = 1;
-constexpr uint32_t k_SRV_CullMainSlotOffs    = 2;
-constexpr uint32_t k_SRV_CullMainInvocs      = 3;
-constexpr uint32_t k_SRV_CullShadowSlotOffs  = 4;
-constexpr uint32_t k_SRV_CullShadowInvocs    = 5;
-constexpr uint32_t k_SRV_CullHiZ             = 6;
-constexpr uint32_t k_UAV_MainRegionVis       = 0;
-constexpr uint32_t k_UAV_MainCount           = 1;
-constexpr uint32_t k_UAV_MainVis             = 2;
-constexpr uint32_t k_UAV_MainDispatch        = 3;
-constexpr uint32_t k_UAV_ShadowCount         = 4;
-constexpr uint32_t k_UAV_ShadowVis           = 5;
-constexpr uint32_t k_UAV_ShadowDispatch      = 6;
-constexpr uint32_t k_UAV_ShadowUnique        = 7;
-constexpr uint32_t k_Sampler_Cull            = 0;
-
-// Root parameter index of the push-constant block — NVRHI emits root-constants
-// first (see d3d12 BindingLayout construction). Single binding layout -> index 0.
-constexpr uint32_t k_PushC_RootParamIdx = 0;
-
-} // namespace
+namespace shader_cb = Xylem::shader::cb;
+namespace mesh_reg = Xylem::shader::reg::Mesh;
 
 // ===========================================================================
 // Init
@@ -154,23 +72,23 @@ bool MeshShaderRenderPass::Init() {
 }
 
 bool MeshShaderRenderPass::_InitShared() {
-    m_Shared.constantBuffer = GetDevice()->createBuffer(
+    m_StageResources.frameShared.constantBuffer = GetDevice()->createBuffer(
         nvrhi::BufferDesc()
-            .setByteSize(Render::c_CullConstantBufferSize)
+            .setByteSize(shader_cb::kCullFrameSize)
             .setIsConstantBuffer(true)
             .setDebugName("MeshShaderPass_CB")
             .enableAutomaticStateTracking(nvrhi::ResourceStates::ConstantBuffer)
     );
-    if (!m_Shared.constantBuffer) return false;
+    if (!m_StageResources.frameShared.constantBuffer) return false;
 
-    m_Shared.asCullCB = GetDevice()->createBuffer(
+    m_StageResources.frameShared.asCullCB = GetDevice()->createBuffer(
         nvrhi::BufferDesc()
-            .setByteSize(c_ASCullCBSize)
+            .setByteSize(shader_cb::kMeshASCullSize)
             .setIsConstantBuffer(true)
             .setDebugName("MeshShaderPass_ASCullCB")
             .enableAutomaticStateTracking(nvrhi::ResourceStates::ConstantBuffer)
     );
-    if (!m_Shared.asCullCB) return false;
+    if (!m_StageResources.frameShared.asCullCB) return false;
 
     for (uint32_t i = 0; i < k_QueuedFrames; i++) {
         m_ReadbackBuffers[i] = GetDevice()->createBuffer(
@@ -188,23 +106,23 @@ bool MeshShaderRenderPass::_InitShared() {
 bool MeshShaderRenderPass::_InitDrawResources() {
     if (!m_ShaderFactory) { log::error("MeshShaderRenderPass: no ShaderFactory"); return false; }
 
-    m_Draw.amplificationShader = m_ShaderFactory->CreateShader("app/MeshShaderPass.hlsl",
+    m_StageResources.sceneDraw.amplificationShader = m_ShaderFactory->CreateShader("app/MeshShaderPass.hlsl",
         "main_as", nullptr, nvrhi::ShaderType::Amplification);
-    m_Draw.meshShader = m_ShaderFactory->CreateShader("app/MeshShaderPass.hlsl",
+    m_StageResources.sceneDraw.meshShader = m_ShaderFactory->CreateShader("app/MeshShaderPass.hlsl",
         "main_ms", nullptr, nvrhi::ShaderType::Mesh);
-    m_Draw.pixelShader = m_ShaderFactory->CreateShader("app/MeshShaderPass.hlsl",
+    m_StageResources.sceneDraw.pixelShader = m_ShaderFactory->CreateShader("app/MeshShaderPass.hlsl",
         "main_ps", nullptr, nvrhi::ShaderType::Pixel);
-    if (!m_Draw.amplificationShader || !m_Draw.meshShader || !m_Draw.pixelShader) {
+    if (!m_StageResources.sceneDraw.amplificationShader || !m_StageResources.sceneDraw.meshShader || !m_StageResources.sceneDraw.pixelShader) {
         log::error("MeshShaderRenderPass: shader compile failed");
         return false;
     }
 
-    m_Draw.sampler = GetDevice()->createSampler(
+    m_StageResources.sceneDraw.sampler = GetDevice()->createSampler(
         nvrhi::SamplerDesc()
             .setAllAddressModes(nvrhi::SamplerAddressMode::Wrap)
             .setAllFilters(true)
             .setMaxAnisotropy(8.f));
-    m_Draw.shadowSampler = GetDevice()->createSampler(
+    m_StageResources.sceneDraw.shadowSampler = GetDevice()->createSampler(
         nvrhi::SamplerDesc()
             .setMinFilter(true)
             .setMagFilter(true)
@@ -213,57 +131,57 @@ bool MeshShaderRenderPass::_InitDrawResources() {
             .setAllAddressModes(nvrhi::SamplerAddressMode::Border)
             .setBorderColor(nvrhi::Color(1.f))
         );
-    m_Draw.hizSampler = GetDevice()->createSampler(
+    m_StageResources.sceneDraw.hizSampler = GetDevice()->createSampler(
         nvrhi::SamplerDesc()
             .setAllAddressModes(nvrhi::SamplerAddressMode::Clamp)
             .setAllFilters(false));
-    if (!m_Draw.sampler || !m_Draw.shadowSampler || !m_Draw.hizSampler) return false;
+    if (!m_StageResources.sceneDraw.sampler || !m_StageResources.sceneDraw.shadowSampler || !m_StageResources.sceneDraw.hizSampler) return false;
 
     nvrhi::BindingLayoutDesc bld;
     bld.visibility = nvrhi::ShaderType::All;
     bld.bindings = {
-        nvrhi::BindingLayoutItem::PushConstants(k_PushC_Draw, k_PushCBytes),
-        nvrhi::BindingLayoutItem::ConstantBuffer(k_CB_Draw),
-        nvrhi::BindingLayoutItem::ConstantBuffer(k_CB_ASCull),
+        nvrhi::BindingLayoutItem::PushConstants(mesh_reg::Draw::kPushC_Slot, mesh_reg::Draw::kPushCBytes),
+        nvrhi::BindingLayoutItem::ConstantBuffer(mesh_reg::Draw::kCB_Frame),
+        nvrhi::BindingLayoutItem::ConstantBuffer(mesh_reg::Draw::kCB_ASCull),
 
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(k_SRV_Positions),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(k_SRV_Normals),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(k_SRV_Tangents),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(k_SRV_Bitangents),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(k_SRV_UVs),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(k_SRV_MVertIdx),
-        nvrhi::BindingLayoutItem::RawBuffer_SRV(k_SRV_MPrimIdx),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(k_SRV_Meshlets),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(k_SRV_AssetLods),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(k_SRV_VisBuf),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(k_SRV_SlotOffsets),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(k_SRV_SlotCounts),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(k_SRV_Instances),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(k_SRV_ASInvocsPerSlot),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Positions),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Normals),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Tangents),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Bitangents),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_UVs),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_MeshletVertIdx),
+        nvrhi::BindingLayoutItem::RawBuffer_SRV(mesh_reg::Draw::kSRV_MeshletPrimIdx),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Meshlets),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_AssetLods),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Vis),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_SlotOffsets),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_SlotCounts),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Instances),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_ASInvocations),
 
-        nvrhi::BindingLayoutItem::Texture_SRV(k_SRV_Diffuse),
-        nvrhi::BindingLayoutItem::Texture_SRV(k_SRV_NormalMap),
-        nvrhi::BindingLayoutItem::Texture_SRV(k_SRV_ShadowMap),
-        nvrhi::BindingLayoutItem::Texture_SRV(k_SRV_HiZTex),
+        nvrhi::BindingLayoutItem::Texture_SRV(mesh_reg::Draw::kTex_Diffuse),
+        nvrhi::BindingLayoutItem::Texture_SRV(mesh_reg::Draw::kTex_NormalMap),
+        nvrhi::BindingLayoutItem::Texture_SRV(mesh_reg::Draw::kTex_ShadowMap),
+        nvrhi::BindingLayoutItem::Texture_SRV(mesh_reg::Draw::kTex_HiZ),
 
-        nvrhi::BindingLayoutItem::Sampler(k_Sampler_Draw),
-        nvrhi::BindingLayoutItem::Sampler(k_Sampler_Shadow),
-        nvrhi::BindingLayoutItem::Sampler(k_Sampler_HiZ),
+        nvrhi::BindingLayoutItem::Sampler(mesh_reg::Draw::kSampler_Main),
+        nvrhi::BindingLayoutItem::Sampler(mesh_reg::Draw::kSampler_Shadow),
+        nvrhi::BindingLayoutItem::Sampler(mesh_reg::Draw::kSampler_HiZ),
     };
-    m_Draw.bindingLayout = GetDevice()->createBindingLayout(bld);
-    return m_Draw.bindingLayout != nullptr;
+    m_StageResources.sceneDraw.bindingLayout = GetDevice()->createBindingLayout(bld);
+    return m_StageResources.sceneDraw.bindingLayout != nullptr;
 }
 
 bool MeshShaderRenderPass::_InitCullResources() {
     if (!m_ShaderFactory) return false;
 
-    m_Cull.mainCS   = m_ShaderFactory->CreateShader("app/MeshCullCS.hlsl",
+    m_StageResources.cull.mainCS   = m_ShaderFactory->CreateShader("app/MeshCullCS.hlsl",
         "MeshCullMain",   nullptr, nvrhi::ShaderType::Compute);
-    m_Cull.regionCS = m_ShaderFactory->CreateShader("app/MeshCullCS.hlsl",
+    m_StageResources.cull.regionCS = m_ShaderFactory->CreateShader("app/MeshCullCS.hlsl",
         "MeshCullRegion", nullptr, nvrhi::ShaderType::Compute);
-    m_Cull.shadowCS = m_ShaderFactory->CreateShader("app/MeshCullCS.hlsl",
+    m_StageResources.cull.shadowCS = m_ShaderFactory->CreateShader("app/MeshCullCS.hlsl",
         "MeshCullShadow", nullptr, nvrhi::ShaderType::Compute);
-    if (!m_Cull.mainCS || !m_Cull.regionCS || !m_Cull.shadowCS) {
+    if (!m_StageResources.cull.mainCS || !m_StageResources.cull.regionCS || !m_StageResources.cull.shadowCS) {
         log::error("MeshShaderRenderPass: MeshCullCS compile failed");
         return false;
     }
@@ -271,56 +189,56 @@ bool MeshShaderRenderPass::_InitCullResources() {
     nvrhi::BindingLayoutDesc bld;
     bld.visibility = nvrhi::ShaderType::All;
     bld.bindings = {
-        nvrhi::BindingLayoutItem::ConstantBuffer(k_CB_Cull),
+        nvrhi::BindingLayoutItem::ConstantBuffer(mesh_reg::Cull::kCB_Frame),
 
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(k_SRV_CullRegion),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(k_SRV_CullInstance),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(k_SRV_CullMainSlotOffs),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(k_SRV_CullMainInvocs),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(k_SRV_CullShadowSlotOffs),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(k_SRV_CullShadowInvocs),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Cull::kSRV_RegionData),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Cull::kSRV_InstanceData),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Cull::kSRV_MainSlotOffsets),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Cull::kSRV_MainInvocations),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Cull::kSRV_ShadowSlotOffsets),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Cull::kSRV_ShadowInvocations),
 
-        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(k_UAV_MainRegionVis),
-        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(k_UAV_MainCount),
-        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(k_UAV_MainVis),
-        nvrhi::BindingLayoutItem::RawBuffer_UAV(k_UAV_MainDispatch),
-        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(k_UAV_ShadowCount),
-        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(k_UAV_ShadowVis),
-        nvrhi::BindingLayoutItem::RawBuffer_UAV(k_UAV_ShadowDispatch),
-        nvrhi::BindingLayoutItem::RawBuffer_UAV(k_UAV_ShadowUnique),
+        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(mesh_reg::Cull::kUAV_MainRegionVis),
+        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(mesh_reg::Cull::kUAV_MainCount),
+        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(mesh_reg::Cull::kUAV_MainVis),
+        nvrhi::BindingLayoutItem::RawBuffer_UAV(mesh_reg::Cull::kUAV_MainDispatch),
+        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(mesh_reg::Cull::kUAV_ShadowCount),
+        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(mesh_reg::Cull::kUAV_ShadowVis),
+        nvrhi::BindingLayoutItem::RawBuffer_UAV(mesh_reg::Cull::kUAV_ShadowDispatch),
+        nvrhi::BindingLayoutItem::RawBuffer_UAV(mesh_reg::Cull::kUAV_ShadowUnique),
 
-        nvrhi::BindingLayoutItem::Texture_SRV(k_SRV_CullHiZ),
-        nvrhi::BindingLayoutItem::Sampler(k_Sampler_Cull),
+        nvrhi::BindingLayoutItem::Texture_SRV(mesh_reg::Cull::kSRV_HiZ),
+        nvrhi::BindingLayoutItem::Sampler(mesh_reg::Cull::kSampler_HiZ),
     };
-    m_Cull.bindingLayout = GetDevice()->createBindingLayout(bld);
-    if (!m_Cull.bindingLayout) return false;
+    m_StageResources.cull.bindingLayout = GetDevice()->createBindingLayout(bld);
+    if (!m_StageResources.cull.bindingLayout) return false;
 
     nvrhi::ComputePipelineDesc psoDescRegion;
-    psoDescRegion.CS = m_Cull.regionCS;
-    psoDescRegion.bindingLayouts = { m_Cull.bindingLayout };
-    m_Cull.regionPipeline = GetDevice()->createComputePipeline(psoDescRegion);
+    psoDescRegion.CS = m_StageResources.cull.regionCS;
+    psoDescRegion.bindingLayouts = { m_StageResources.cull.bindingLayout };
+    m_StageResources.cull.regionPipeline = GetDevice()->createComputePipeline(psoDescRegion);
 
     nvrhi::ComputePipelineDesc psoDescMain;
-    psoDescMain.CS = m_Cull.mainCS;
-    psoDescMain.bindingLayouts = { m_Cull.bindingLayout };
-    m_Cull.mainPipeline = GetDevice()->createComputePipeline(psoDescMain);
+    psoDescMain.CS = m_StageResources.cull.mainCS;
+    psoDescMain.bindingLayouts = { m_StageResources.cull.bindingLayout };
+    m_StageResources.cull.mainPipeline = GetDevice()->createComputePipeline(psoDescMain);
 
     nvrhi::ComputePipelineDesc psoDescShadow;
-    psoDescShadow.CS = m_Cull.shadowCS;
-    psoDescShadow.bindingLayouts = { m_Cull.bindingLayout };
-    m_Cull.shadowPipeline = GetDevice()->createComputePipeline(psoDescShadow);
+    psoDescShadow.CS = m_StageResources.cull.shadowCS;
+    psoDescShadow.bindingLayouts = { m_StageResources.cull.bindingLayout };
+    m_StageResources.cull.shadowPipeline = GetDevice()->createComputePipeline(psoDescShadow);
 
-    return m_Cull.mainPipeline && m_Cull.regionPipeline && m_Cull.shadowPipeline;
+    return m_StageResources.cull.mainPipeline && m_StageResources.cull.regionPipeline && m_StageResources.cull.shadowPipeline;
 }
 
 bool MeshShaderRenderPass::_InitShadowPass() {
     if (!m_ShaderFactory) return false;
 
-    m_Shadow.amplificationShader = m_ShaderFactory->CreateShader("app/MeshShaderPass.hlsl",
+    m_StageResources.shadow.amplificationShader = m_ShaderFactory->CreateShader("app/MeshShaderPass.hlsl",
         "shadow_as", nullptr, nvrhi::ShaderType::Amplification);
-    m_Shadow.meshShader = m_ShaderFactory->CreateShader("app/MeshShaderPass.hlsl",
+    m_StageResources.shadow.meshShader = m_ShaderFactory->CreateShader("app/MeshShaderPass.hlsl",
         "shadow_ms", nullptr, nvrhi::ShaderType::Mesh);
-    if (!m_Shadow.amplificationShader || !m_Shadow.meshShader) {
+    if (!m_StageResources.shadow.amplificationShader || !m_StageResources.shadow.meshShader) {
         log::error("MeshShaderRenderPass: shadow AS/MS compile failed");
         return false;
     }
@@ -331,29 +249,29 @@ bool MeshShaderRenderPass::_InitShadowPass() {
     nvrhi::BindingLayoutDesc bld;
     bld.visibility = nvrhi::ShaderType::All;
     bld.bindings = {
-        nvrhi::BindingLayoutItem::PushConstants(k_PushC_Draw, k_PushCBytes),
-        nvrhi::BindingLayoutItem::ConstantBuffer(k_CB_Draw),
+        nvrhi::BindingLayoutItem::PushConstants(mesh_reg::Draw::kPushC_Slot, mesh_reg::Draw::kPushCBytes),
+        nvrhi::BindingLayoutItem::ConstantBuffer(mesh_reg::Draw::kCB_Frame),
 
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(k_SRV_Positions),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(k_SRV_Normals),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(k_SRV_Tangents),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(k_SRV_Bitangents),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(k_SRV_UVs),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(k_SRV_MVertIdx),
-        nvrhi::BindingLayoutItem::RawBuffer_SRV(k_SRV_MPrimIdx),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(k_SRV_Meshlets),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(k_SRV_AssetLods),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(k_SRV_VisBuf),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(k_SRV_SlotOffsets),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(k_SRV_SlotCounts),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(k_SRV_Instances),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(k_SRV_ASInvocsPerSlot),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Positions),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Normals),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Tangents),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Bitangents),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_UVs),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_MeshletVertIdx),
+        nvrhi::BindingLayoutItem::RawBuffer_SRV(mesh_reg::Draw::kSRV_MeshletPrimIdx),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Meshlets),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_AssetLods),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Vis),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_SlotOffsets),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_SlotCounts),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Instances),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_ASInvocations),
     };
-    m_Shadow.bindingLayout = GetDevice()->createBindingLayout(bld);
-    if (!m_Shadow.bindingLayout) return false;
+    m_StageResources.shadow.bindingLayout = GetDevice()->createBindingLayout(bld);
+    if (!m_StageResources.shadow.bindingLayout) return false;
 
-    // Texture2DArray shadow map — one slice per cascade.
-    m_Shadow.depthTexture = GetDevice()->createTexture(nvrhi::TextureDesc()
+    // Texture2DArray shadow map - one slice per cascade.
+    m_StageResources.shadow.depthTexture = GetDevice()->createTexture(nvrhi::TextureDesc()
         .setDimension(nvrhi::TextureDimension::Texture2DArray)
         .setWidth(k_ShadowRes).setHeight(k_ShadowRes)
         .setArraySize(Render::c_NumCascades)
@@ -364,17 +282,17 @@ bool MeshShaderRenderPass::_InitShadowPass() {
         .setInitialState(nvrhi::ResourceStates::DepthWrite)
         .setKeepInitialState(true)
         .setDebugName("MeshShader_ShadowDepth"));
-    if (!m_Shadow.depthTexture) return false;
+    if (!m_StageResources.shadow.depthTexture) return false;
 
     for (uint32_t c = 0; c < Render::c_NumCascades; c++) {
         nvrhi::FramebufferDesc fbd;
         fbd.setDepthAttachment(nvrhi::FramebufferAttachment()
-            .setTexture(m_Shadow.depthTexture)
+            .setTexture(m_StageResources.shadow.depthTexture)
             .setArraySlice(c));
-        m_Shadow.framebuffers[c] = GetDevice()->createFramebuffer(fbd);
-        if (!m_Shadow.framebuffers[c]) return false;
+        m_StageResources.shadow.framebuffers[c] = GetDevice()->createFramebuffer(fbd);
+        if (!m_StageResources.shadow.framebuffers[c]) return false;
 
-        m_Shadow.debugTextures[c] = GetDevice()->createTexture(nvrhi::TextureDesc()
+        m_StageResources.shadow.debugTextures[c] = GetDevice()->createTexture(nvrhi::TextureDesc()
             .setDimension(nvrhi::TextureDimension::Texture2D)
             .setWidth(k_ShadowRes).setHeight(k_ShadowRes)
             .setFormat(nvrhi::Format::R32_FLOAT)
@@ -395,7 +313,7 @@ bool MeshShaderRenderPass::_LoadBarkTextures(nvrhi::ICommandList* initCL,
     }
 
     engine::TextureCache textureCache(GetDevice(), std::make_shared<vfs::NativeFileSystem>(), nullptr);
-    m_Draw.textureSets.resize(barkTextureSets.size());
+    m_StageResources.sceneDraw.textureSets.resize(barkTextureSets.size());
 
     for (size_t i = 0; i < barkTextureSets.size(); i++) {
         std::filesystem::path texDir = g_ProjectDirectory / "media" / barkTextureSets[i] / "textures";
@@ -409,9 +327,9 @@ bool MeshShaderRenderPass::_LoadBarkTextures(nvrhi::ICommandList* initCL,
         }
         auto diffLoaded = textureCache.LoadTextureFromFile(diffPath, true,  &commonPasses, initCL);
         auto normLoaded = textureCache.LoadTextureFromFile(normPath, false, &commonPasses, initCL);
-        m_Draw.textureSets[i].diffuse   = diffLoaded ? diffLoaded->texture : nullptr;
-        m_Draw.textureSets[i].normalMap = normLoaded ? normLoaded->texture : nullptr;
-        if (!m_Draw.textureSets[i].diffuse || !m_Draw.textureSets[i].normalMap) {
+        m_StageResources.sceneDraw.textureSets[i].diffuse   = diffLoaded ? diffLoaded->texture : nullptr;
+        m_StageResources.sceneDraw.textureSets[i].normalMap = normLoaded ? normLoaded->texture : nullptr;
+        if (!m_StageResources.sceneDraw.textureSets[i].diffuse || !m_StageResources.sceneDraw.textureSets[i].normalMap) {
             log::error("MeshShaderRenderPass: bark texture load failed");
             return false;
         }
@@ -420,7 +338,7 @@ bool MeshShaderRenderPass::_LoadBarkTextures(nvrhi::ICommandList* initCL,
 }
 
 // ===========================================================================
-// Meshlet mega-buffer build — CPU side
+// Meshlet mega-buffer build - CPU side
 // ===========================================================================
 
 void MeshShaderRenderPass::_RebuildMeshletMegabuffers(nvrhi::ICommandList* /*cl*/) {
@@ -555,31 +473,31 @@ void MeshShaderRenderPass::_UploadMeshletMegabuffers(nvrhi::ICommandList* cl) {
         cl->setPermanentBufferState(h, nvrhi::ResourceStates::ShaderResource);
     };
 
-    makeSrv(m_Meshlet.positions,      vertexAttributes.positions.data(),  totalVerts * sizeof(dm::float3),
+    makeSrv(m_StageResources.sceneMeshletData.positions,      vertexAttributes.positions.data(),  totalVerts * sizeof(dm::float3),
             sizeof(dm::float3), "Mesh_Positions",  false);
-    makeSrv(m_Meshlet.normals,        vertexAttributes.normals.data(),    totalVerts * sizeof(dm::float3),
+    makeSrv(m_StageResources.sceneMeshletData.normals,        vertexAttributes.normals.data(),    totalVerts * sizeof(dm::float3),
             sizeof(dm::float3), "Mesh_Normals",    false);
-    makeSrv(m_Meshlet.tangents,       vertexAttributes.tangents.data(),   totalVerts * sizeof(dm::float3),
+    makeSrv(m_StageResources.sceneMeshletData.tangents,       vertexAttributes.tangents.data(),   totalVerts * sizeof(dm::float3),
             sizeof(dm::float3), "Mesh_Tangents",   false);
-    makeSrv(m_Meshlet.bitangents,     vertexAttributes.bitangents.data(), totalVerts * sizeof(dm::float3),
+    makeSrv(m_StageResources.sceneMeshletData.bitangents,     vertexAttributes.bitangents.data(), totalVerts * sizeof(dm::float3),
             sizeof(dm::float3), "Mesh_Bitangents", false);
-    makeSrv(m_Meshlet.uvs,            vertexAttributes.uvs.data(),        totalVerts * sizeof(dm::float2),
+    makeSrv(m_StageResources.sceneMeshletData.uvs,            vertexAttributes.uvs.data(),        totalVerts * sizeof(dm::float2),
             sizeof(dm::float2), "Mesh_UVs",        false);
-    makeSrv(m_Meshlet.meshletVertIdx, meshletVerts.data(), totalVertIdx * sizeof(uint32_t),
+    makeSrv(m_StageResources.sceneMeshletData.meshletVertIdx, meshletVerts.data(), totalVertIdx * sizeof(uint32_t),
             sizeof(uint32_t),   "Mesh_MeshletVertIdx", false);
-    makeSrv(m_Meshlet.meshletPrimIdx, meshletTris.data(), totalPrimBytes,
+    makeSrv(m_StageResources.sceneMeshletData.meshletPrimIdx, meshletTris.data(), totalPrimBytes,
             0,                  "Mesh_MeshletTriIdx", true);
-    makeSrv(m_Meshlet.meshletDescs,   meshletDescs.data(),       totalMeshlets * sizeof(Render::MeshletDesc),
+    makeSrv(m_StageResources.sceneMeshletData.meshletDescs,   meshletDescs.data(),       totalMeshlets * sizeof(Render::MeshletDesc),
             sizeof(Render::MeshletDesc),   "Mesh_Meshlets", false);
-    makeSrv(m_Meshlet.assetLodRanges, m_MeshletMegabuffers.meshOffsets.data(),
+    makeSrv(m_StageResources.sceneMeshletData.assetLodRanges, m_MeshletMegabuffers.meshOffsets.data(),
             numAssetLods * sizeof(Render::MeshOffsets),
             sizeof(Render::MeshOffsets), "Mesh_Offsets", false);
 
-    m_Meshlet.totalVertices     = totalVerts;
-    m_Meshlet.totalMeshlets     = totalMeshlets;
-    m_Meshlet.totalVertIdx      = totalVertIdx;
-    m_Meshlet.totalPrimIdxBytes = totalPrimBytes;
-    m_Meshlet.numAssetLods      = numAssetLods;
+    m_StageResources.sceneMeshletData.totalVertices     = totalVerts;
+    m_StageResources.sceneMeshletData.totalMeshlets     = totalMeshlets;
+    m_StageResources.sceneMeshletData.totalVertIdx      = totalVertIdx;
+    m_StageResources.sceneMeshletData.totalPrimIdxBytes = totalPrimBytes;
+    m_StageResources.sceneMeshletData.numAssetLods      = numAssetLods;
 
     size_t totalBytes =
         totalVerts * (sizeof(dm::float3) * 4 + sizeof(dm::float2)) +
@@ -644,8 +562,9 @@ void MeshShaderRenderPass::_BuildRegionWindows() {
 }
 
 void MeshShaderRenderPass::_BuildSlotLayout() {
+    const auto& assets      = m_Registry.getAssets();
     const uint32_t numLods   = static_cast<uint32_t>(m_Registry.getLodSegments().size());
-    const uint32_t numAssets = static_cast<uint32_t>(m_Registry.getAssets().size());
+    const uint32_t numAssets = static_cast<uint32_t>(assets.size());
     const uint32_t nCasc     = Render::c_NumCascades;
 
     m_NumMainSlots   = std::max(1u, numAssets * numLods);
@@ -662,9 +581,10 @@ void MeshShaderRenderPass::_BuildSlotLayout() {
         }
     }
 
-    // Main slots (asset × LOD)
+    // Main slots (asset x LOD)
     m_MainSlotOffsets.assign(m_NumMainSlots, 0);
     m_MainASInvocsPerSlot.assign(m_NumMainSlots, 0);
+    m_MainSlotTextureSet.assign(m_NumMainSlots, 0);
     m_MainDispatchArgsStaging.assign(m_NumMainSlots, {0, 0, 1, 1});
     m_MainVisBufferSize = 0;
 
@@ -680,11 +600,18 @@ void MeshShaderRenderPass::_BuildSlotLayout() {
                 (meshletCount + Render::k_ASGroupSize - 1) / Render::k_ASGroupSize);
             m_MainASInvocsPerSlot[slot] = invocations;
             m_MainDispatchArgsStaging[slot].slotIdx = slot;
+
+            if (ai < assets.size()) {
+                uint32_t textureSet = assets[ai].textureSetIdx;
+                if (!m_StageResources.sceneDraw.textureSets.empty())
+                    textureSet = std::min<uint32_t>(textureSet, static_cast<uint32_t>(m_StageResources.sceneDraw.textureSets.size() - 1));
+                m_MainSlotTextureSet[slot] = textureSet;
+            }
         }
     }
     m_MainVisBufferSize = std::max(1u, m_MainVisBufferSize);
 
-    // Shadow slots (asset × cascade, LOD 0 only)
+    // Shadow slots (asset x cascade, LOD 0 only)
     m_ShadowSlotOffsets.assign(m_NumShadowSlots, 0);
     m_ShadowASInvocsPerSlot.assign(m_NumShadowSlots, 0);
     m_ShadowDispatchArgsStaging.assign(m_NumShadowSlots, {0, 0, 1, 1});
@@ -715,101 +642,101 @@ void MeshShaderRenderPass::_UploadCullBuffers(nvrhi::ICommandList* cl) {
         static_cast<uint32_t>(m_Registry.getRegions().size()));
 
     // Persistent + cull data
-    m_Cull.persistentInstBuffer = device->createBuffer(nvrhi::BufferDesc()
+    m_StageResources.cull.persistentInstBuffer = device->createBuffer(nvrhi::BufferDesc()
         .setByteSize(m_TotalCapacity * sizeof(Render::InstanceBufferEntry))
         .setStructStride(sizeof(Render::InstanceBufferEntry))
         .setDebugName("Mesh_PersistentInstBuffer")
         .setInitialState(nvrhi::ResourceStates::CopyDest));
-    cl->beginTrackingBufferState(m_Cull.persistentInstBuffer, nvrhi::ResourceStates::CopyDest);
-    cl->writeBuffer(m_Cull.persistentInstBuffer, m_InstanceStaging.data(),
+    cl->beginTrackingBufferState(m_StageResources.cull.persistentInstBuffer, nvrhi::ResourceStates::CopyDest);
+    cl->writeBuffer(m_StageResources.cull.persistentInstBuffer, m_InstanceStaging.data(),
         m_TotalCapacity * sizeof(Render::InstanceBufferEntry));
-    cl->setPermanentBufferState(m_Cull.persistentInstBuffer, nvrhi::ResourceStates::ShaderResource);
+    cl->setPermanentBufferState(m_StageResources.cull.persistentInstBuffer, nvrhi::ResourceStates::ShaderResource);
 
-    m_Cull.cullDataBuffer = device->createBuffer(nvrhi::BufferDesc()
+    m_StageResources.cull.cullDataBuffer = device->createBuffer(nvrhi::BufferDesc()
         .setByteSize(m_TotalCapacity * sizeof(Render::CullInstanceData))
         .setStructStride(sizeof(Render::CullInstanceData))
         .setDebugName("Mesh_CullDataBuffer")
         .setInitialState(nvrhi::ResourceStates::CopyDest));
-    cl->beginTrackingBufferState(m_Cull.cullDataBuffer, nvrhi::ResourceStates::CopyDest);
-    cl->writeBuffer(m_Cull.cullDataBuffer, m_CullDataStaging.data(),
+    cl->beginTrackingBufferState(m_StageResources.cull.cullDataBuffer, nvrhi::ResourceStates::CopyDest);
+    cl->writeBuffer(m_StageResources.cull.cullDataBuffer, m_CullDataStaging.data(),
         m_TotalCapacity * sizeof(Render::CullInstanceData));
-    cl->setPermanentBufferState(m_Cull.cullDataBuffer, nvrhi::ResourceStates::ShaderResource);
+    cl->setPermanentBufferState(m_StageResources.cull.cullDataBuffer, nvrhi::ResourceStates::ShaderResource);
 
-    m_Cull.cullRegionDataBuffer = device->createBuffer(nvrhi::BufferDesc()
+    m_StageResources.cull.cullRegionDataBuffer = device->createBuffer(nvrhi::BufferDesc()
         .setByteSize(numRegions * sizeof(Render::CullRegionData))
         .setStructStride(sizeof(Render::CullRegionData))
         .setDebugName("Mesh_CullRegionDataBuffer")
         .setInitialState(nvrhi::ResourceStates::CopyDest));
-    cl->beginTrackingBufferState(m_Cull.cullRegionDataBuffer, nvrhi::ResourceStates::CopyDest);
-    cl->writeBuffer(m_Cull.cullRegionDataBuffer, m_RegionStaging.data(),
+    cl->beginTrackingBufferState(m_StageResources.cull.cullRegionDataBuffer, nvrhi::ResourceStates::CopyDest);
+    cl->writeBuffer(m_StageResources.cull.cullRegionDataBuffer, m_RegionStaging.data(),
         numRegions * sizeof(Render::CullRegionData));
-    cl->setPermanentBufferState(m_Cull.cullRegionDataBuffer, nvrhi::ResourceStates::ShaderResource);
+    cl->setPermanentBufferState(m_StageResources.cull.cullRegionDataBuffer, nvrhi::ResourceStates::ShaderResource);
 
     // --- Main slot SRVs ---
-    m_Cull.mainSlotOffsetBuffer = device->createBuffer(nvrhi::BufferDesc()
+    m_StageResources.cull.mainSlotOffsetBuffer = device->createBuffer(nvrhi::BufferDesc()
         .setByteSize(m_NumMainSlots * sizeof(uint32_t))
         .setStructStride(sizeof(uint32_t))
         .setDebugName("Mesh_MainSlotOffsetBuffer")
         .setInitialState(nvrhi::ResourceStates::CopyDest));
-    cl->beginTrackingBufferState(m_Cull.mainSlotOffsetBuffer, nvrhi::ResourceStates::CopyDest);
-    cl->writeBuffer(m_Cull.mainSlotOffsetBuffer, m_MainSlotOffsets.data(),
+    cl->beginTrackingBufferState(m_StageResources.cull.mainSlotOffsetBuffer, nvrhi::ResourceStates::CopyDest);
+    cl->writeBuffer(m_StageResources.cull.mainSlotOffsetBuffer, m_MainSlotOffsets.data(),
         m_NumMainSlots * sizeof(uint32_t));
-    cl->setPermanentBufferState(m_Cull.mainSlotOffsetBuffer, nvrhi::ResourceStates::ShaderResource);
+    cl->setPermanentBufferState(m_StageResources.cull.mainSlotOffsetBuffer, nvrhi::ResourceStates::ShaderResource);
 
-    m_Cull.mainASInvocsPerSlotBuffer = device->createBuffer(nvrhi::BufferDesc()
+    m_StageResources.cull.mainASInvocsPerSlotBuffer = device->createBuffer(nvrhi::BufferDesc()
         .setByteSize(m_NumMainSlots * sizeof(uint32_t))
         .setStructStride(sizeof(uint32_t))
         .setDebugName("Mesh_MainASInvocsPerSlotBuffer")
         .setInitialState(nvrhi::ResourceStates::CopyDest));
-    cl->beginTrackingBufferState(m_Cull.mainASInvocsPerSlotBuffer, nvrhi::ResourceStates::CopyDest);
-    cl->writeBuffer(m_Cull.mainASInvocsPerSlotBuffer, m_MainASInvocsPerSlot.data(),
+    cl->beginTrackingBufferState(m_StageResources.cull.mainASInvocsPerSlotBuffer, nvrhi::ResourceStates::CopyDest);
+    cl->writeBuffer(m_StageResources.cull.mainASInvocsPerSlotBuffer, m_MainASInvocsPerSlot.data(),
         m_NumMainSlots * sizeof(uint32_t));
-    cl->setPermanentBufferState(m_Cull.mainASInvocsPerSlotBuffer, nvrhi::ResourceStates::ShaderResource);
+    cl->setPermanentBufferState(m_StageResources.cull.mainASInvocsPerSlotBuffer, nvrhi::ResourceStates::ShaderResource);
 
     // --- Shadow slot SRVs ---
-    m_Cull.shadowSlotOffsetBuffer = device->createBuffer(nvrhi::BufferDesc()
+    m_StageResources.cull.shadowSlotOffsetBuffer = device->createBuffer(nvrhi::BufferDesc()
         .setByteSize(m_NumShadowSlots * sizeof(uint32_t))
         .setStructStride(sizeof(uint32_t))
         .setDebugName("Mesh_ShadowSlotOffsetBuffer")
         .setInitialState(nvrhi::ResourceStates::CopyDest));
-    cl->beginTrackingBufferState(m_Cull.shadowSlotOffsetBuffer, nvrhi::ResourceStates::CopyDest);
-    cl->writeBuffer(m_Cull.shadowSlotOffsetBuffer, m_ShadowSlotOffsets.data(),
+    cl->beginTrackingBufferState(m_StageResources.cull.shadowSlotOffsetBuffer, nvrhi::ResourceStates::CopyDest);
+    cl->writeBuffer(m_StageResources.cull.shadowSlotOffsetBuffer, m_ShadowSlotOffsets.data(),
         m_NumShadowSlots * sizeof(uint32_t));
-    cl->setPermanentBufferState(m_Cull.shadowSlotOffsetBuffer, nvrhi::ResourceStates::ShaderResource);
+    cl->setPermanentBufferState(m_StageResources.cull.shadowSlotOffsetBuffer, nvrhi::ResourceStates::ShaderResource);
 
-    m_Cull.shadowASInvocsPerSlotBuffer = device->createBuffer(nvrhi::BufferDesc()
+    m_StageResources.cull.shadowASInvocsPerSlotBuffer = device->createBuffer(nvrhi::BufferDesc()
         .setByteSize(m_NumShadowSlots * sizeof(uint32_t))
         .setStructStride(sizeof(uint32_t))
         .setDebugName("Mesh_ShadowASInvocsPerSlotBuffer")
         .setInitialState(nvrhi::ResourceStates::CopyDest));
-    cl->beginTrackingBufferState(m_Cull.shadowASInvocsPerSlotBuffer, nvrhi::ResourceStates::CopyDest);
-    cl->writeBuffer(m_Cull.shadowASInvocsPerSlotBuffer, m_ShadowASInvocsPerSlot.data(),
+    cl->beginTrackingBufferState(m_StageResources.cull.shadowASInvocsPerSlotBuffer, nvrhi::ResourceStates::CopyDest);
+    cl->writeBuffer(m_StageResources.cull.shadowASInvocsPerSlotBuffer, m_ShadowASInvocsPerSlot.data(),
         m_NumShadowSlots * sizeof(uint32_t));
-    cl->setPermanentBufferState(m_Cull.shadowASInvocsPerSlotBuffer, nvrhi::ResourceStates::ShaderResource);
+    cl->setPermanentBufferState(m_StageResources.cull.shadowASInvocsPerSlotBuffer, nvrhi::ResourceStates::ShaderResource);
 
     // --- UAVs ---
-    m_Cull.regionVisibleBuffer = device->createBuffer(nvrhi::BufferDesc()
+    m_StageResources.cull.regionVisibleBuffer = device->createBuffer(nvrhi::BufferDesc()
         .setByteSize(numRegions * sizeof(uint32_t))
         .setStructStride(sizeof(uint32_t))
         .setDebugName("Mesh_RegionVisibleBuffer")
         .setCanHaveUAVs(true)
         .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess));
 
-    m_Cull.mainCountBuffer = device->createBuffer(nvrhi::BufferDesc()
+    m_StageResources.cull.mainCountBuffer = device->createBuffer(nvrhi::BufferDesc()
         .setByteSize(m_NumMainSlots * sizeof(uint32_t))
         .setStructStride(sizeof(uint32_t))
         .setDebugName("Mesh_MainCountBuffer")
         .setCanHaveUAVs(true)
         .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess));
 
-    m_Cull.mainVisBuffer = device->createBuffer(nvrhi::BufferDesc()
+    m_StageResources.cull.mainVisBuffer = device->createBuffer(nvrhi::BufferDesc()
         .setByteSize(m_MainVisBufferSize * sizeof(uint32_t))
         .setStructStride(sizeof(uint32_t))
         .setDebugName("Mesh_MainVisBuffer")
         .setCanHaveUAVs(true)
         .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess));
 
-    m_Cull.mainDispatchArgsBuffer = device->createBuffer(nvrhi::BufferDesc()
+    m_StageResources.cull.mainDispatchArgsBuffer = device->createBuffer(nvrhi::BufferDesc()
         .setByteSize(m_NumMainSlots * sizeof(DispatchRecord))
         .setDebugName("Mesh_MainDispatchArgsBuffer")
         .setIsDrawIndirectArgs(true)
@@ -817,21 +744,21 @@ void MeshShaderRenderPass::_UploadCullBuffers(nvrhi::ICommandList* cl) {
         .setCanHaveRawViews(true)
         .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess));
 
-    m_Cull.shadowCountBuffer = device->createBuffer(nvrhi::BufferDesc()
+    m_StageResources.cull.shadowCountBuffer = device->createBuffer(nvrhi::BufferDesc()
         .setByteSize(m_NumShadowSlots * sizeof(uint32_t))
         .setStructStride(sizeof(uint32_t))
         .setDebugName("Mesh_ShadowCountBuffer")
         .setCanHaveUAVs(true)
         .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess));
 
-    m_Cull.shadowVisBuffer = device->createBuffer(nvrhi::BufferDesc()
+    m_StageResources.cull.shadowVisBuffer = device->createBuffer(nvrhi::BufferDesc()
         .setByteSize(m_ShadowVisBufferSize * sizeof(uint32_t))
         .setStructStride(sizeof(uint32_t))
         .setDebugName("Mesh_ShadowVisBuffer")
         .setCanHaveUAVs(true)
         .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess));
 
-    m_Cull.shadowDispatchArgsBuffer = device->createBuffer(nvrhi::BufferDesc()
+    m_StageResources.cull.shadowDispatchArgsBuffer = device->createBuffer(nvrhi::BufferDesc()
         .setByteSize(m_NumShadowSlots * sizeof(DispatchRecord))
         .setDebugName("Mesh_ShadowDispatchArgsBuffer")
         .setIsDrawIndirectArgs(true)
@@ -839,7 +766,7 @@ void MeshShaderRenderPass::_UploadCullBuffers(nvrhi::ICommandList* cl) {
         .setCanHaveRawViews(true)
         .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess));
 
-    m_Cull.shadowUniqueCounter = device->createBuffer(nvrhi::BufferDesc()
+    m_StageResources.cull.shadowUniqueCounter = device->createBuffer(nvrhi::BufferDesc()
         .setByteSize(sizeof(uint32_t))
         .setDebugName("Mesh_ShadowUniqueCounter")
         .setCanHaveUAVs(true)
@@ -849,13 +776,13 @@ void MeshShaderRenderPass::_UploadCullBuffers(nvrhi::ICommandList* cl) {
     // The depth prepass consumes "last frame" mesh dispatch/count buffers before
     // the first per-frame cull reset runs. Seed those resources so frame zero is
     // a clean no-op instead of reading undefined indirect args.
-    cl->clearBufferUInt(m_Cull.mainCountBuffer, 0);
-    cl->clearBufferUInt(m_Cull.shadowCountBuffer, 0);
-    cl->clearBufferUInt(m_Cull.shadowUniqueCounter, 0);
-    cl->writeBuffer(m_Cull.mainDispatchArgsBuffer,
+    cl->clearBufferUInt(m_StageResources.cull.mainCountBuffer, 0);
+    cl->clearBufferUInt(m_StageResources.cull.shadowCountBuffer, 0);
+    cl->clearBufferUInt(m_StageResources.cull.shadowUniqueCounter, 0);
+    cl->writeBuffer(m_StageResources.cull.mainDispatchArgsBuffer,
         m_MainDispatchArgsStaging.data(),
         m_MainDispatchArgsStaging.size() * sizeof(DispatchRecord));
-    cl->writeBuffer(m_Cull.shadowDispatchArgsBuffer,
+    cl->writeBuffer(m_StageResources.cull.shadowDispatchArgsBuffer,
         m_ShadowDispatchArgsStaging.data(),
         m_ShadowDispatchArgsStaging.size() * sizeof(DispatchRecord));
 
@@ -882,95 +809,99 @@ void MeshShaderRenderPass::_UploadCullBuffers(nvrhi::ICommandList* cl) {
 void MeshShaderRenderPass::_RebuildCullBindingSet() {
     nvrhi::BindingSetDesc bsd;
     bsd.bindings = {
-        nvrhi::BindingSetItem::ConstantBuffer(k_CB_Cull, m_Shared.constantBuffer,
-            nvrhi::BufferRange(0, Render::c_CullConstantBufferSize)),
+        nvrhi::BindingSetItem::ConstantBuffer(mesh_reg::Cull::kCB_Frame, m_StageResources.frameShared.constantBuffer,
+            nvrhi::BufferRange(0, shader_cb::kCullFrameSize)),
 
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(k_SRV_CullRegion,         m_Cull.cullRegionDataBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(k_SRV_CullInstance,       m_Cull.cullDataBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(k_SRV_CullMainSlotOffs,   m_Cull.mainSlotOffsetBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(k_SRV_CullMainInvocs,     m_Cull.mainASInvocsPerSlotBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(k_SRV_CullShadowSlotOffs, m_Cull.shadowSlotOffsetBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(k_SRV_CullShadowInvocs,   m_Cull.shadowASInvocsPerSlotBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Cull::kSRV_RegionData,         m_StageResources.cull.cullRegionDataBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Cull::kSRV_InstanceData,       m_StageResources.cull.cullDataBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Cull::kSRV_MainSlotOffsets,   m_StageResources.cull.mainSlotOffsetBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Cull::kSRV_MainInvocations,     m_StageResources.cull.mainASInvocsPerSlotBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Cull::kSRV_ShadowSlotOffsets, m_StageResources.cull.shadowSlotOffsetBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Cull::kSRV_ShadowInvocations,   m_StageResources.cull.shadowASInvocsPerSlotBuffer),
 
-        nvrhi::BindingSetItem::StructuredBuffer_UAV(k_UAV_MainRegionVis,  m_Cull.regionVisibleBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_UAV(k_UAV_MainCount,      m_Cull.mainCountBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_UAV(k_UAV_MainVis,        m_Cull.mainVisBuffer),
-        nvrhi::BindingSetItem::RawBuffer_UAV(k_UAV_MainDispatch,          m_Cull.mainDispatchArgsBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_UAV(k_UAV_ShadowCount,    m_Cull.shadowCountBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_UAV(k_UAV_ShadowVis,      m_Cull.shadowVisBuffer),
-        nvrhi::BindingSetItem::RawBuffer_UAV(k_UAV_ShadowDispatch,        m_Cull.shadowDispatchArgsBuffer),
-        nvrhi::BindingSetItem::RawBuffer_UAV(k_UAV_ShadowUnique,          m_Cull.shadowUniqueCounter),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(mesh_reg::Cull::kUAV_MainRegionVis,  m_StageResources.cull.regionVisibleBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(mesh_reg::Cull::kUAV_MainCount,      m_StageResources.cull.mainCountBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(mesh_reg::Cull::kUAV_MainVis,        m_StageResources.cull.mainVisBuffer),
+        nvrhi::BindingSetItem::RawBuffer_UAV(mesh_reg::Cull::kUAV_MainDispatch,          m_StageResources.cull.mainDispatchArgsBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(mesh_reg::Cull::kUAV_ShadowCount,    m_StageResources.cull.shadowCountBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(mesh_reg::Cull::kUAV_ShadowVis,      m_StageResources.cull.shadowVisBuffer),
+        nvrhi::BindingSetItem::RawBuffer_UAV(mesh_reg::Cull::kUAV_ShadowDispatch,        m_StageResources.cull.shadowDispatchArgsBuffer),
+        nvrhi::BindingSetItem::RawBuffer_UAV(mesh_reg::Cull::kUAV_ShadowUnique,          m_StageResources.cull.shadowUniqueCounter),
 
-        nvrhi::BindingSetItem::Texture_SRV(k_SRV_CullHiZ, m_HiZ.hizTexture),
-        nvrhi::BindingSetItem::Sampler(k_Sampler_Cull, m_HiZ.pointSampler),
+        nvrhi::BindingSetItem::Texture_SRV(mesh_reg::Cull::kSRV_HiZ, m_StageResources.hiz.hizTexture),
+        nvrhi::BindingSetItem::Sampler(mesh_reg::Cull::kSampler_HiZ, m_StageResources.hiz.pointSampler),
     };
-    m_Cull.bindingSet = GetDevice()->createBindingSet(bsd, m_Cull.bindingLayout);
+    m_StageResources.cull.bindingSet = GetDevice()->createBindingSet(bsd, m_StageResources.cull.bindingLayout);
 }
 
 void MeshShaderRenderPass::_RebuildDrawBindingSet() {
-    if (m_Draw.textureSets.empty()) return;
-    if (!m_Shadow.depthTexture)     return;
-    if (!m_HiZ.hizTexture)          return;
+    if (m_StageResources.sceneDraw.textureSets.empty()) return;
+    if (!m_StageResources.shadow.depthTexture)     return;
+    if (!m_StageResources.hiz.hizTexture)          return;
 
-    nvrhi::BindingSetDesc bsd;
-    bsd.bindings = {
-        nvrhi::BindingSetItem::PushConstants(k_PushC_Draw, k_PushCBytes),
-        nvrhi::BindingSetItem::ConstantBuffer(k_CB_Draw, m_Shared.constantBuffer,
-            nvrhi::BufferRange(0, Render::c_CullConstantBufferSize)),
-        nvrhi::BindingSetItem::ConstantBuffer(k_CB_ASCull, m_Shared.asCullCB,
-            nvrhi::BufferRange(0, c_ASCullCBSize)),
+    m_StageResources.sceneDraw.bindingSets.resize(m_StageResources.sceneDraw.textureSets.size());
 
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(k_SRV_Positions,     m_Meshlet.positions),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(k_SRV_Normals,       m_Meshlet.normals),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(k_SRV_Tangents,      m_Meshlet.tangents),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(k_SRV_Bitangents,    m_Meshlet.bitangents),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(k_SRV_UVs,           m_Meshlet.uvs),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(k_SRV_MVertIdx,      m_Meshlet.meshletVertIdx),
-        nvrhi::BindingSetItem::RawBuffer_SRV(k_SRV_MPrimIdx,             m_Meshlet.meshletPrimIdx),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(k_SRV_Meshlets,      m_Meshlet.meshletDescs),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(k_SRV_AssetLods,     m_Meshlet.assetLodRanges),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(k_SRV_VisBuf,        m_Cull.mainVisBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(k_SRV_SlotOffsets,   m_Cull.mainSlotOffsetBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(k_SRV_SlotCounts,    m_Cull.mainCountBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(k_SRV_Instances,     m_Cull.persistentInstBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(k_SRV_ASInvocsPerSlot, m_Cull.mainASInvocsPerSlotBuffer),
+    for (size_t texIdx = 0; texIdx < m_StageResources.sceneDraw.textureSets.size(); texIdx++) {
+        nvrhi::BindingSetDesc bsd;
+        bsd.bindings = {
+            nvrhi::BindingSetItem::PushConstants(mesh_reg::Draw::kPushC_Slot, mesh_reg::Draw::kPushCBytes),
+            nvrhi::BindingSetItem::ConstantBuffer(mesh_reg::Draw::kCB_Frame, m_StageResources.frameShared.constantBuffer,
+                nvrhi::BufferRange(0, shader_cb::kCullFrameSize)),
+            nvrhi::BindingSetItem::ConstantBuffer(mesh_reg::Draw::kCB_ASCull, m_StageResources.frameShared.asCullCB,
+                nvrhi::BufferRange(0, shader_cb::kMeshASCullSize)),
 
-        nvrhi::BindingSetItem::Texture_SRV(k_SRV_Diffuse,   m_Draw.textureSets[0].diffuse),
-        nvrhi::BindingSetItem::Texture_SRV(k_SRV_NormalMap, m_Draw.textureSets[0].normalMap),
-        nvrhi::BindingSetItem::Texture_SRV(k_SRV_ShadowMap, m_Shadow.depthTexture),
-        nvrhi::BindingSetItem::Texture_SRV(k_SRV_HiZTex,    m_HiZ.hizTexture),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Positions,     m_StageResources.sceneMeshletData.positions),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Normals,       m_StageResources.sceneMeshletData.normals),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Tangents,      m_StageResources.sceneMeshletData.tangents),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Bitangents,    m_StageResources.sceneMeshletData.bitangents),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_UVs,           m_StageResources.sceneMeshletData.uvs),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_MeshletVertIdx,      m_StageResources.sceneMeshletData.meshletVertIdx),
+            nvrhi::BindingSetItem::RawBuffer_SRV(mesh_reg::Draw::kSRV_MeshletPrimIdx,             m_StageResources.sceneMeshletData.meshletPrimIdx),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Meshlets,      m_StageResources.sceneMeshletData.meshletDescs),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_AssetLods,     m_StageResources.sceneMeshletData.assetLodRanges),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Vis,        m_StageResources.cull.mainVisBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_SlotOffsets,   m_StageResources.cull.mainSlotOffsetBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_SlotCounts,    m_StageResources.cull.mainCountBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Instances,     m_StageResources.cull.persistentInstBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_ASInvocations, m_StageResources.cull.mainASInvocsPerSlotBuffer),
 
-        nvrhi::BindingSetItem::Sampler(k_Sampler_Draw,   m_Draw.sampler),
-        nvrhi::BindingSetItem::Sampler(k_Sampler_Shadow, m_Draw.shadowSampler),
-        nvrhi::BindingSetItem::Sampler(k_Sampler_HiZ,    m_Draw.hizSampler),
-    };
-    m_Draw.bindingSet = GetDevice()->createBindingSet(bsd, m_Draw.bindingLayout);
+            nvrhi::BindingSetItem::Texture_SRV(mesh_reg::Draw::kTex_Diffuse,   m_StageResources.sceneDraw.textureSets[texIdx].diffuse),
+            nvrhi::BindingSetItem::Texture_SRV(mesh_reg::Draw::kTex_NormalMap, m_StageResources.sceneDraw.textureSets[texIdx].normalMap),
+            nvrhi::BindingSetItem::Texture_SRV(mesh_reg::Draw::kTex_ShadowMap, m_StageResources.shadow.depthTexture),
+            nvrhi::BindingSetItem::Texture_SRV(mesh_reg::Draw::kTex_HiZ,    m_StageResources.hiz.hizTexture),
+
+            nvrhi::BindingSetItem::Sampler(mesh_reg::Draw::kSampler_Main,   m_StageResources.sceneDraw.sampler),
+            nvrhi::BindingSetItem::Sampler(mesh_reg::Draw::kSampler_Shadow, m_StageResources.sceneDraw.shadowSampler),
+            nvrhi::BindingSetItem::Sampler(mesh_reg::Draw::kSampler_HiZ,    m_StageResources.sceneDraw.hizSampler),
+        };
+        m_StageResources.sceneDraw.bindingSets[texIdx] = GetDevice()->createBindingSet(bsd, m_StageResources.sceneDraw.bindingLayout);
+    }
 }
 
 void MeshShaderRenderPass::_RebuildShadowBindingSet() {
     nvrhi::BindingSetDesc bsd;
     bsd.bindings = {
-        nvrhi::BindingSetItem::PushConstants(k_PushC_Draw, k_PushCBytes),
-        nvrhi::BindingSetItem::ConstantBuffer(k_CB_Draw, m_Shared.constantBuffer,
-            nvrhi::BufferRange(0, Render::c_CullConstantBufferSize)),
+        nvrhi::BindingSetItem::PushConstants(mesh_reg::Draw::kPushC_Slot, mesh_reg::Draw::kPushCBytes),
+        nvrhi::BindingSetItem::ConstantBuffer(mesh_reg::Draw::kCB_Frame, m_StageResources.frameShared.constantBuffer,
+            nvrhi::BufferRange(0, shader_cb::kCullFrameSize)),
 
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(k_SRV_Positions,     m_Meshlet.positions),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(k_SRV_Normals,       m_Meshlet.normals),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(k_SRV_Tangents,      m_Meshlet.tangents),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(k_SRV_Bitangents,    m_Meshlet.bitangents),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(k_SRV_UVs,           m_Meshlet.uvs),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(k_SRV_MVertIdx,      m_Meshlet.meshletVertIdx),
-        nvrhi::BindingSetItem::RawBuffer_SRV(k_SRV_MPrimIdx,             m_Meshlet.meshletPrimIdx),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(k_SRV_Meshlets,      m_Meshlet.meshletDescs),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(k_SRV_AssetLods,     m_Meshlet.assetLodRanges),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Positions,     m_StageResources.sceneMeshletData.positions),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Normals,       m_StageResources.sceneMeshletData.normals),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Tangents,      m_StageResources.sceneMeshletData.tangents),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Bitangents,    m_StageResources.sceneMeshletData.bitangents),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_UVs,           m_StageResources.sceneMeshletData.uvs),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_MeshletVertIdx,      m_StageResources.sceneMeshletData.meshletVertIdx),
+        nvrhi::BindingSetItem::RawBuffer_SRV(mesh_reg::Draw::kSRV_MeshletPrimIdx,             m_StageResources.sceneMeshletData.meshletPrimIdx),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Meshlets,      m_StageResources.sceneMeshletData.meshletDescs),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_AssetLods,     m_StageResources.sceneMeshletData.assetLodRanges),
         // Shadow-specific redirect:
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(k_SRV_VisBuf,          m_Cull.shadowVisBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(k_SRV_SlotOffsets,     m_Cull.shadowSlotOffsetBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(k_SRV_SlotCounts,      m_Cull.shadowCountBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(k_SRV_Instances,       m_Cull.persistentInstBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(k_SRV_ASInvocsPerSlot, m_Cull.shadowASInvocsPerSlotBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Vis,          m_StageResources.cull.shadowVisBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_SlotOffsets,     m_StageResources.cull.shadowSlotOffsetBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_SlotCounts,      m_StageResources.cull.shadowCountBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Instances,       m_StageResources.cull.persistentInstBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_ASInvocations, m_StageResources.cull.shadowASInvocsPerSlotBuffer),
     };
-    m_Shadow.bindingSet = GetDevice()->createBindingSet(bsd, m_Shadow.bindingLayout);
+    m_StageResources.shadow.bindingSet = GetDevice()->createBindingSet(bsd, m_StageResources.shadow.bindingLayout);
 }
 
 // ===========================================================================
@@ -1018,14 +949,14 @@ void MeshShaderRenderPass::onRegionsDirty(const std::vector<size_t>&) {
 // ===========================================================================
 
 void MeshShaderRenderPass::_CreateMainPipelineIfNeeded(nvrhi::IFramebuffer* framebuffer) {
-    if (m_Draw.pipeline) return;
+    if (m_StageResources.sceneDraw.pipeline) return;
 
     nvrhi::MeshletPipelineDesc psoDesc;
-    psoDesc.AS = m_Draw.amplificationShader;
-    psoDesc.MS = m_Draw.meshShader;
-    psoDesc.PS = m_Draw.pixelShader;
+    psoDesc.AS = m_StageResources.sceneDraw.amplificationShader;
+    psoDesc.MS = m_StageResources.sceneDraw.meshShader;
+    psoDesc.PS = m_StageResources.sceneDraw.pixelShader;
     psoDesc.primType = nvrhi::PrimitiveType::TriangleList;
-    psoDesc.bindingLayouts = { m_Draw.bindingLayout };
+    psoDesc.bindingLayouts = { m_StageResources.sceneDraw.bindingLayout };
 
     auto& rs = psoDesc.renderState;
     rs.depthStencilState.depthTestEnable  = true;
@@ -1037,18 +968,18 @@ void MeshShaderRenderPass::_CreateMainPipelineIfNeeded(nvrhi::IFramebuffer* fram
 #endif
     rs.rasterState.cullMode = nvrhi::RasterCullMode::Back;
 
-    m_Draw.pipeline = GetDevice()->createMeshletPipeline(psoDesc, framebuffer->getFramebufferInfo());
+    m_StageResources.sceneDraw.pipeline = GetDevice()->createMeshletPipeline(psoDesc, framebuffer->getFramebufferInfo());
 }
 
 void MeshShaderRenderPass::_CreateShadowPipelineIfNeeded() {
-    if (m_Shadow.pipeline)            return;
-    if (!m_Shadow.framebuffers[0])    return;
+    if (m_StageResources.shadow.pipeline)            return;
+    if (!m_StageResources.shadow.framebuffers[0])    return;
 
     nvrhi::MeshletPipelineDesc psoDesc;
-    psoDesc.AS = m_Shadow.amplificationShader;
-    psoDesc.MS = m_Shadow.meshShader;
+    psoDesc.AS = m_StageResources.shadow.amplificationShader;
+    psoDesc.MS = m_StageResources.shadow.meshShader;
     psoDesc.primType = nvrhi::PrimitiveType::TriangleList;
-    psoDesc.bindingLayouts = { m_Shadow.bindingLayout };
+    psoDesc.bindingLayouts = { m_StageResources.shadow.bindingLayout };
 
     auto& rs = psoDesc.renderState;
     rs.depthStencilState.depthTestEnable  = true;
@@ -1060,8 +991,8 @@ void MeshShaderRenderPass::_CreateShadowPipelineIfNeeded() {
     rs.rasterState.depthBias = 2;
     rs.rasterState.slopeScaledDepthBias = 2.f;
 
-    m_Shadow.pipeline = GetDevice()->createMeshletPipeline(
-        psoDesc, m_Shadow.framebuffers[0]->getFramebufferInfo());
+    m_StageResources.shadow.pipeline = GetDevice()->createMeshletPipeline(
+        psoDesc, m_StageResources.shadow.framebuffers[0]->getFramebufferInfo());
 }
 
 void MeshShaderRenderPass::_EnsureDispatchMeshSignatures() {
@@ -1077,7 +1008,7 @@ void MeshShaderRenderPass::_EnsureDispatchMeshSignatures() {
 
         D3D12_INDIRECT_ARGUMENT_DESC args[2] = {};
         args[0].Type = D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT;
-        args[0].Constant.RootParameterIndex      = k_PushC_RootParamIdx;
+        args[0].Constant.RootParameterIndex      = mesh_reg::kPushC_RootParamIdx;
         args[0].Constant.DestOffsetIn32BitValues = 0;
         args[0].Constant.Num32BitValuesToSet     = 1;
         args[1].Type = D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH_MESH;
@@ -1094,8 +1025,8 @@ void MeshShaderRenderPass::_EnsureDispatchMeshSignatures() {
         }
     };
 
-    makeSig(m_Draw.pipeline,   m_DispatchMeshSignature,         "main");
-    makeSig(m_Shadow.pipeline, m_Shadow.dispatchMeshSignature,  "shadow");
+    makeSig(m_StageResources.sceneDraw.pipeline,   m_DispatchMeshSignature,         "main");
+    makeSig(m_StageResources.shadow.pipeline, m_StageResources.shadow.dispatchMeshSignature,  "shadow");
 }
 
 // ===========================================================================
@@ -1104,90 +1035,61 @@ void MeshShaderRenderPass::_EnsureDispatchMeshSignatures() {
 
 void MeshShaderRenderPass::Animate(float /*seconds*/) {
     GetDeviceManager()->SetInformativeWindowTitle("Xylem (MeshShader)");
-
-    if (!m_Registry.anyDirty()) return;
-    auto dirtyAssets  = m_Registry.getDirtyAssetIndices();
-    auto dirtyRegions = m_Registry.getDirtyRegionIndices();
-    m_Registry.rebuildDirtyAssets();
-    m_Registry.rebuildDirtyRegions();
-    if (!dirtyAssets.empty())  onAssetsDirty(dirtyAssets);
-    if (!dirtyRegions.empty()) onRegionsDirty(dirtyRegions);
-    m_Registry.clearDirtyFlags();
+    frame::RunDirtyCycle(m_Registry, *this);
 }
 
 void MeshShaderRenderPass::BackBufferResizing() {
-    m_Draw.pipeline          = nullptr;
-    m_Shadow.pipeline        = nullptr;
+    m_StageResources.sceneDraw.pipeline          = nullptr;
+    m_StageResources.shadow.pipeline        = nullptr;
     m_DispatchMeshSignature  = nullptr;
-    m_Shadow.dispatchMeshSignature = nullptr;
+    m_StageResources.shadow.dispatchMeshSignature = nullptr;
 
-    m_DepthPrepass.pipeline        = nullptr;
-    m_DepthPrepass.terrainPipeline = nullptr;
-    m_DepthPrepass.depthTexture    = nullptr;
-    m_DepthPrepass.framebuffer     = nullptr;
-    m_DepthPrepass.bindingSet      = nullptr;
-    m_DepthPrepass.dispatchMeshSignature = nullptr;
+    m_StageResources.depthPrepass.pipeline        = nullptr;
+    m_StageResources.depthPrepass.terrainPipeline = nullptr;
+    m_StageResources.depthPrepass.depthTexture    = nullptr;
+    m_StageResources.depthPrepass.framebuffer     = nullptr;
+    m_StageResources.depthPrepass.bindingSet      = nullptr;
+    m_StageResources.depthPrepass.dispatchMeshSignature = nullptr;
 
-    m_TerrainPass.pipeline = nullptr;
-    m_SkyPass.pipeline     = nullptr;
+    m_StageResources.sceneTerrain.pipeline = nullptr;
+    m_StageResources.sky.pipeline     = nullptr;
 
-    m_HiZ.buildBindingSets.clear();
-    m_HiZ.debugMipTextures.clear();
-    m_HiZ.numMips = 0;
+    m_StageResources.hiz.buildBindingSets.clear();
+    m_StageResources.hiz.debugMipTextures.clear();
+    m_StageResources.hiz.numMips = 0;
     m_UI.hizMipTextures.clear();
 }
 
 void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
-    // Expose shadow + Hi-Z debug textures to the UI.
-    m_UI.shadowMapTexture = m_Shadow.depthTexture.Get();
-    m_UI.shadowCascadeTextures.resize(Render::c_NumCascades);
-    for (uint32_t c = 0; c < Render::c_NumCascades; c++)
-        m_UI.shadowCascadeTextures[c] = m_Shadow.debugTextures[c].Get();
-    m_UI.hizMipTextures.resize(m_HiZ.debugMipTextures.size());
-    for (size_t i = 0; i < m_HiZ.debugMipTextures.size(); i++)
-        m_UI.hizMipTextures[i] = m_HiZ.debugMipTextures[i].Get();
+    frame::SetShadowDebugOutputs(
+        m_StageOutputs,
+        m_StageResources.shadow.depthTexture.Get(),
+        m_StageResources.shadow.debugTextures);
+    frame::SetHiZDebugOutputs(m_StageOutputs, m_StageResources.hiz.debugMipTextures);
+    frame::PublishStageOutputsToUI(m_StageOutputs, m_UI);
+
+    frame::FrameContext frameContext = frame::BuildFrameContext(
+        m_Registry,
+        m_ViewHandler,
+        framebuffer,
+        !m_StageResources.sceneDraw.pipeline);
 
     const auto& fbInfo = framebuffer->getFramebufferInfo();
-    const uint32_t fbW = fbInfo.width;
-    const uint32_t fbH = fbInfo.height;
-
-    if (!m_Draw.pipeline) {
-        m_ViewHandler.view.SetViewport({ float(fbW), float(fbH) });
-        m_ViewHandler.view.SetProjectionMatrix(
-        #if XYLEM_USE_REVERSE_Z
-            dm::perspProjD3DStyleReverse(dm::radians(60.f), float(fbW)/float(fbH), 0.1f)
-        #else
-            dm::perspProjD3DStyle(dm::radians(60.f), float(fbW)/float(fbH), 0.1f, 1000.f)
-        #endif
-        );
-    }
-    m_ViewHandler.view.SetViewMatrix(m_ViewHandler.camera.GetWorldToViewMatrix());
-    m_ViewHandler.view.UpdateCache();
+    const uint32_t fbW = frameContext.frameWidth;
+    const uint32_t fbH = frameContext.frameHeight;
 
     _CreateMainPipelineIfNeeded(framebuffer);
     _CreateShadowPipelineIfNeeded();
     _EnsureDispatchMeshSignatures();
 
-    // Compute scene bbox + max shadow distance (mirrors ComputeRenderPass).
-    dm::box3 sceneBbox = dm::box3::empty();
-    for (const auto& region : m_Registry.getRegions())
-        sceneBbox |= region.cullBox;
-    const auto* terrain = m_Registry.getTerrain();
-    if (terrain) sceneBbox |= terrain->getBbox();
-
     const dm::float3& camPos = m_ViewHandler.camera.GetPosition();
     const dm::float3& camDir = m_ViewHandler.camera.GetDir();
-    float maxShadowDist = 0.f;
-    for (int i = 0; i < dm::box3::numCorners; i++) {
-        dm::float3 corner = sceneBbox.getCorner(i);
-        float cornerDir = dm::dot(corner - camPos, camDir);
-        if (cornerDir > 0.0f) maxShadowDist = dm::max(maxShadowDist, cornerDir);
-    }
-    maxShadowDist = dm::max(maxShadowDist, 1.f);
-
-    float aspectRatio = float(fbW) / float(fbH);
-    m_ViewHandler.computeCascades(sceneBbox, m_Registry.getSunDirection(),
-        0.1f, maxShadowDist, aspectRatio, dm::radians(60.f), k_ShadowRes, m_UI.pssmLambda);
+    frame::ComputeCascades(
+        frameContext,
+        m_ViewHandler,
+        m_Registry,
+        k_ShadowRes,
+        m_UI.pssmLambda);
 
     // Hi-Z bypass when camera looks steeply downward (mirrors ComputeRenderPass).
     float downwardness = -m_ViewHandler.camera.GetDir().y;
@@ -1201,13 +1103,9 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
 
     // ----- 1. Fill CullConstantBufferEntry (CPU cascades seed; SDSM may overwrite) -----
     Render::CullConstantBufferEntry cb = {};
-    cb.viewProj    = m_ViewHandler.view.GetViewProjectionMatrix();
-    cb.viewMatrix  = dm::affineToHomogeneous(m_ViewHandler.view.GetViewMatrix());
-    cb.sunLightDir = m_Registry.getSunDirection();
-    cb.cascadeSplits = m_ViewHandler.cascadeSplitDistances;
+    frame::FillCommonFrameConstants(cb, m_ViewHandler, m_Registry.getSunDirection());
 
     for (uint32_t c = 0; c < Render::c_NumCascades; c++) {
-        cb.lightViewProj[c] = m_ViewHandler.cascades[c].lightViewProj;
         const dm::box3& cBbox = m_ViewHandler.cascades[c].shadowCasterBboxLS;
         if (cBbox.isempty()) {
             cb.shadowCasterMinLS[c] = dm::float4( 1e30f,  1e30f,  1e30f, 0.f);
@@ -1229,23 +1127,23 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     for (uint32_t i = 0; i < cb.numLods; i++)
         cb.lodDistances[i] = lodDistances[i];
 
-    cb.hizDimensions = dm::float2(static_cast<float>(fbW), static_cast<float>(fbH));
-    cb.maxHiZMip     = static_cast<float>((m_HiZ.numMips > 0) ? (m_HiZ.numMips - 1) : 0);
+    cb.hizDimensions = dm::float2(static_cast<float>(frameContext.frameWidth), static_cast<float>(frameContext.frameHeight));
+    cb.maxHiZMip     = static_cast<float>((m_StageResources.hiz.numMips > 0) ? (m_StageResources.hiz.numMips - 1) : 0);
     cb.hizEnabled    = hizActive ? 1u : 0u;
 
-    m_CommandList->writeBuffer(m_Shared.constantBuffer, &cb, Render::c_CullConstantBufferSize);
+    m_CommandList->writeBuffer(m_StageResources.frameShared.constantBuffer, &cb, shader_cb::kCullFrameSize);
 
-    // ----- 1b. Fill ASCullCBEntry — hizEnabled=0 for the depth prepass (Hi-Z not yet built) -----
-    ASCullCBEntry asCB = {};
+    // ----- 1b. Fill AS-cull constants - hizEnabled=0 for the depth prepass (Hi-Z not yet built) -----
+    shader_cb::MeshASCullConstants asCB = {};
     asCB.cameraPos         = camPos;
     asCB.hizEnabled        = 0u;
     asCB.hizDimensions     = dm::float2(static_cast<float>(fbW), static_cast<float>(fbH));
-    asCB.maxHiZMip         = static_cast<float>((m_HiZ.numMips > 0) ? (m_HiZ.numMips - 1) : 0);
+    asCB.maxHiZMip         = static_cast<float>((m_StageResources.hiz.numMips > 0) ? (m_StageResources.hiz.numMips - 1) : 0);
     asCB.asConeCullEnabled = 1u;
-    m_CommandList->writeBuffer(m_Shared.asCullCB, &asCB, sizeof(ASCullCBEntry));
+    m_CommandList->writeBuffer(m_StageResources.frameShared.asCullCB, &asCB, sizeof(shader_cb::MeshASCullConstants));
 
     // ----- 2. Depth prepass + Hi-Z build + SDSM (skip when bypassed) -----
-    // Reads LAST frame's m_Cull.mainDispatchArgsBuffer — must happen BEFORE we
+    // Reads LAST frame's m_StageResources.cull.mainDispatchArgsBuffer - must happen BEFORE we
     // reset/clear the cull output buffers below.
     if (hizActive) {
         m_CommandList->beginMarker("HiZ");
@@ -1264,24 +1162,24 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         float regionNear, regionFar;
         _ComputeRegionEnvelope(m_ViewHandler.view.GetViewFrustum(), camPos, camDir,
                                regionNear, regionFar);
-        _RunSDSMBuildCascades(sceneBbox, aspectRatio, dm::radians(60.f),
+        _RunSDSMBuildCascades(frameContext.sceneBounds, frameContext.aspectRatio, dm::radians(60.f),
                               regionNear, regionFar);
         m_CommandList->endMarker();
     }
 
-    // Re-write ASCullCB now that Hi-Z is populated — main_as uses it during color pass.
+    // Re-write ASCullCB now that Hi-Z is populated - main_as uses it during color pass.
     asCB.hizEnabled = hizActive ? 1u : 0u;
-    m_CommandList->writeBuffer(m_Shared.asCullCB, &asCB, sizeof(ASCullCBEntry));
+    m_CommandList->writeBuffer(m_StageResources.frameShared.asCullCB, &asCB, sizeof(shader_cb::MeshASCullConstants));
 
     // ----- 3. Per-frame cull resets -----
-    m_CommandList->clearBufferUInt(m_Cull.mainCountBuffer,     0);
-    m_CommandList->clearBufferUInt(m_Cull.shadowCountBuffer,   0);
-    m_CommandList->clearBufferUInt(m_Cull.shadowUniqueCounter, 0);
+    m_CommandList->clearBufferUInt(m_StageResources.cull.mainCountBuffer,     0);
+    m_CommandList->clearBufferUInt(m_StageResources.cull.shadowCountBuffer,   0);
+    m_CommandList->clearBufferUInt(m_StageResources.cull.shadowUniqueCounter, 0);
 
-    m_CommandList->writeBuffer(m_Cull.mainDispatchArgsBuffer,
+    m_CommandList->writeBuffer(m_StageResources.cull.mainDispatchArgsBuffer,
         m_MainDispatchArgsStaging.data(),
         m_MainDispatchArgsStaging.size() * sizeof(DispatchRecord));
-    m_CommandList->writeBuffer(m_Cull.shadowDispatchArgsBuffer,
+    m_CommandList->writeBuffer(m_StageResources.cull.shadowDispatchArgsBuffer,
         m_ShadowDispatchArgsStaging.data(),
         m_ShadowDispatchArgsStaging.size() * sizeof(DispatchRecord));
 
@@ -1289,22 +1187,22 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_CommandList->beginMarker("MeshCull");
     {
         nvrhi::ComputeState cs;
-        cs.bindings = { m_Cull.bindingSet };
+        cs.bindings = { m_StageResources.cull.bindingSet };
 
         m_CommandList->beginMarker("RegionDispatch");
-        cs.pipeline = m_Cull.regionPipeline;
+        cs.pipeline = m_StageResources.cull.regionPipeline;
         m_CommandList->setComputeState(cs);
         m_CommandList->dispatch((cb.numRegions + 63) / 64, 1, 1);
         m_CommandList->endMarker();
 
         m_CommandList->beginMarker("MainDispatch");
-        cs.pipeline = m_Cull.mainPipeline;
+        cs.pipeline = m_StageResources.cull.mainPipeline;
         m_CommandList->setComputeState(cs);
         m_CommandList->dispatch((m_TotalCapacity + 255) / 256, 1, 1);
         m_CommandList->endMarker();
 
         m_CommandList->beginMarker("ShadowDispatch");
-        cs.pipeline = m_Cull.shadowPipeline;
+        cs.pipeline = m_StageResources.cull.shadowPipeline;
         m_CommandList->setComputeState(cs);
         m_CommandList->dispatch((m_TotalCapacity + 255) / 256, 1, 1);
         m_CommandList->endMarker();
@@ -1316,25 +1214,25 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         uint32_t ringSlot = m_ReadbackFrameIndex % k_QueuedFrames;
         uint64_t offset = 0;
         m_CommandList->copyBuffer(m_ReadbackBuffers[ringSlot], offset,
-                                  m_Cull.mainCountBuffer, 0,
+                                  m_StageResources.cull.mainCountBuffer, 0,
                                   m_ReadbackMainEntries * sizeof(uint32_t));
         offset += m_ReadbackMainEntries * sizeof(uint32_t);
         m_CommandList->copyBuffer(m_ReadbackBuffers[ringSlot], offset,
-                                  m_Cull.shadowCountBuffer, 0,
+                                  m_StageResources.cull.shadowCountBuffer, 0,
                                   m_ReadbackShadowEntries * sizeof(uint32_t));
         offset += m_ReadbackShadowEntries * sizeof(uint32_t);
         m_CommandList->copyBuffer(m_ReadbackBuffers[ringSlot], offset,
-                                  m_Cull.shadowUniqueCounter, 0,
+                                  m_StageResources.cull.shadowUniqueCounter, 0,
                                   sizeof(uint32_t));
     }
 
     // ----- 4. Shadow pass: 4 cascades via ExecuteIndirect(DISPATCH_MESH) -----
-    if (m_Shadow.pipeline && m_Shadow.dispatchMeshSignature) {
+    if (m_StageResources.shadow.pipeline && m_StageResources.shadow.dispatchMeshSignature) {
         m_CommandList->beginMarker("ShadowMeshDraw");
 
         // Clear all cascades.
         for (uint32_t c = 0; c < Render::c_NumCascades; c++) {
-            nvrhi::utils::ClearDepthStencilAttachment(m_CommandList, m_Shadow.framebuffers[c], 1.f, 0);
+            nvrhi::utils::ClearDepthStencilAttachment(m_CommandList, m_StageResources.shadow.framebuffers[c], 1.f, 0);
         }
 
         // Shared shadow meshlet state; re-bind the framebuffer per cascade slice and
@@ -1345,10 +1243,10 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
 
         for (uint32_t c = 0; c < Render::c_NumCascades; c++) {
             nvrhi::MeshletState ms;
-            ms.pipeline       = m_Shadow.pipeline;
-            ms.framebuffer    = m_Shadow.framebuffers[c];
-            ms.bindings       = { m_Shadow.bindingSet };
-            ms.indirectParams = m_Cull.shadowDispatchArgsBuffer;
+            ms.pipeline       = m_StageResources.shadow.pipeline;
+            ms.framebuffer    = m_StageResources.shadow.framebuffers[c];
+            ms.bindings       = { m_StageResources.shadow.bindingSet };
+            ms.indirectParams = m_StageResources.cull.shadowDispatchArgsBuffer;
             ms.viewport.addViewportAndScissorRect(
                 nvrhi::Viewport(float(k_ShadowRes), float(k_ShadowRes)));
             m_CommandList->setMeshletState(ms);
@@ -1359,13 +1257,13 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
             auto* d3dList = static_cast<ID3D12GraphicsCommandList6*>(
                 m_CommandList->getNativeObject(nvrhi::ObjectTypes::D3D12_GraphicsCommandList));
             auto* argBuffer = static_cast<ID3D12Resource*>(
-                m_Cull.shadowDispatchArgsBuffer->getNativeObject(nvrhi::ObjectTypes::D3D12_Resource));
+                m_StageResources.cull.shadowDispatchArgsBuffer->getNativeObject(nvrhi::ObjectTypes::D3D12_Resource));
 
             if (d3dList && argBuffer) {
                 for (uint32_t ai = 0; ai < numAssets; ai++) {
                     const uint32_t slot = ai * Render::c_NumCascades + c;
                     d3dList->ExecuteIndirect(
-                        m_Shadow.dispatchMeshSignature.Get(),
+                        m_StageResources.shadow.dispatchMeshSignature.Get(),
                         1,
                         argBuffer,
                         slot * sizeof(DispatchRecord),
@@ -1381,8 +1279,8 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     if (m_UI.showShadowMap) {
         for (uint32_t c = 0; c < Render::c_NumCascades; c++) {
             m_CommandList->copyTexture(
-                m_Shadow.debugTextures[c], nvrhi::TextureSlice(),
-                m_Shadow.depthTexture, nvrhi::TextureSlice().setArraySlice(c));
+                m_StageResources.shadow.debugTextures[c], nvrhi::TextureSlice(),
+                m_StageResources.shadow.depthTexture, nvrhi::TextureSlice().setArraySlice(c));
         }
     }
 
@@ -1403,30 +1301,37 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_CommandList->beginMarker("MeshDraw");
     {
         nvrhi::MeshletState meshState;
-        meshState.pipeline       = m_Draw.pipeline;
+        meshState.pipeline       = m_StageResources.sceneDraw.pipeline;
         meshState.framebuffer    = framebuffer;
-        meshState.bindings       = { m_Draw.bindingSet };
-        meshState.indirectParams = m_Cull.mainDispatchArgsBuffer;
+        meshState.indirectParams = m_StageResources.cull.mainDispatchArgsBuffer;
         meshState.viewport.addViewportAndScissorRect(fbInfo.getViewport());
-        m_CommandList->setMeshletState(meshState);
-
-        uint32_t placeholder = 0;
-        m_CommandList->setPushConstants(&placeholder, sizeof(uint32_t));
-
-        if (m_DispatchMeshSignature) {
+        if (m_DispatchMeshSignature && !m_StageResources.sceneDraw.bindingSets.empty()) {
             auto* d3dList = static_cast<ID3D12GraphicsCommandList6*>(
                 m_CommandList->getNativeObject(nvrhi::ObjectTypes::D3D12_GraphicsCommandList));
             auto* argBuffer = static_cast<ID3D12Resource*>(
-                m_Cull.mainDispatchArgsBuffer->getNativeObject(nvrhi::ObjectTypes::D3D12_Resource));
+                m_StageResources.cull.mainDispatchArgsBuffer->getNativeObject(nvrhi::ObjectTypes::D3D12_Resource));
 
             if (d3dList && argBuffer) {
-                d3dList->ExecuteIndirect(
-                    m_DispatchMeshSignature.Get(),
-                    m_NumMainSlots,
-                    argBuffer,
-                    0,
-                    nullptr,
-                    0);
+                for (uint32_t texIdx = 0; texIdx < m_StageResources.sceneDraw.bindingSets.size(); texIdx++) {
+                    meshState.bindings = { m_StageResources.sceneDraw.bindingSets[texIdx] };
+                    m_CommandList->setMeshletState(meshState);
+
+                    uint32_t placeholder = 0;
+                    m_CommandList->setPushConstants(&placeholder, sizeof(uint32_t));
+
+                    for (uint32_t slot = 0; slot < m_NumMainSlots; slot++) {
+                        if (slot >= m_MainSlotTextureSet.size()) continue;
+                        if (m_MainSlotTextureSet[slot] != texIdx) continue;
+
+                        d3dList->ExecuteIndirect(
+                            m_DispatchMeshSignature.Get(),
+                            1,
+                            argBuffer,
+                            slot * sizeof(DispatchRecord),
+                            nullptr,
+                            0);
+                    }
+                }
             }
         }
     }
@@ -1483,21 +1388,21 @@ bool MeshShaderRenderPass::_InitDepthPrepass() {
     if (!m_ShaderFactory) return false;
 
     // Tree depth uses shared main_as (cone cull, Hi-Z toggled via ASCullCB) + depth_ms.
-    m_DepthPrepass.amplificationShader = m_Draw.amplificationShader;
-    m_DepthPrepass.meshShader = m_ShaderFactory->CreateShader("app/MeshShaderPass.hlsl",
+    m_StageResources.depthPrepass.amplificationShader = m_StageResources.sceneDraw.amplificationShader;
+    m_StageResources.depthPrepass.meshShader = m_ShaderFactory->CreateShader("app/MeshShaderPass.hlsl",
         "depth_ms", nullptr, nvrhi::ShaderType::Mesh);
-    if (!m_DepthPrepass.meshShader) {
+    if (!m_StageResources.depthPrepass.meshShader) {
         log::error("MeshShaderRenderPass: depth_ms compile failed");
         return false;
     }
 
-    // Tree depth pipeline shares the main draw binding layout — same SRVs/CBs.
-    m_DepthPrepass.bindingLayout = m_Draw.bindingLayout;
+    // Tree depth pipeline shares the main draw binding layout - same SRVs/CBs.
+    m_StageResources.depthPrepass.bindingLayout = m_StageResources.sceneDraw.bindingLayout;
 
     // Terrain depth path uses the existing DepthPrepass.hlsl terrain_vs (CB only).
-    m_DepthPrepass.terrainVS = m_ShaderFactory->CreateShader("app/DepthPrepass.hlsl",
+    m_StageResources.depthPrepass.terrainVS = m_ShaderFactory->CreateShader("app/DepthPrepass.hlsl",
         "terrain_vs", nullptr, nvrhi::ShaderType::Vertex);
-    if (!m_DepthPrepass.terrainVS) {
+    if (!m_StageResources.depthPrepass.terrainVS) {
         log::error("MeshShaderRenderPass: DepthPrepass.terrain_vs compile failed");
         return false;
     }
@@ -1516,119 +1421,119 @@ bool MeshShaderRenderPass::_InitDepthPrepass() {
             .setOffset(offsetof(Scene::TerrainVertex, uv))
             .setBufferIndex(0).setElementStride(sizeof(Scene::TerrainVertex)),
     };
-    m_DepthPrepass.terrainInputLayout = GetDevice()->createInputLayout(
-        terrainAttrs, uint32_t(std::size(terrainAttrs)), m_DepthPrepass.terrainVS);
-    if (!m_DepthPrepass.terrainInputLayout) return false;
+    m_StageResources.depthPrepass.terrainInputLayout = GetDevice()->createInputLayout(
+        terrainAttrs, uint32_t(std::size(terrainAttrs)), m_StageResources.depthPrepass.terrainVS);
+    if (!m_StageResources.depthPrepass.terrainInputLayout) return false;
 
-    // Terrain depth binding layout: CB(0) only — DepthPrepass.terrain_vs ignores the
+    // Terrain depth binding layout: CB(0) only - DepthPrepass.terrain_vs ignores the
     // vis/inst/slot SRVs declared in that file.
     nvrhi::BindingLayoutDesc terrainBLD;
     terrainBLD.visibility = nvrhi::ShaderType::All;
     terrainBLD.bindings = {
-        nvrhi::BindingLayoutItem::ConstantBuffer(0),
-        nvrhi::BindingLayoutItem::PushConstants(1, sizeof(uint32_t)),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2),
+        nvrhi::BindingLayoutItem::ConstantBuffer(mesh_reg::DepthPrepass::kCB_Frame),
+        nvrhi::BindingLayoutItem::PushConstants(mesh_reg::DepthPrepass::kPushC_Slot, sizeof(uint32_t)),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::DepthPrepass::kSRV_Vis),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::DepthPrepass::kSRV_Instances),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::DepthPrepass::kSRV_SlotOffsets),
     };
-    m_DepthPrepass.terrainBindingLayout = GetDevice()->createBindingLayout(terrainBLD);
-    return m_DepthPrepass.terrainBindingLayout != nullptr;
+    m_StageResources.depthPrepass.terrainBindingLayout = GetDevice()->createBindingLayout(terrainBLD);
+    return m_StageResources.depthPrepass.terrainBindingLayout != nullptr;
 }
 
 bool MeshShaderRenderPass::_InitHiZShaders() {
     auto device = GetDevice();
 
-    m_HiZ.copyCS = m_ShaderFactory->CreateShader("app/HiZBuild.hlsl",
+    m_StageResources.hiz.copyCS = m_ShaderFactory->CreateShader("app/HiZBuild.hlsl",
         "HiZCopy", nullptr, nvrhi::ShaderType::Compute);
-    m_HiZ.buildCS = m_ShaderFactory->CreateShader("app/HiZBuild.hlsl",
+    m_StageResources.hiz.buildCS = m_ShaderFactory->CreateShader("app/HiZBuild.hlsl",
         "HiZDownsample", nullptr, nvrhi::ShaderType::Compute);
-    if (!m_HiZ.copyCS || !m_HiZ.buildCS) return false;
+    if (!m_StageResources.hiz.copyCS || !m_StageResources.hiz.buildCS) return false;
 
     nvrhi::BindingLayoutDesc bld;
     bld.visibility = nvrhi::ShaderType::Compute;
     bld.bindings = {
-        nvrhi::BindingLayoutItem::PushConstants(0, sizeof(uint32_t) * 2),
-        nvrhi::BindingLayoutItem::Texture_SRV(0),
-        nvrhi::BindingLayoutItem::Texture_UAV(0),
+        nvrhi::BindingLayoutItem::PushConstants(mesh_reg::HiZ::kPushC_DestDimensions, sizeof(uint32_t) * mesh_reg::HiZ::kPushCDwordCount),
+        nvrhi::BindingLayoutItem::Texture_SRV(mesh_reg::HiZ::kSRV_Source),
+        nvrhi::BindingLayoutItem::Texture_UAV(mesh_reg::HiZ::kUAV_Dest),
     };
-    m_HiZ.buildBindingLayout = device->createBindingLayout(bld);
-    if (!m_HiZ.buildBindingLayout) return false;
+    m_StageResources.hiz.buildBindingLayout = device->createBindingLayout(bld);
+    if (!m_StageResources.hiz.buildBindingLayout) return false;
 
     nvrhi::ComputePipelineDesc copyPso;
-    copyPso.CS = m_HiZ.copyCS;
-    copyPso.bindingLayouts = { m_HiZ.buildBindingLayout };
-    m_HiZ.copyPipeline = device->createComputePipeline(copyPso);
+    copyPso.CS = m_StageResources.hiz.copyCS;
+    copyPso.bindingLayouts = { m_StageResources.hiz.buildBindingLayout };
+    m_StageResources.hiz.copyPipeline = device->createComputePipeline(copyPso);
 
     nvrhi::ComputePipelineDesc buildPso;
-    buildPso.CS = m_HiZ.buildCS;
-    buildPso.bindingLayouts = { m_HiZ.buildBindingLayout };
-    m_HiZ.buildPipeline = device->createComputePipeline(buildPso);
-    if (!m_HiZ.copyPipeline || !m_HiZ.buildPipeline) return false;
+    buildPso.CS = m_StageResources.hiz.buildCS;
+    buildPso.bindingLayouts = { m_StageResources.hiz.buildBindingLayout };
+    m_StageResources.hiz.buildPipeline = device->createComputePipeline(buildPso);
+    if (!m_StageResources.hiz.copyPipeline || !m_StageResources.hiz.buildPipeline) return false;
 
-    m_HiZ.pointSampler = device->createSampler(nvrhi::SamplerDesc()
+    m_StageResources.hiz.pointSampler = device->createSampler(nvrhi::SamplerDesc()
         .setAllFilters(false)
         .setAllAddressModes(nvrhi::SamplerAddressMode::Clamp));
-    if (!m_HiZ.pointSampler) return false;
+    if (!m_StageResources.hiz.pointSampler) return false;
 
     // 1x1 placeholder so binding sets resolve before first _EnsureHiZResources.
-    m_HiZ.hizTexture = device->createTexture(nvrhi::TextureDesc()
+    m_StageResources.hiz.hizTexture = device->createTexture(nvrhi::TextureDesc()
         .setWidth(1).setHeight(1).setMipLevels(1)
         .setFormat(nvrhi::Format::RG32_FLOAT)
         .setIsUAV(true)
         .setInitialState(nvrhi::ResourceStates::ShaderResource)
         .setKeepInitialState(true)
         .setDebugName("MeshHiZ_Placeholder"));
-    m_HiZ.numMips = 1;
+    m_StageResources.hiz.numMips = 1;
     return true;
 }
 
 bool MeshShaderRenderPass::_InitSDSMPass() {
     auto device = GetDevice();
 
-    m_SDSM.buildCS = m_ShaderFactory->CreateShader("app/SDSMBuildCascades.hlsl",
+    m_StageResources.sdsm.buildCS = m_ShaderFactory->CreateShader("app/SDSMBuildCascades.hlsl",
         "BuildCascades", nullptr, nvrhi::ShaderType::Compute);
-    if (!m_SDSM.buildCS) return false;
+    if (!m_StageResources.sdsm.buildCS) return false;
 
     nvrhi::BindingLayoutDesc bld;
     bld.visibility = nvrhi::ShaderType::Compute;
     bld.bindings = {
-        nvrhi::BindingLayoutItem::ConstantBuffer(0),
-        nvrhi::BindingLayoutItem::Texture_SRV(0),
-        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0),
+        nvrhi::BindingLayoutItem::ConstantBuffer(mesh_reg::SDSM::kCB_Input),
+        nvrhi::BindingLayoutItem::Texture_SRV(mesh_reg::SDSM::kSRV_HiZ),
+        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(mesh_reg::SDSM::kUAV_CascadeOut),
     };
-    m_SDSM.buildBindingLayout = device->createBindingLayout(bld);
-    if (!m_SDSM.buildBindingLayout) return false;
+    m_StageResources.sdsm.buildBindingLayout = device->createBindingLayout(bld);
+    if (!m_StageResources.sdsm.buildBindingLayout) return false;
 
     nvrhi::ComputePipelineDesc pso;
-    pso.CS = m_SDSM.buildCS;
-    pso.bindingLayouts = { m_SDSM.buildBindingLayout };
-    m_SDSM.buildPipeline = device->createComputePipeline(pso);
-    if (!m_SDSM.buildPipeline) return false;
+    pso.CS = m_StageResources.sdsm.buildCS;
+    pso.bindingLayouts = { m_StageResources.sdsm.buildBindingLayout };
+    m_StageResources.sdsm.buildPipeline = device->createComputePipeline(pso);
+    if (!m_StageResources.sdsm.buildPipeline) return false;
 
-    m_SDSM.inputCB = device->createBuffer(nvrhi::BufferDesc()
-        .setByteSize(c_SDSMInputCBSize)
+    m_StageResources.sdsm.inputCB = device->createBuffer(nvrhi::BufferDesc()
+        .setByteSize(shader_cb::kSDSMCascadeBuildInputSize)
         .setIsConstantBuffer(true)
         .setDebugName("MeshSDSM_InputCB")
         .enableAutomaticStateTracking(nvrhi::ResourceStates::ConstantBuffer));
-    if (!m_SDSM.inputCB) return false;
+    if (!m_StageResources.sdsm.inputCB) return false;
 
-    m_SDSM.cascadeDataBuffer = device->createBuffer(nvrhi::BufferDesc()
-        .setByteSize(sizeof(SDSMCascadeOut))
-        .setStructStride(sizeof(SDSMCascadeOut))
+    m_StageResources.sdsm.cascadeDataBuffer = device->createBuffer(nvrhi::BufferDesc()
+        .setByteSize(sizeof(shader_cb::SDSMCascadeBuildOutput))
+        .setStructStride(sizeof(shader_cb::SDSMCascadeBuildOutput))
         .setDebugName("MeshSDSM_CascadeData")
         .setCanHaveUAVs(true)
         .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess));
-    if (!m_SDSM.cascadeDataBuffer) return false;
+    if (!m_StageResources.sdsm.cascadeDataBuffer) return false;
 
     // Initial binding set references placeholder Hi-Z; rebuilt in _EnsureHiZResources.
     nvrhi::BindingSetDesc bsd;
     bsd.bindings = {
-        nvrhi::BindingSetItem::ConstantBuffer(0, m_SDSM.inputCB),
-        nvrhi::BindingSetItem::Texture_SRV(0, m_HiZ.hizTexture),
-        nvrhi::BindingSetItem::StructuredBuffer_UAV(0, m_SDSM.cascadeDataBuffer),
+        nvrhi::BindingSetItem::ConstantBuffer(mesh_reg::SDSM::kCB_Input, m_StageResources.sdsm.inputCB),
+        nvrhi::BindingSetItem::Texture_SRV(mesh_reg::SDSM::kSRV_HiZ, m_StageResources.hiz.hizTexture),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(mesh_reg::SDSM::kUAV_CascadeOut, m_StageResources.sdsm.cascadeDataBuffer),
     };
-    m_SDSM.buildBindingSet = device->createBindingSet(bsd, m_SDSM.buildBindingLayout);
-    return m_SDSM.buildBindingSet != nullptr;
+    m_StageResources.sdsm.buildBindingSet = device->createBindingSet(bsd, m_StageResources.sdsm.buildBindingLayout);
+    return m_StageResources.sdsm.buildBindingSet != nullptr;
 }
 
 bool MeshShaderRenderPass::_InitTerrainPass(nvrhi::ICommandList* initCL) {
@@ -1639,13 +1544,13 @@ bool MeshShaderRenderPass::_InitTerrainPass(nvrhi::ICommandList* initCL) {
     const auto& indices = terrain->getIndices();
     if (verts.empty() || indices.empty()) return true;
 
-    m_TerrainPass.indexCount = static_cast<uint32_t>(indices.size());
+    m_StageResources.sceneTerrain.indexCount = static_cast<uint32_t>(indices.size());
 
-    m_TerrainPass.vertexShader = m_ShaderFactory->CreateShader(
+    m_StageResources.sceneTerrain.vertexShader = m_ShaderFactory->CreateShader(
         "app/terrain_compute.hlsl", "terrain_vs", nullptr, nvrhi::ShaderType::Vertex);
-    m_TerrainPass.pixelShader = m_ShaderFactory->CreateShader(
+    m_StageResources.sceneTerrain.pixelShader = m_ShaderFactory->CreateShader(
         "app/terrain_compute.hlsl", "terrain_ps", nullptr, nvrhi::ShaderType::Pixel);
-    if (!m_TerrainPass.vertexShader || !m_TerrainPass.pixelShader) return false;
+    if (!m_StageResources.sceneTerrain.vertexShader || !m_StageResources.sceneTerrain.pixelShader) return false;
 
     nvrhi::VertexAttributeDesc attrs[] = {
         nvrhi::VertexAttributeDesc()
@@ -1661,50 +1566,50 @@ bool MeshShaderRenderPass::_InitTerrainPass(nvrhi::ICommandList* initCL) {
             .setOffset(offsetof(Scene::TerrainVertex, uv))
             .setBufferIndex(0).setElementStride(sizeof(Scene::TerrainVertex)),
     };
-    m_TerrainPass.inputLayout = GetDevice()->createInputLayout(
-        attrs, uint32_t(std::size(attrs)), m_TerrainPass.vertexShader);
-    if (!m_TerrainPass.inputLayout) return false;
+    m_StageResources.sceneTerrain.inputLayout = GetDevice()->createInputLayout(
+        attrs, uint32_t(std::size(attrs)), m_StageResources.sceneTerrain.vertexShader);
+    if (!m_StageResources.sceneTerrain.inputLayout) return false;
 
     nvrhi::BufferDesc vbDesc;
     vbDesc.isVertexBuffer = true;
     vbDesc.byteSize       = verts.size() * sizeof(Scene::TerrainVertex);
     vbDesc.debugName      = "MeshTerrainVB";
     vbDesc.initialState   = nvrhi::ResourceStates::CopyDest;
-    m_TerrainPass.vertexBuffer = GetDevice()->createBuffer(vbDesc);
-    initCL->beginTrackingBufferState(m_TerrainPass.vertexBuffer, nvrhi::ResourceStates::CopyDest);
-    initCL->writeBuffer(m_TerrainPass.vertexBuffer, verts.data(), vbDesc.byteSize);
-    initCL->setPermanentBufferState(m_TerrainPass.vertexBuffer, nvrhi::ResourceStates::VertexBuffer);
+    m_StageResources.sceneTerrain.vertexBuffer = GetDevice()->createBuffer(vbDesc);
+    initCL->beginTrackingBufferState(m_StageResources.sceneTerrain.vertexBuffer, nvrhi::ResourceStates::CopyDest);
+    initCL->writeBuffer(m_StageResources.sceneTerrain.vertexBuffer, verts.data(), vbDesc.byteSize);
+    initCL->setPermanentBufferState(m_StageResources.sceneTerrain.vertexBuffer, nvrhi::ResourceStates::VertexBuffer);
 
     nvrhi::BufferDesc ibDesc;
     ibDesc.isIndexBuffer = true;
     ibDesc.byteSize      = indices.size() * sizeof(uint32_t);
     ibDesc.debugName     = "MeshTerrainIB";
     ibDesc.initialState  = nvrhi::ResourceStates::CopyDest;
-    m_TerrainPass.indexBuffer = GetDevice()->createBuffer(ibDesc);
-    initCL->beginTrackingBufferState(m_TerrainPass.indexBuffer, nvrhi::ResourceStates::CopyDest);
-    initCL->writeBuffer(m_TerrainPass.indexBuffer, indices.data(), ibDesc.byteSize);
-    initCL->setPermanentBufferState(m_TerrainPass.indexBuffer, nvrhi::ResourceStates::IndexBuffer);
+    m_StageResources.sceneTerrain.indexBuffer = GetDevice()->createBuffer(ibDesc);
+    initCL->beginTrackingBufferState(m_StageResources.sceneTerrain.indexBuffer, nvrhi::ResourceStates::CopyDest);
+    initCL->writeBuffer(m_StageResources.sceneTerrain.indexBuffer, indices.data(), ibDesc.byteSize);
+    initCL->setPermanentBufferState(m_StageResources.sceneTerrain.indexBuffer, nvrhi::ResourceStates::IndexBuffer);
 
     nvrhi::BindingSetDesc bsd;
     bsd.bindings = {
-        nvrhi::BindingSetItem::ConstantBuffer(0, m_Shared.constantBuffer,
-            nvrhi::BufferRange(0, Render::c_CullConstantBufferSize)),
-        nvrhi::BindingSetItem::Sampler(0, m_Draw.shadowSampler),
-        nvrhi::BindingSetItem::Texture_SRV(0, m_Shadow.depthTexture),
+        nvrhi::BindingSetItem::ConstantBuffer(mesh_reg::Terrain::kCB_Frame, m_StageResources.frameShared.constantBuffer,
+            nvrhi::BufferRange(0, shader_cb::kCullFrameSize)),
+        nvrhi::BindingSetItem::Sampler(mesh_reg::Terrain::kSampler_Shadow, m_StageResources.sceneDraw.shadowSampler),
+        nvrhi::BindingSetItem::Texture_SRV(mesh_reg::Terrain::kTex_ShadowMap, m_StageResources.shadow.depthTexture),
     };
     if (!nvrhi::utils::CreateBindingSetAndLayout(GetDevice(), nvrhi::ShaderType::All, 0,
-            bsd, m_TerrainPass.bindingLayout, m_TerrainPass.bindingSet))
+            bsd, m_StageResources.sceneTerrain.bindingLayout, m_StageResources.sceneTerrain.bindingSet))
         return false;
 
     return true;
 }
 
 bool MeshShaderRenderPass::_InitSkyPass() {
-    m_SkyPass.vertexShader = m_ShaderFactory->CreateShader(
+    m_StageResources.sky.vertexShader = m_ShaderFactory->CreateShader(
         "app/sky.hlsl", "sky_vs", nullptr, nvrhi::ShaderType::Vertex);
-    m_SkyPass.pixelShader = m_ShaderFactory->CreateShader(
+    m_StageResources.sky.pixelShader = m_ShaderFactory->CreateShader(
         "app/sky.hlsl", "sky_ps", nullptr, nvrhi::ShaderType::Pixel);
-    if (!m_SkyPass.vertexShader || !m_SkyPass.pixelShader) return false;
+    if (!m_StageResources.sky.vertexShader || !m_StageResources.sky.pixelShader) return false;
 
     nvrhi::BufferDesc cbDesc;
     cbDesc.byteSize         = sizeof(SkyConstants);
@@ -1712,15 +1617,15 @@ bool MeshShaderRenderPass::_InitSkyPass() {
     cbDesc.isVolatile       = true;
     cbDesc.maxVersions      = 16;
     cbDesc.debugName        = "MeshSkyConstants";
-    m_SkyPass.constantBuffer = GetDevice()->createBuffer(cbDesc);
-    if (!m_SkyPass.constantBuffer) return false;
+    m_StageResources.sky.constantBuffer = GetDevice()->createBuffer(cbDesc);
+    if (!m_StageResources.sky.constantBuffer) return false;
 
     nvrhi::BindingSetDesc bsd;
     bsd.bindings = {
-        nvrhi::BindingSetItem::ConstantBuffer(0, m_SkyPass.constantBuffer),
+        nvrhi::BindingSetItem::ConstantBuffer(mesh_reg::Sky::kCB_Sky, m_StageResources.sky.constantBuffer),
     };
     if (!nvrhi::utils::CreateBindingSetAndLayout(GetDevice(), nvrhi::ShaderType::All, 0,
-            bsd, m_SkyPass.bindingLayout, m_SkyPass.bindingSet))
+            bsd, m_StageResources.sky.bindingLayout, m_StageResources.sky.bindingSet))
         return false;
 
     return true;
@@ -1732,36 +1637,38 @@ bool MeshShaderRenderPass::_InitSkyPass() {
 
 void MeshShaderRenderPass::_RebuildDepthPrepassBindingSet() {
     // Tree meshlet depth prepass shares the main Draw binding set.
-    m_DepthPrepass.bindingSet = m_Draw.bindingSet;
+    m_StageResources.depthPrepass.bindingSet = m_StageResources.sceneDraw.bindingSets.empty()
+        ? nullptr
+        : m_StageResources.sceneDraw.bindingSets[0];
 
     // Terrain depth prepass: CB + dummy vis/inst/slotOffsets (not read by terrain_vs).
-    if (!m_DepthPrepass.terrainBindingLayout) return;
+    if (!m_StageResources.depthPrepass.terrainBindingLayout) return;
     nvrhi::BindingSetDesc bsd;
     bsd.bindings = {
-        nvrhi::BindingSetItem::ConstantBuffer(0, m_Shared.constantBuffer,
-            nvrhi::BufferRange(0, Render::c_CullConstantBufferSize)),
-        nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t)),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_Cull.mainVisBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_Cull.persistentInstBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_Cull.mainSlotOffsetBuffer),
+        nvrhi::BindingSetItem::ConstantBuffer(mesh_reg::DepthPrepass::kCB_Frame, m_StageResources.frameShared.constantBuffer,
+            nvrhi::BufferRange(0, shader_cb::kCullFrameSize)),
+        nvrhi::BindingSetItem::PushConstants(mesh_reg::DepthPrepass::kPushC_Slot, sizeof(uint32_t)),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::DepthPrepass::kSRV_Vis, m_StageResources.cull.mainVisBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::DepthPrepass::kSRV_Instances, m_StageResources.cull.persistentInstBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::DepthPrepass::kSRV_SlotOffsets, m_StageResources.cull.mainSlotOffsetBuffer),
     };
-    m_DepthPrepass.terrainBindingSet = GetDevice()->createBindingSet(
-        bsd, m_DepthPrepass.terrainBindingLayout);
+    m_StageResources.depthPrepass.terrainBindingSet = GetDevice()->createBindingSet(
+        bsd, m_StageResources.depthPrepass.terrainBindingLayout);
 }
 
 // ===========================================================================
-// Hi-Z resource (re)creation — called on back-buffer resize
+// Hi-Z resource (re)creation - called on back-buffer resize
 // ===========================================================================
 
 void MeshShaderRenderPass::_EnsureHiZResources(uint32_t width, uint32_t height) {
-    if (m_DepthPrepass.depthTexture) {
-        auto desc = m_DepthPrepass.depthTexture->getDesc();
+    if (m_StageResources.depthPrepass.depthTexture) {
+        auto desc = m_StageResources.depthPrepass.depthTexture->getDesc();
         if (desc.width == width && desc.height == height) return;
     }
 
     auto device = GetDevice();
 
-    m_DepthPrepass.depthTexture = device->createTexture(nvrhi::TextureDesc()
+    m_StageResources.depthPrepass.depthTexture = device->createTexture(nvrhi::TextureDesc()
         .setWidth(width).setHeight(height)
         .setFormat(nvrhi::Format::D32)
         .setIsRenderTarget(true)
@@ -1774,61 +1681,61 @@ void MeshShaderRenderPass::_EnsureHiZResources(uint32_t width, uint32_t height) 
         .setInitialState(nvrhi::ResourceStates::DepthWrite)
         .setKeepInitialState(true)
         .setDebugName("MeshDepthPrepass_Depth"));
-    m_DepthPrepass.framebuffer = device->createFramebuffer(
-        nvrhi::FramebufferDesc().setDepthAttachment(m_DepthPrepass.depthTexture));
+    m_StageResources.depthPrepass.framebuffer = device->createFramebuffer(
+        nvrhi::FramebufferDesc().setDepthAttachment(m_StageResources.depthPrepass.depthTexture));
 
-    m_DepthPrepass.pipeline         = nullptr;
-    m_DepthPrepass.terrainPipeline  = nullptr;
-    m_DepthPrepass.dispatchMeshSignature = nullptr;
+    m_StageResources.depthPrepass.pipeline         = nullptr;
+    m_StageResources.depthPrepass.terrainPipeline  = nullptr;
+    m_StageResources.depthPrepass.dispatchMeshSignature = nullptr;
 
-    m_HiZ.numMips = static_cast<uint32_t>(
+    m_StageResources.hiz.numMips = static_cast<uint32_t>(
         std::floor(std::log2(std::max(width, height)))) + 1;
-    m_HiZ.hizTexture = device->createTexture(nvrhi::TextureDesc()
+    m_StageResources.hiz.hizTexture = device->createTexture(nvrhi::TextureDesc()
         .setWidth(width).setHeight(height)
-        .setMipLevels(m_HiZ.numMips)
+        .setMipLevels(m_StageResources.hiz.numMips)
         .setFormat(nvrhi::Format::RG32_FLOAT)
         .setIsUAV(true)
         .setInitialState(nvrhi::ResourceStates::ShaderResource)
         .setKeepInitialState(true)
         .setDebugName("MeshHiZTexture"));
 
-    m_HiZ.buildBindingSets.resize(m_HiZ.numMips);
+    m_StageResources.hiz.buildBindingSets.resize(m_StageResources.hiz.numMips);
 
-    // Mip 0 — copy depth prepass (D32 -> R32_FLOAT view) into RG32 mip 0.
+    // Mip 0 - copy depth prepass (D32 -> R32_FLOAT view) into RG32 mip 0.
     {
         nvrhi::BindingSetDesc bsd;
         bsd.bindings = {
-            nvrhi::BindingSetItem::PushConstants(0, sizeof(uint32_t) * 2),
-            nvrhi::BindingSetItem::Texture_SRV(0, m_DepthPrepass.depthTexture,
+            nvrhi::BindingSetItem::PushConstants(mesh_reg::HiZ::kPushC_DestDimensions, sizeof(uint32_t) * mesh_reg::HiZ::kPushCDwordCount),
+            nvrhi::BindingSetItem::Texture_SRV(mesh_reg::HiZ::kSRV_Source, m_StageResources.depthPrepass.depthTexture,
                 nvrhi::Format::R32_FLOAT,
                 nvrhi::TextureSubresourceSet(0, 1, 0, 1)),
-            nvrhi::BindingSetItem::Texture_UAV(0, m_HiZ.hizTexture,
+            nvrhi::BindingSetItem::Texture_UAV(mesh_reg::HiZ::kUAV_Dest, m_StageResources.hiz.hizTexture,
                 nvrhi::Format::RG32_FLOAT,
                 nvrhi::TextureSubresourceSet(0, 1, 0, 1)),
         };
-        m_HiZ.buildBindingSets[0] = device->createBindingSet(bsd, m_HiZ.buildBindingLayout);
+        m_StageResources.hiz.buildBindingSets[0] = device->createBindingSet(bsd, m_StageResources.hiz.buildBindingLayout);
     }
 
-    // Mips 1..N-1 — downsample i-1 -> i.
-    for (uint32_t mip = 1; mip < m_HiZ.numMips; mip++) {
+    // Mips 1..N-1 - downsample i-1 -> i.
+    for (uint32_t mip = 1; mip < m_StageResources.hiz.numMips; mip++) {
         nvrhi::BindingSetDesc bsd;
         bsd.bindings = {
-            nvrhi::BindingSetItem::PushConstants(0, sizeof(uint32_t) * 2),
-            nvrhi::BindingSetItem::Texture_SRV(0, m_HiZ.hizTexture,
+            nvrhi::BindingSetItem::PushConstants(mesh_reg::HiZ::kPushC_DestDimensions, sizeof(uint32_t) * mesh_reg::HiZ::kPushCDwordCount),
+            nvrhi::BindingSetItem::Texture_SRV(mesh_reg::HiZ::kSRV_Source, m_StageResources.hiz.hizTexture,
                 nvrhi::Format::RG32_FLOAT,
                 nvrhi::TextureSubresourceSet(mip - 1, 1, 0, 1)),
-            nvrhi::BindingSetItem::Texture_UAV(0, m_HiZ.hizTexture,
+            nvrhi::BindingSetItem::Texture_UAV(mesh_reg::HiZ::kUAV_Dest, m_StageResources.hiz.hizTexture,
                 nvrhi::Format::RG32_FLOAT,
                 nvrhi::TextureSubresourceSet(mip, 1, 0, 1)),
         };
-        m_HiZ.buildBindingSets[mip] = device->createBindingSet(bsd, m_HiZ.buildBindingLayout);
+        m_StageResources.hiz.buildBindingSets[mip] = device->createBindingSet(bsd, m_StageResources.hiz.buildBindingLayout);
     }
 
-    m_HiZ.debugMipTextures.resize(m_HiZ.numMips);
-    for (uint32_t mip = 0; mip < m_HiZ.numMips; mip++) {
+    m_StageResources.hiz.debugMipTextures.resize(m_StageResources.hiz.numMips);
+    for (uint32_t mip = 0; mip < m_StageResources.hiz.numMips; mip++) {
         uint32_t mipW = std::max(1u, width  >> mip);
         uint32_t mipH = std::max(1u, height >> mip);
-        m_HiZ.debugMipTextures[mip] = device->createTexture(nvrhi::TextureDesc()
+        m_StageResources.hiz.debugMipTextures[mip] = device->createTexture(nvrhi::TextureDesc()
             .setWidth(mipW).setHeight(mipH).setMipLevels(1)
             .setFormat(nvrhi::Format::RG32_FLOAT)
             .setInitialState(nvrhi::ResourceStates::ShaderResource)
@@ -1841,14 +1748,14 @@ void MeshShaderRenderPass::_EnsureHiZResources(uint32_t width, uint32_t height) 
     _RebuildDrawBindingSet();
     _RebuildDepthPrepassBindingSet();
 
-    if (m_SDSM.buildBindingLayout) {
+    if (m_StageResources.sdsm.buildBindingLayout) {
         nvrhi::BindingSetDesc bsd;
         bsd.bindings = {
-            nvrhi::BindingSetItem::ConstantBuffer(0, m_SDSM.inputCB),
-            nvrhi::BindingSetItem::Texture_SRV(0, m_HiZ.hizTexture),
-            nvrhi::BindingSetItem::StructuredBuffer_UAV(0, m_SDSM.cascadeDataBuffer),
+            nvrhi::BindingSetItem::ConstantBuffer(mesh_reg::SDSM::kCB_Input, m_StageResources.sdsm.inputCB),
+            nvrhi::BindingSetItem::Texture_SRV(mesh_reg::SDSM::kSRV_HiZ, m_StageResources.hiz.hizTexture),
+            nvrhi::BindingSetItem::StructuredBuffer_UAV(mesh_reg::SDSM::kUAV_CascadeOut, m_StageResources.sdsm.cascadeDataBuffer),
         };
-        m_SDSM.buildBindingSet = device->createBindingSet(bsd, m_SDSM.buildBindingLayout);
+        m_StageResources.sdsm.buildBindingSet = device->createBindingSet(bsd, m_StageResources.sdsm.buildBindingLayout);
     }
 }
 
@@ -1857,13 +1764,13 @@ void MeshShaderRenderPass::_EnsureHiZResources(uint32_t width, uint32_t height) 
 // ===========================================================================
 
 void MeshShaderRenderPass::_CreateDepthPrepassPipelineIfNeeded() {
-    if (m_DepthPrepass.pipeline || !m_DepthPrepass.framebuffer) return;
+    if (m_StageResources.depthPrepass.pipeline || !m_StageResources.depthPrepass.framebuffer) return;
 
     nvrhi::MeshletPipelineDesc psoDesc;
-    psoDesc.AS = m_DepthPrepass.amplificationShader;
-    psoDesc.MS = m_DepthPrepass.meshShader;
+    psoDesc.AS = m_StageResources.depthPrepass.amplificationShader;
+    psoDesc.MS = m_StageResources.depthPrepass.meshShader;
     psoDesc.primType = nvrhi::PrimitiveType::TriangleList;
-    psoDesc.bindingLayouts = { m_DepthPrepass.bindingLayout };
+    psoDesc.bindingLayouts = { m_StageResources.depthPrepass.bindingLayout };
 
     auto& rs = psoDesc.renderState;
     rs.depthStencilState.depthTestEnable  = true;
@@ -1875,17 +1782,17 @@ void MeshShaderRenderPass::_CreateDepthPrepassPipelineIfNeeded() {
 #endif
     rs.rasterState.cullMode = nvrhi::RasterCullMode::Back;
 
-    m_DepthPrepass.pipeline = GetDevice()->createMeshletPipeline(
-        psoDesc, m_DepthPrepass.framebuffer->getFramebufferInfo());
+    m_StageResources.depthPrepass.pipeline = GetDevice()->createMeshletPipeline(
+        psoDesc, m_StageResources.depthPrepass.framebuffer->getFramebufferInfo());
 
-    if (m_DepthPrepass.pipeline && !m_DepthPrepass.dispatchMeshSignature) {
+    if (m_StageResources.depthPrepass.pipeline && !m_StageResources.depthPrepass.dispatchMeshSignature) {
         ID3D12Device* d3dDevice = GetDevice()->getNativeObject(nvrhi::ObjectTypes::D3D12_Device);
-        ID3D12RootSignature* rootSig = m_DepthPrepass.pipeline->getNativeObject(
+        ID3D12RootSignature* rootSig = m_StageResources.depthPrepass.pipeline->getNativeObject(
             nvrhi::ObjectTypes::D3D12_RootSignature);
         if (d3dDevice && rootSig) {
             D3D12_INDIRECT_ARGUMENT_DESC args[2] = {};
             args[0].Type = D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT;
-            args[0].Constant.RootParameterIndex      = k_PushC_RootParamIdx;
+            args[0].Constant.RootParameterIndex      = mesh_reg::kPushC_RootParamIdx;
             args[0].Constant.DestOffsetIn32BitValues = 0;
             args[0].Constant.Num32BitValuesToSet     = 1;
             args[1].Type = D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH_MESH;
@@ -1896,10 +1803,10 @@ void MeshShaderRenderPass::_CreateDepthPrepassPipelineIfNeeded() {
             desc.pArgumentDescs   = args;
 
             HRESULT hr = d3dDevice->CreateCommandSignature(&desc, rootSig,
-                IID_PPV_ARGS(&m_DepthPrepass.dispatchMeshSignature));
+                IID_PPV_ARGS(&m_StageResources.depthPrepass.dispatchMeshSignature));
             if (FAILED(hr)) {
                 log::error("MeshShaderRenderPass: CreateCommandSignature(depth) failed (0x%08x)", hr);
-                m_DepthPrepass.dispatchMeshSignature = nullptr;
+                m_StageResources.depthPrepass.dispatchMeshSignature = nullptr;
             }
         }
     }
@@ -1909,20 +1816,20 @@ void MeshShaderRenderPass::_RenderDepthPrepass() {
     _CreateDepthPrepassPipelineIfNeeded();
 
 #if XYLEM_USE_REVERSE_Z
-    nvrhi::utils::ClearDepthStencilAttachment(m_CommandList, m_DepthPrepass.framebuffer, 0.f, 0);
+    nvrhi::utils::ClearDepthStencilAttachment(m_CommandList, m_StageResources.depthPrepass.framebuffer, 0.f, 0);
 #else
-    nvrhi::utils::ClearDepthStencilAttachment(m_CommandList, m_DepthPrepass.framebuffer, 1.f, 0);
+    nvrhi::utils::ClearDepthStencilAttachment(m_CommandList, m_StageResources.depthPrepass.framebuffer, 1.f, 0);
 #endif
 
     // Trees: ExecuteIndirect over last-frame mainDispatchArgsBuffer (not yet cleared).
-    if (m_DepthPrepass.pipeline && m_DepthPrepass.dispatchMeshSignature) {
+    if (m_StageResources.depthPrepass.pipeline && m_StageResources.depthPrepass.dispatchMeshSignature) {
         nvrhi::MeshletState meshState;
-        meshState.pipeline       = m_DepthPrepass.pipeline;
-        meshState.framebuffer    = m_DepthPrepass.framebuffer;
-        meshState.bindings       = { m_DepthPrepass.bindingSet };
-        meshState.indirectParams = m_Cull.mainDispatchArgsBuffer;
+        meshState.pipeline       = m_StageResources.depthPrepass.pipeline;
+        meshState.framebuffer    = m_StageResources.depthPrepass.framebuffer;
+        meshState.bindings       = { m_StageResources.depthPrepass.bindingSet };
+        meshState.indirectParams = m_StageResources.cull.mainDispatchArgsBuffer;
         meshState.viewport.addViewportAndScissorRect(
-            m_DepthPrepass.framebuffer->getFramebufferInfo().getViewport());
+            m_StageResources.depthPrepass.framebuffer->getFramebufferInfo().getViewport());
         m_CommandList->setMeshletState(meshState);
 
         uint32_t placeholder = 0;
@@ -1931,22 +1838,22 @@ void MeshShaderRenderPass::_RenderDepthPrepass() {
         auto* d3dList = static_cast<ID3D12GraphicsCommandList6*>(
             m_CommandList->getNativeObject(nvrhi::ObjectTypes::D3D12_GraphicsCommandList));
         auto* argBuffer = static_cast<ID3D12Resource*>(
-            m_Cull.mainDispatchArgsBuffer->getNativeObject(nvrhi::ObjectTypes::D3D12_Resource));
+            m_StageResources.cull.mainDispatchArgsBuffer->getNativeObject(nvrhi::ObjectTypes::D3D12_Resource));
         if (d3dList && argBuffer) {
             d3dList->ExecuteIndirect(
-                m_DepthPrepass.dispatchMeshSignature.Get(),
+                m_StageResources.depthPrepass.dispatchMeshSignature.Get(),
                 m_NumMainSlots, argBuffer, 0, nullptr, 0);
         }
     }
 
     // Terrain: direct draw (always visible).
-    if (m_TerrainPass.indexCount > 0 && m_DepthPrepass.terrainVS
-        && m_DepthPrepass.terrainBindingSet) {
-        if (!m_DepthPrepass.terrainPipeline) {
+    if (m_StageResources.sceneTerrain.indexCount > 0 && m_StageResources.depthPrepass.terrainVS
+        && m_StageResources.depthPrepass.terrainBindingSet) {
+        if (!m_StageResources.depthPrepass.terrainPipeline) {
             nvrhi::GraphicsPipelineDesc pso;
-            pso.VS             = m_DepthPrepass.terrainVS;
-            pso.inputLayout    = m_DepthPrepass.terrainInputLayout;
-            pso.bindingLayouts = { m_DepthPrepass.terrainBindingLayout };
+            pso.VS             = m_StageResources.depthPrepass.terrainVS;
+            pso.inputLayout    = m_StageResources.depthPrepass.terrainInputLayout;
+            pso.bindingLayouts = { m_StageResources.depthPrepass.terrainBindingLayout };
             pso.primType       = nvrhi::PrimitiveType::TriangleList;
             auto& rs = pso.renderState;
             rs.depthStencilState.depthTestEnable  = true;
@@ -1957,59 +1864,59 @@ void MeshShaderRenderPass::_RenderDepthPrepass() {
             rs.depthStencilState.depthFunc = nvrhi::ComparisonFunc::LessOrEqual;
         #endif
             rs.rasterState.setCullNone();
-            m_DepthPrepass.terrainPipeline = GetDevice()->createGraphicsPipeline(
-                pso, m_DepthPrepass.framebuffer->getFramebufferInfo());
+            m_StageResources.depthPrepass.terrainPipeline = GetDevice()->createGraphicsPipeline(
+                pso, m_StageResources.depthPrepass.framebuffer->getFramebufferInfo());
         }
 
         nvrhi::GraphicsState state;
-        state.pipeline    = m_DepthPrepass.terrainPipeline;
-        state.framebuffer = m_DepthPrepass.framebuffer;
-        state.bindings    = { m_DepthPrepass.terrainBindingSet };
-        state.vertexBuffers = { { m_TerrainPass.vertexBuffer, 0, 0 } };
-        state.indexBuffer   = { m_TerrainPass.indexBuffer, nvrhi::Format::R32_UINT, 0 };
+        state.pipeline    = m_StageResources.depthPrepass.terrainPipeline;
+        state.framebuffer = m_StageResources.depthPrepass.framebuffer;
+        state.bindings    = { m_StageResources.depthPrepass.terrainBindingSet };
+        state.vertexBuffers = { { m_StageResources.sceneTerrain.vertexBuffer, 0, 0 } };
+        state.indexBuffer   = { m_StageResources.sceneTerrain.indexBuffer, nvrhi::Format::R32_UINT, 0 };
         state.viewport.addViewportAndScissorRect(
-            m_DepthPrepass.framebuffer->getFramebufferInfo().getViewport());
+            m_StageResources.depthPrepass.framebuffer->getFramebufferInfo().getViewport());
         m_CommandList->setGraphicsState(state);
 
         uint32_t zero = 0;
         m_CommandList->setPushConstants(&zero, sizeof(zero));
-        m_CommandList->drawIndexed(nvrhi::DrawArguments().setVertexCount(m_TerrainPass.indexCount));
+        m_CommandList->drawIndexed(nvrhi::DrawArguments().setVertexCount(m_StageResources.sceneTerrain.indexCount));
     }
 }
 
 void MeshShaderRenderPass::_BuildHiZMipChain() {
-    auto desc = m_DepthPrepass.depthTexture->getDesc();
+    auto desc = m_StageResources.depthPrepass.depthTexture->getDesc();
     uint32_t w = desc.width;
     uint32_t h = desc.height;
 
     {
         uint32_t dims[2] = { w, h };
         nvrhi::ComputeState cs;
-        cs.pipeline = m_HiZ.copyPipeline;
-        cs.bindings = { m_HiZ.buildBindingSets[0] };
+        cs.pipeline = m_StageResources.hiz.copyPipeline;
+        cs.bindings = { m_StageResources.hiz.buildBindingSets[0] };
         m_CommandList->setComputeState(cs);
         m_CommandList->setPushConstants(dims, sizeof(dims));
         m_CommandList->dispatch((w + 7) / 8, (h + 7) / 8, 1);
     }
 
-    for (uint32_t mip = 1; mip < m_HiZ.numMips; mip++) {
+    for (uint32_t mip = 1; mip < m_StageResources.hiz.numMips; mip++) {
         uint32_t mipW = std::max(1u, w >> mip);
         uint32_t mipH = std::max(1u, h >> mip);
         uint32_t dims[2] = { mipW, mipH };
 
         nvrhi::ComputeState cs;
-        cs.pipeline = m_HiZ.buildPipeline;
-        cs.bindings = { m_HiZ.buildBindingSets[mip] };
+        cs.pipeline = m_StageResources.hiz.buildPipeline;
+        cs.bindings = { m_StageResources.hiz.buildBindingSets[mip] };
         m_CommandList->setComputeState(cs);
         m_CommandList->setPushConstants(dims, sizeof(dims));
         m_CommandList->dispatch((mipW + 7) / 8, (mipH + 7) / 8, 1);
     }
 
-    if (m_UI.showHiZ && !m_HiZ.debugMipTextures.empty()) {
-        for (uint32_t mip = 0; mip < m_HiZ.numMips; mip++) {
+    if (m_UI.showHiZ && !m_StageResources.hiz.debugMipTextures.empty()) {
+        for (uint32_t mip = 0; mip < m_StageResources.hiz.numMips; mip++) {
             m_CommandList->copyTexture(
-                m_HiZ.debugMipTextures[mip], nvrhi::TextureSlice(),
-                m_HiZ.hizTexture,           nvrhi::TextureSlice().setMipLevel(mip));
+                m_StageResources.hiz.debugMipTextures[mip], nvrhi::TextureSlice(),
+                m_StageResources.hiz.hizTexture,           nvrhi::TextureSlice().setMipLevel(mip));
         }
     }
 }
@@ -2042,7 +1949,7 @@ void MeshShaderRenderPass::_RunSDSMBuildCascades(const dm::box3& sceneBbox,
                                                  float aspectRatio, float fovY,
                                                  float regionEnvelopeNear,
                                                  float regionEnvelopeFar) {
-    SDSMInput input{};
+    shader_cb::SDSMCascadeBuildInput input{};
 
     dm::affine3 worldToLightAff = m_ViewHandler.worldToLight;
     dm::affine3 viewToWorldToLightAff =
@@ -2067,15 +1974,15 @@ void MeshShaderRenderPass::_RunSDSMBuildCascades(const dm::box3& sceneBbox,
     input.regionEnvelopeFar  = regionEnvelopeFar;
     input.cameraNearPlane    = 0.1f;
     input.shadowRes          = k_ShadowRes;
-    input.maxHiZMip          = (m_HiZ.numMips > 0) ? (m_HiZ.numMips - 1) : 0;
+    input.maxHiZMip          = (m_StageResources.hiz.numMips > 0) ? (m_StageResources.hiz.numMips - 1) : 0;
     input.pssmLambda         = m_UI.pssmLambda;
 
-    m_CommandList->writeBuffer(m_SDSM.inputCB, &input, sizeof(SDSMInput));
+    m_CommandList->writeBuffer(m_StageResources.sdsm.inputCB, &input, sizeof(shader_cb::SDSMCascadeBuildInput));
 
     {
         nvrhi::ComputeState cs;
-        cs.pipeline = m_SDSM.buildPipeline;
-        cs.bindings = { m_SDSM.buildBindingSet };
+        cs.pipeline = m_StageResources.sdsm.buildPipeline;
+        cs.bindings = { m_StageResources.sdsm.buildBindingSet };
         m_CommandList->setComputeState(cs);
         m_CommandList->dispatch(1, 1, 1);
     }
@@ -2086,22 +1993,22 @@ void MeshShaderRenderPass::_RunSDSMBuildCascades(const dm::box3& sceneBbox,
     constexpr size_t kOffShadowCasterMin = offsetof(Render::CullConstantBufferEntry, shadowCasterMinLS);
     constexpr size_t kOffShadowCasterMax = offsetof(Render::CullConstantBufferEntry, shadowCasterMaxLS);
 
-    constexpr size_t kSrcLightViewProj   = offsetof(SDSMCascadeOut, lightViewProj);
-    constexpr size_t kSrcCascadeSplits   = offsetof(SDSMCascadeOut, cascadeSplits);
-    constexpr size_t kSrcShadowCasterMin = offsetof(SDSMCascadeOut, shadowCasterMinLS);
-    constexpr size_t kSrcShadowCasterMax = offsetof(SDSMCascadeOut, shadowCasterMaxLS);
+    constexpr size_t kSrcLightViewProj   = offsetof(shader_cb::SDSMCascadeBuildOutput, lightViewProj);
+    constexpr size_t kSrcCascadeSplits   = offsetof(shader_cb::SDSMCascadeBuildOutput, cascadeSplits);
+    constexpr size_t kSrcShadowCasterMin = offsetof(shader_cb::SDSMCascadeBuildOutput, shadowCasterMinLS);
+    constexpr size_t kSrcShadowCasterMax = offsetof(shader_cb::SDSMCascadeBuildOutput, shadowCasterMaxLS);
 
-    m_CommandList->copyBuffer(m_Shared.constantBuffer, kOffLightViewProj,
-                              m_SDSM.cascadeDataBuffer, kSrcLightViewProj,
+    m_CommandList->copyBuffer(m_StageResources.frameShared.constantBuffer, kOffLightViewProj,
+                              m_StageResources.sdsm.cascadeDataBuffer, kSrcLightViewProj,
                               sizeof(dm::float4x4) * Render::c_NumCascades);
-    m_CommandList->copyBuffer(m_Shared.constantBuffer, kOffCascadeSplits,
-                              m_SDSM.cascadeDataBuffer, kSrcCascadeSplits,
+    m_CommandList->copyBuffer(m_StageResources.frameShared.constantBuffer, kOffCascadeSplits,
+                              m_StageResources.sdsm.cascadeDataBuffer, kSrcCascadeSplits,
                               sizeof(dm::float4));
-    m_CommandList->copyBuffer(m_Shared.constantBuffer, kOffShadowCasterMin,
-                              m_SDSM.cascadeDataBuffer, kSrcShadowCasterMin,
+    m_CommandList->copyBuffer(m_StageResources.frameShared.constantBuffer, kOffShadowCasterMin,
+                              m_StageResources.sdsm.cascadeDataBuffer, kSrcShadowCasterMin,
                               sizeof(dm::float4) * Render::c_NumCascades);
-    m_CommandList->copyBuffer(m_Shared.constantBuffer, kOffShadowCasterMax,
-                              m_SDSM.cascadeDataBuffer, kSrcShadowCasterMax,
+    m_CommandList->copyBuffer(m_StageResources.frameShared.constantBuffer, kOffShadowCasterMax,
+                              m_StageResources.sdsm.cascadeDataBuffer, kSrcShadowCasterMax,
                               sizeof(dm::float4) * Render::c_NumCascades);
 }
 
@@ -2110,11 +2017,11 @@ void MeshShaderRenderPass::_RunSDSMBuildCascades(const dm::box3& sceneBbox,
 // ===========================================================================
 
 void MeshShaderRenderPass::_RenderSkyPass(nvrhi::IFramebuffer* framebuffer) {
-    if (!m_SkyPass.pipeline) {
+    if (!m_StageResources.sky.pipeline) {
         nvrhi::GraphicsPipelineDesc pso;
-        pso.VS             = m_SkyPass.vertexShader;
-        pso.PS             = m_SkyPass.pixelShader;
-        pso.bindingLayouts = { m_SkyPass.bindingLayout };
+        pso.VS             = m_StageResources.sky.vertexShader;
+        pso.PS             = m_StageResources.sky.pixelShader;
+        pso.bindingLayouts = { m_StageResources.sky.bindingLayout };
         pso.primType       = nvrhi::PrimitiveType::TriangleStrip;
         pso.renderState.rasterState.setCullNone();
         pso.renderState.depthStencilState
@@ -2126,7 +2033,7 @@ void MeshShaderRenderPass::_RenderSkyPass(nvrhi::IFramebuffer* framebuffer) {
     #else
             .setDepthFunc(nvrhi::ComparisonFunc::LessOrEqual);
     #endif
-        m_SkyPass.pipeline = GetDevice()->createGraphicsPipeline(
+        m_StageResources.sky.pipeline = GetDevice()->createGraphicsPipeline(
             pso, framebuffer->getFramebufferInfo());
     }
 
@@ -2151,30 +2058,30 @@ void MeshShaderRenderPass::_RenderSkyPass(nvrhi::IFramebuffer* framebuffer) {
     p.glowSharpness      = 4.f;
     p.directionUp        = dm::float3(0.f, 1.f, 0.f);
 
-    m_CommandList->writeBuffer(m_SkyPass.constantBuffer, &skyConstants, sizeof(skyConstants));
+    m_CommandList->writeBuffer(m_StageResources.sky.constantBuffer, &skyConstants, sizeof(skyConstants));
 
     nvrhi::GraphicsState skyState;
-    skyState.pipeline    = m_SkyPass.pipeline;
+    skyState.pipeline    = m_StageResources.sky.pipeline;
     skyState.framebuffer = framebuffer;
     skyState.viewport    = m_ViewHandler.view.GetViewportState();
-    skyState.bindings    = { m_SkyPass.bindingSet };
+    skyState.bindings    = { m_StageResources.sky.bindingSet };
     m_CommandList->setGraphicsState(skyState);
     m_CommandList->draw(nvrhi::DrawArguments().setVertexCount(4));
 }
 
 // ===========================================================================
-// Terrain color pass — used inside _RenderScenePass below
+// Terrain color pass - used inside _RenderScenePass below
 // ===========================================================================
 
 void MeshShaderRenderPass::_RenderShadowPass() {}
 
 void MeshShaderRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
-    if (!m_TerrainPass.pipeline && m_TerrainPass.indexCount > 0) {
+    if (!m_StageResources.sceneTerrain.pipeline && m_StageResources.sceneTerrain.indexCount > 0) {
         nvrhi::GraphicsPipelineDesc pso;
-        pso.VS             = m_TerrainPass.vertexShader;
-        pso.PS             = m_TerrainPass.pixelShader;
-        pso.inputLayout    = m_TerrainPass.inputLayout;
-        pso.bindingLayouts = { m_TerrainPass.bindingLayout };
+        pso.VS             = m_StageResources.sceneTerrain.vertexShader;
+        pso.PS             = m_StageResources.sceneTerrain.pixelShader;
+        pso.inputLayout    = m_StageResources.sceneTerrain.inputLayout;
+        pso.bindingLayouts = { m_StageResources.sceneTerrain.bindingLayout };
         pso.primType       = nvrhi::PrimitiveType::TriangleList;
         pso.renderState.rasterState.setCullNone();
         pso.renderState.depthStencilState.depthTestEnable  = true;
@@ -2184,20 +2091,25 @@ void MeshShaderRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
     #else
         pso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
     #endif
-        m_TerrainPass.pipeline = GetDevice()->createGraphicsPipeline(
+        m_StageResources.sceneTerrain.pipeline = GetDevice()->createGraphicsPipeline(
             pso, framebuffer->getFramebufferInfo());
     }
 
-    if (m_TerrainPass.indexCount > 0 && m_TerrainPass.pipeline) {
+    if (m_StageResources.sceneTerrain.indexCount > 0 && m_StageResources.sceneTerrain.pipeline) {
         nvrhi::GraphicsState state;
-        state.pipeline    = m_TerrainPass.pipeline;
+        state.pipeline    = m_StageResources.sceneTerrain.pipeline;
         state.framebuffer = framebuffer;
-        state.bindings    = { m_TerrainPass.bindingSet };
-        state.vertexBuffers = { { m_TerrainPass.vertexBuffer, 0, 0 } };
-        state.indexBuffer   = { m_TerrainPass.indexBuffer, nvrhi::Format::R32_UINT, 0 };
+        state.bindings    = { m_StageResources.sceneTerrain.bindingSet };
+        state.vertexBuffers = { { m_StageResources.sceneTerrain.vertexBuffer, 0, 0 } };
+        state.indexBuffer   = { m_StageResources.sceneTerrain.indexBuffer, nvrhi::Format::R32_UINT, 0 };
         state.viewport.addViewportAndScissorRect(framebuffer->getFramebufferInfo().getViewport());
         m_CommandList->setGraphicsState(state);
         m_CommandList->drawIndexed(
-            nvrhi::DrawArguments().setVertexCount(m_TerrainPass.indexCount));
+            nvrhi::DrawArguments().setVertexCount(m_StageResources.sceneTerrain.indexCount));
     }
 }
+
+
+
+
+

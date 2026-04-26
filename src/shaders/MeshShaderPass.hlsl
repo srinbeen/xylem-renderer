@@ -2,10 +2,11 @@
 
 #include "../include/macros.h"
 #include "meshlet_types.hlsli"
+#include "ShaderRegisterMap.hlsli"
 
 static const uint NUM_CASCADES = 4;
 
-cbuffer CB : register(b0)
+cbuffer CB : register(XY_REG_B_MESH_DRAW_CB_FRAME)
 {
     float4x4 viewProj;
     float4x4 viewMatrix;
@@ -30,13 +31,13 @@ cbuffer CB : register(b0)
 
 // Root constant (PushConstants): slot identity forwarded by the command signature's
 // CONSTANT argument. Each ExecuteIndirect record rewrites this before DISPATCH_MESH.
-cbuffer PushC : register(b1)
+cbuffer PushC : register(XY_REG_B_MESH_DRAW_PUSH_C_SLOT)
 {
     uint g_SlotIdx;
 };
 
 // Per-frame Hi-Z / AS-cull knobs. Written alongside the main CB.
-cbuffer ASCullCB : register(b2)
+cbuffer ASCullCB : register(XY_REG_B_MESH_DRAW_CB_ASCULL)
 {
     float3   g_CameraPos;
     uint     g_HizEnabled;
@@ -53,32 +54,32 @@ struct InstanceRenderData
 };
 
 // Mega-buffers
-StructuredBuffer<float3>             g_Positions      : register(t0);
-StructuredBuffer<float3>             g_Normals        : register(t1);
-StructuredBuffer<float3>             g_Tangents       : register(t2);
-StructuredBuffer<float3>             g_Bitangents     : register(t3);
-StructuredBuffer<float2>             g_UVs            : register(t4);
-StructuredBuffer<uint>               g_MeshletVertIdx : register(t5);
-ByteAddressBuffer                    g_MeshletPrimIdx : register(t6);
-StructuredBuffer<MeshletDesc>        g_Meshlets       : register(t7);
-StructuredBuffer<AssetLodRange>      g_AssetLodRanges : register(t8);
+StructuredBuffer<float3>             g_Positions      : register(XY_REG_T_MESH_DRAW_SRV_POSITIONS);
+StructuredBuffer<float3>             g_Normals        : register(XY_REG_T_MESH_DRAW_SRV_NORMALS);
+StructuredBuffer<float3>             g_Tangents       : register(XY_REG_T_MESH_DRAW_SRV_TANGENTS);
+StructuredBuffer<float3>             g_Bitangents     : register(XY_REG_T_MESH_DRAW_SRV_BITANGENTS);
+StructuredBuffer<float2>             g_UVs            : register(XY_REG_T_MESH_DRAW_SRV_UVS);
+StructuredBuffer<uint>               g_MeshletVertIdx : register(XY_REG_T_MESH_DRAW_SRV_MESHLET_VERT_IDX);
+ByteAddressBuffer                    g_MeshletPrimIdx : register(XY_REG_T_MESH_DRAW_SRV_MESHLET_PRIM_IDX);
+StructuredBuffer<MeshletDesc>        g_Meshlets       : register(XY_REG_T_MESH_DRAW_SRV_MESHLETS);
+StructuredBuffer<AssetLodRange>      g_AssetLodRanges : register(XY_REG_T_MESH_DRAW_SRV_ASSET_LODS);
 
 // GPU-cull outputs (main-pass indirection; shadow pass uses a parallel binding set
 // with the shadow SRVs bound into these same slots).
-StructuredBuffer<uint>               g_VisBuf           : register(t9);
-StructuredBuffer<uint>               g_SlotOffsets      : register(t10);
-StructuredBuffer<uint>               g_SlotCounts       : register(t11);
-StructuredBuffer<InstanceRenderData> g_Instances        : register(t12);
-StructuredBuffer<uint>               g_ASInvocsPerSlot  : register(t13);
+StructuredBuffer<uint>               g_VisBuf           : register(XY_REG_T_MESH_DRAW_SRV_VIS);
+StructuredBuffer<uint>               g_SlotOffsets      : register(XY_REG_T_MESH_DRAW_SRV_SLOT_OFFSETS);
+StructuredBuffer<uint>               g_SlotCounts       : register(XY_REG_T_MESH_DRAW_SRV_SLOT_COUNTS);
+StructuredBuffer<InstanceRenderData> g_Instances        : register(XY_REG_T_MESH_DRAW_SRV_INSTANCES);
+StructuredBuffer<uint>               g_ASInvocsPerSlot  : register(XY_REG_T_MESH_DRAW_SRV_ASINVOCATIONS);
 
-Texture2D                            t_Diffuse        : register(t14);
-Texture2D                            t_NormalMap      : register(t15);
-Texture2DArray                       t_ShadowMap      : register(t16);
-Texture2D<float2>                    t_HiZ            : register(t17);
+Texture2D                            t_Diffuse        : register(XY_REG_T_MESH_DRAW_TEX_DIFFUSE);
+Texture2D                            t_NormalMap      : register(XY_REG_T_MESH_DRAW_TEX_NORMAL_MAP);
+Texture2DArray                       t_ShadowMap      : register(XY_REG_T_MESH_DRAW_TEX_SHADOW_MAP);
+Texture2D<float2>                    t_HiZ            : register(XY_REG_T_MESH_DRAW_TEX_HI_Z);
 
-SamplerState                         s_Sampler        : register(s0);
-SamplerComparisonState               s_ShadowSampler  : register(s1);
-SamplerState                         s_HizSampler     : register(s2);
+SamplerState                         s_Sampler        : register(XY_REG_S_MESH_DRAW_SAMPLER_MAIN);
+SamplerComparisonState               s_ShadowSampler  : register(XY_REG_S_MESH_DRAW_SAMPLER_SHADOW);
+SamplerState                         s_HizSampler     : register(XY_REG_S_MESH_DRAW_SAMPLER_HI_Z);
 
 uint3 LoadMeshletTriangle(uint triByteOffset)
 {

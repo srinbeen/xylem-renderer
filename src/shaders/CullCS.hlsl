@@ -2,10 +2,11 @@
 
 #include "../include/macros.h"
 #include "types.hlsli"
+#include "ShaderRegisterMap.hlsli"
 
 static const uint NUM_CASCADES = 4;
 
-cbuffer CB : register(b0)
+cbuffer CB : register(XY_REG_B_COMPUTE_CULL_CB_FRAME)
 {
     // Prefix — matches Render::ConstantBufferEntry / CullConstantBufferEntry
     float4x4 viewProj;
@@ -49,23 +50,23 @@ struct CullRegionData
     box3   bbox;
 };
 
-StructuredBuffer<CullRegionData>   regionData           : register(t0);
-StructuredBuffer<CullInstanceData> instanceData         : register(t1);
-StructuredBuffer<uint>             mainSlotOffsets      : register(t2);
-StructuredBuffer<uint>             shadowSlotOffsets    : register(t3);
+StructuredBuffer<CullRegionData>   regionData           : register(XY_REG_T_COMPUTE_CULL_SRV_REGION_DATA);
+StructuredBuffer<CullInstanceData> instanceData         : register(XY_REG_T_COMPUTE_CULL_SRV_INSTANCE_DATA);
+StructuredBuffer<uint>             mainSlotOffsets      : register(XY_REG_T_COMPUTE_CULL_SRV_MAIN_SLOT_OFFSETS);
+StructuredBuffer<uint>             shadowSlotOffsets    : register(XY_REG_T_COMPUTE_CULL_SRV_SHADOW_SLOT_OFFSETS);
 
-RWStructuredBuffer<uint>           mainRegionVisBuf     : register(u0);
-RWStructuredBuffer<uint>           mainSlotCountBuf     : register(u1);
-RWStructuredBuffer<uint>           mainVisBuf           : register(u2);
-RWStructuredBuffer<uint>           shadowSlotCountBuf   : register(u3);
-RWStructuredBuffer<uint>           shadowVisBuf         : register(u4);
+RWStructuredBuffer<uint>           mainRegionVisBuf     : register(XY_REG_U_COMPUTE_CULL_UAV_MAIN_REGION_VIS);
+RWStructuredBuffer<uint>           mainSlotCountBuf     : register(XY_REG_U_COMPUTE_CULL_UAV_MAIN_SLOT_COUNT);
+RWStructuredBuffer<uint>           mainVisBuf           : register(XY_REG_U_COMPUTE_CULL_UAV_MAIN_VIS);
+RWStructuredBuffer<uint>           shadowSlotCountBuf   : register(XY_REG_U_COMPUTE_CULL_UAV_SHADOW_SLOT_COUNT);
+RWStructuredBuffer<uint>           shadowVisBuf         : register(XY_REG_U_COMPUTE_CULL_UAV_SHADOW_VIS);
 
-RWByteAddressBuffer                mainIndirectArgs     : register(u5);
-RWByteAddressBuffer                shadowIndirectArgs   : register(u6);
-RWByteAddressBuffer                shadowUniqueCounter  : register(u7);
+RWByteAddressBuffer                mainIndirectArgs     : register(XY_REG_U_COMPUTE_CULL_UAV_MAIN_INDIRECT_ARGS);
+RWByteAddressBuffer                shadowIndirectArgs   : register(XY_REG_U_COMPUTE_CULL_UAV_SHADOW_INDIRECT_ARGS);
+RWByteAddressBuffer                shadowUniqueCounter  : register(XY_REG_U_COMPUTE_CULL_UAV_SHADOW_UNIQUE_COUNTER);
 
-Texture2D<float2>                  hizTexture           : register(t4);
-SamplerState                       hizSampler           : register(s0);
+Texture2D<float2>                  hizTexture           : register(XY_REG_T_COMPUTE_CULL_SRV_HI_Z);
+SamplerState                       hizSampler           : register(XY_REG_S_COMPUTE_CULL_SAMPLER_HI_Z);
 
 bool DoesAABBIntersectFrustum(box3 bbox, frustum f);
 uint SelectLOD(box3 bbox);

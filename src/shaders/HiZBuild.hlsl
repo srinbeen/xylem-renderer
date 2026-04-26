@@ -1,9 +1,10 @@
 #include "../include/macros.h"
+#include "ShaderRegisterMap.hlsli"
 
 struct HiZPushConstants {
     uint2 destDimensions;
 };
-ConstantBuffer<HiZPushConstants> pc : register(b0);
+ConstantBuffer<HiZPushConstants> pc : register(XY_REG_B_COMPUTE_HIZ_PUSH_C_DEST_DIMENSIONS);
 
 // Hi-Z texture is two-channel:
 //   .r = farthest-depth reduction (drives Hi-Z occlusion culling)
@@ -13,8 +14,8 @@ ConstantBuffer<HiZPushConstants> pc : register(b0);
 //   farthest = smallest value -> min reduction -> .r
 //   nearest  = largest value  -> max reduction -> .g
 // Forward-Z swaps both.
-Texture2D<float2>    t_Source : register(t0);
-RWTexture2D<float2>  u_Dest   : register(u0);
+Texture2D<float2>    t_Source : register(XY_REG_T_COMPUTE_HIZ_SRV_SOURCE);
+RWTexture2D<float2>  u_Dest   : register(XY_REG_U_COMPUTE_HIZ_UAV_DEST);
 
 // Copy raw depth (D32 read as R32_FLOAT) into both channels of mip 0.
 // The source view is a single-channel depth texture; we read .r and seed

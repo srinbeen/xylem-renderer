@@ -1,8 +1,9 @@
 #include <donut/shaders/sky.hlsli>
+#include "ShaderRegisterMap.hlsli"
 
 #pragma pack_matrix(row_major)
 
-cbuffer c_Sky : register(b0)
+cbuffer c_Sky : register(XY_REG_B_TRADITIONAL_SKY_CB_SKY)
 {
     SkyConstants g_Sky;
 };

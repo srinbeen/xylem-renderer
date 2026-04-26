@@ -58,6 +58,27 @@ include(donut/compileshaders.cmake)
 # file(GLOB SHADERS "${SOURCE_DIR}/shaders/*.hlsl")
 file(GLOB ${PROJECT_NAME}_SOURCES "${${PROJECT_NAME}_SOURCE_DIR}/*.cpp")
 
+set(SHADER_REG_SPEC "${${PROJECT_NAME}_SOURCE_DIR}/shaders/shader_register_map.json")
+set(SHADER_REG_GEN_CMAKE "${CMAKE_CURRENT_SOURCE_DIR}/generate_shader_register_map.cmake")
+set(SHADER_REG_CPP "${${PROJECT_NAME}_INCLUDE_DIR}/shaders/ShaderRegisterMap.hpp")
+set(SHADER_REG_HLSL "${${PROJECT_NAME}_SOURCE_DIR}/shaders/ShaderRegisterMap.hlsli")
+
+add_custom_command(
+    OUTPUT "${SHADER_REG_CPP}" "${SHADER_REG_HLSL}"
+    COMMAND "${CMAKE_COMMAND}"
+        "-DSHADER_REG_SPEC=${SHADER_REG_SPEC}"
+        "-DSHADER_REG_CPP=${SHADER_REG_CPP}"
+        "-DSHADER_REG_HLSL=${SHADER_REG_HLSL}"
+        -P "${SHADER_REG_GEN_CMAKE}"
+    DEPENDS "${SHADER_REG_SPEC}" "${SHADER_REG_GEN_CMAKE}"
+    COMMENT "Generating coupled shader register maps (C++ + HLSL)"
+    VERBATIM
+)
+
+add_custom_target(${PROJECT_NAME}_shader_registers
+    DEPENDS "${SHADER_REG_CPP}" "${SHADER_REG_HLSL}"
+)
+
 donut_compile_shaders_all_platforms(
     TARGET ${PROJECT_NAME}_shaders
     PROJECT_NAME ${PROJECT_NAME}
@@ -81,7 +102,8 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
 )
 endif()
 
-add_dependencies(${PROJECT_NAME} ${PROJECT_NAME}_shaders)
+add_dependencies(${PROJECT_NAME} ${PROJECT_NAME}_shader_registers ${PROJECT_NAME}_shaders)
+add_dependencies(${PROJECT_NAME}_shaders ${PROJECT_NAME}_shader_registers)
 target_link_libraries(${PROJECT_NAME} PRIVATE donut_app donut_render donut_engine donut_core meshoptimizer)
 if (DONUT_WITH_AFTERMATH)
     target_link_libraries(${PROJECT_NAME} PRIVATE

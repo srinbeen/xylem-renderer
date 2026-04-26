@@ -1,8 +1,9 @@
 #pragma pack_matrix(row_major)
+#include "ShaderRegisterMap.hlsli"
 
 static const uint NUM_CASCADES = 4;
 
-cbuffer CB : register(b0)
+cbuffer CB : register(XY_REG_B_COMPUTE_SHADOW_CB_FRAME)
 {
     float4x4 viewProj;
     float4x4 viewMatrix;
@@ -14,7 +15,7 @@ struct RootConstant
     uint assetIndex;
     uint cascadeIdx;
 };
-ConstantBuffer<RootConstant> rc : register(b1);
+ConstantBuffer<RootConstant> rc : register(XY_REG_B_COMPUTE_SHADOW_PUSH_C_ASSET_CASCADE);
 
 // Layout matches C++ Render::InstanceBufferEntry (104 bytes, packed).
 struct InstanceRenderData
@@ -24,9 +25,9 @@ struct InstanceRenderData
     uint     treeId;    // offset 100, size 4
 };
 
-StructuredBuffer<uint>                  shadowVisBuf      : register(t0);
-StructuredBuffer<InstanceRenderData>    instanceBuf       : register(t1);
-StructuredBuffer<uint>                  shadowSlotOffsets : register(t2);
+StructuredBuffer<uint>                  shadowVisBuf      : register(XY_REG_T_COMPUTE_SHADOW_SRV_VIS);
+StructuredBuffer<InstanceRenderData>    instanceBuf       : register(XY_REG_T_COMPUTE_SHADOW_SRV_INSTANCES);
+StructuredBuffer<uint>                  shadowSlotOffsets : register(XY_REG_T_COMPUTE_SHADOW_SRV_SLOT_OFFSETS);
 
 void tree_vs(
     in float3  i_pos       : POSITION,

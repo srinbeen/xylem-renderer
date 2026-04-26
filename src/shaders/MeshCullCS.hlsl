@@ -3,6 +3,7 @@
 #include "../include/macros.h"
 #include "types.hlsli"
 #include "meshlet_types.hlsli"
+#include "ShaderRegisterMap.hlsli"
 
 // MeshShader pipeline cull — writes D3D12_DISPATCH_MESH_ARGUMENTS records
 // (with a slotIdx prefix) for main + shadow passes.
@@ -11,7 +12,7 @@ static const uint NUM_CASCADES = 4;
 
 void UpdateDispatchMeshArgs(RWByteAddressBuffer argsBuffer, uint slot, uint totalGroups);
 
-cbuffer CB : register(b0)
+cbuffer CB : register(XY_REG_B_MESH_CULL_CB_FRAME)
 {
     float4x4 viewProj;
     float4x4 viewMatrix;
@@ -51,24 +52,24 @@ struct CullRegionData
     box3   bbox;
 };
 
-StructuredBuffer<CullRegionData>   regionData             : register(t0);
-StructuredBuffer<CullInstanceData> instanceData           : register(t1);
-StructuredBuffer<uint>             mainSlotOffsets        : register(t2);
-StructuredBuffer<uint>             mainInvocsPerSlot      : register(t3);
-StructuredBuffer<uint>             shadowSlotOffsets      : register(t4);
-StructuredBuffer<uint>             shadowInvocsPerSlot    : register(t5);
+StructuredBuffer<CullRegionData>   regionData             : register(XY_REG_T_MESH_CULL_SRV_REGION_DATA);
+StructuredBuffer<CullInstanceData> instanceData           : register(XY_REG_T_MESH_CULL_SRV_INSTANCE_DATA);
+StructuredBuffer<uint>             mainSlotOffsets        : register(XY_REG_T_MESH_CULL_SRV_MAIN_SLOT_OFFSETS);
+StructuredBuffer<uint>             mainInvocsPerSlot      : register(XY_REG_T_MESH_CULL_SRV_MAIN_INVOCATIONS);
+StructuredBuffer<uint>             shadowSlotOffsets      : register(XY_REG_T_MESH_CULL_SRV_SHADOW_SLOT_OFFSETS);
+StructuredBuffer<uint>             shadowInvocsPerSlot    : register(XY_REG_T_MESH_CULL_SRV_SHADOW_INVOCATIONS);
 
-RWStructuredBuffer<uint>           mainRegionVisBuf       : register(u0);
-RWStructuredBuffer<uint>           mainSlotCountBuf       : register(u1);
-RWStructuredBuffer<uint>           mainVisBuf             : register(u2);
-RWByteAddressBuffer                mainDispatchArgs       : register(u3);
-RWStructuredBuffer<uint>           shadowSlotCountBuf     : register(u4);
-RWStructuredBuffer<uint>           shadowVisBuf           : register(u5);
-RWByteAddressBuffer                shadowDispatchArgs     : register(u6);
-RWByteAddressBuffer                shadowUniqueCounter    : register(u7);
+RWStructuredBuffer<uint>           mainRegionVisBuf       : register(XY_REG_U_MESH_CULL_UAV_MAIN_REGION_VIS);
+RWStructuredBuffer<uint>           mainSlotCountBuf       : register(XY_REG_U_MESH_CULL_UAV_MAIN_COUNT);
+RWStructuredBuffer<uint>           mainVisBuf             : register(XY_REG_U_MESH_CULL_UAV_MAIN_VIS);
+RWByteAddressBuffer                mainDispatchArgs       : register(XY_REG_U_MESH_CULL_UAV_MAIN_DISPATCH);
+RWStructuredBuffer<uint>           shadowSlotCountBuf     : register(XY_REG_U_MESH_CULL_UAV_SHADOW_COUNT);
+RWStructuredBuffer<uint>           shadowVisBuf           : register(XY_REG_U_MESH_CULL_UAV_SHADOW_VIS);
+RWByteAddressBuffer                shadowDispatchArgs     : register(XY_REG_U_MESH_CULL_UAV_SHADOW_DISPATCH);
+RWByteAddressBuffer                shadowUniqueCounter    : register(XY_REG_U_MESH_CULL_UAV_SHADOW_UNIQUE);
 
-Texture2D<float2>                  hizTexture             : register(t6);
-SamplerState                       hizSampler             : register(s0);
+Texture2D<float2>                  hizTexture             : register(XY_REG_T_MESH_CULL_SRV_HI_Z);
+SamplerState                       hizSampler             : register(XY_REG_S_MESH_CULL_SAMPLER_HI_Z);
 
 bool DoesAABBIntersectFrustum(box3 bbox, frustum f);
 uint SelectLOD(box3 bbox);

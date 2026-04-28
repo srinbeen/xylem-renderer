@@ -1,0 +1,61 @@
+#pragma pack_matrix(row_major)
+
+cbuffer BakeCB : register(b0)
+{
+    float4x4    mvp;
+    float4      _pad[12];
+};
+
+Texture2D    t_Diffuse   : register(t0);
+Texture2D    t_NormalMap : register(t1);
+SamplerState s_Sampler   : register(s0);
+
+struct V2P
+{
+    float4 pos       : SV_Position;
+    float3 normal    : NORMAL;
+    float3 tangent   : TANGENT;
+    float3 bitangent : BITANGENT;
+    float2 uv        : UV;
+};
+
+void bake_vs(
+    in float3 i_pos       : POSITION,
+    in float3 i_normal    : NORMAL,
+    in float3 i_tangent   : TANGENT,
+    in float3 i_bitangent : BITANGENT,
+    in float2 i_uv        : UV,
+
+    out V2P o)
+{
+    o.pos       = mul(float4(i_pos, 1.0), mvp);
+    o.normal    = normalize(i_normal);
+    o.tangent   = normalize(i_tangent);
+    o.bitangent = normalize(i_bitangent);
+    o.uv        = i_uv;
+}
+
+struct BakeOutput
+{
+    float4 albedoAlpha : SV_Target0;
+    float4 normal      : SV_Target1;
+};
+
+BakeOutput bake_ps(in V2P i)
+{
+    float3 T = normalize(i.tangent);
+    float3 B = normalize(i.bitangent);
+    float3 N = normalize(i.normal);
+    float3x3 TBN = float3x3(T, B, N);
+
+    float3 tangentNormal = normalize(t_NormalMap.Sample(s_Sampler, i.uv).rgb * 2.0 - 1.0);
+    float3 objectNormal = normalize(mul(tangentNormal, TBN));
+
+    float4 diffuse = t_Diffuse.Sample(s_Sampler, i.uv);
+    clip(diffuse.a - 0.25);
+
+    BakeOutput o;
+    o.albedoAlpha = diffuse;
+    o.normal = float4(saturate(objectNormal * 0.5 + 0.5), 1.0);
+    return o;
+}

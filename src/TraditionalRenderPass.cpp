@@ -392,6 +392,7 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
 
     m_UI.totalInstanceCount   = m_Registry.totalInstanceCount();
     m_UI.visibleInstanceCount = (uint32_t)m_VisibleInstanceReferences.size();
+    m_UI.impostorVisibleCount = 0;
     m_UI.culledInstanceCount  = m_UI.totalInstanceCount - m_UI.visibleInstanceCount;
     m_UI.drawCallCount        = (uint32_t)m_DrawCmds.size();
 

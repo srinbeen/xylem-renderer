@@ -111,6 +111,8 @@ struct CullConstantBufferEntry {
     dm::float2   hizDimensions;    // mip 0 width, height
     float        maxHiZMip;        // numMips - 1
     uint32_t     hizEnabled;       // 0 = skip Hi-Z test, 1 = enabled
+    float        impostorAlphaClip;
+    float        _pad2[3];
 };
 
 static constexpr size_t c_CullConstantBufferSize =

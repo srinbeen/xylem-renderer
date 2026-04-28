@@ -95,6 +95,7 @@ private:
     void _buildDebugShadowTopDownSection();
     void _buildShadowMapSection();
     void _buildHiZSection();
+    void _buildImpostorAtlasSection();
 
     // Shared top-down canvas context — world XZ <-> screen pixel transform.
     struct TopDownCanvas {

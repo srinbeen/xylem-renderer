@@ -17,6 +17,7 @@ struct UIData {
     float    gpuFrameTimeMs       = -1.0f; // -1 = not yet available
     float    cpuRenderTimeMs      = 0.0f;
     uint32_t visibleInstanceCount = 0;
+    uint32_t impostorVisibleCount = 0;
     uint32_t drawCallCount        = 0;
     uint32_t totalInstanceCount   = 0;
     uint32_t culledInstanceCount  = 0;
@@ -29,17 +30,35 @@ struct UIData {
     bool showDebugShadowTopDown = false;
     bool showShadowMap          = false;
     bool showHiZ                = false;
+    bool showImpostorAtlas      = false;
 
     float hizBypassAngle   = 1.0f;  // downwardness threshold to skip Hi-Z (0=never bypass, 1=always)
     bool  hizActiveThisFrame = true; // read-only, set by render pass
 
     float pssmLambda       = 0.85f; // PSSM/SDSM blend: 0=linear splits, 1=logarithmic splits
+    float impostorAlphaClip = 0.25f;
 
     void*    shadowMapTexture = nullptr;  // nvrhi::ITexture*, set by active render pass
     std::vector<void*> shadowCascadeTextures;  // per-cascade nvrhi::ITexture* for debug display
     // Hi-Z: one nvrhi::ITexture* per mip level (single-mip scratch textures), set by ComputeCullRenderPass
     // Each entry is a separate R32_FLOAT texture containing exactly one mip, copied each frame.
     std::vector<void*> hizMipTextures;
+
+    // Impostor atlas debug: one entry per (asset, view) slice. Set by ComputeRenderPass after the
+    // bake completes. Layout: index = assetIdx * impostorViewsPerAsset + viewIdx.
+    uint32_t impostorViewsPerAsset = 0;
+    uint32_t impostorAzimuthViews  = 0;
+    uint32_t impostorElevationViews = 0;
+    uint32_t impostorAssetCount    = 0;
+    uint32_t impostorSelectedAsset = 0;
+    uint32_t impostorSelectedAzimuth = 0;
+    uint32_t impostorSelectedElevation = 0;
+    void*    impostorAlbedoTexture = nullptr;
+    void*    impostorNormalTexture = nullptr;
+    void*    impostorDepthTexture = nullptr;
+    void*    impostorAlbedoAtlasTexture = nullptr;
+    void*    impostorNormalAtlasTexture = nullptr;
+    void*    impostorDepthAtlasTexture = nullptr;
 };
 
 } // namespace Xylem

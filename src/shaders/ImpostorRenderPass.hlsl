@@ -1,0 +1,396 @@
+#pragma pack_matrix(row_major)
+
+#include "../include/macros.h"
+#include "types.hlsli"
+
+static const uint NUM_CASCADES = 4;
+static const uint IMPOSTOR_AZIMUTH_VIEWS = XYLEM_IMPOSTOR_AZIMUTH_VIEWS;
+static const uint IMPOSTOR_ELEVATION_VIEWS = XYLEM_IMPOSTOR_ELEVATION_VIEWS;
+
+cbuffer CB : register(b0)
+{
+    float4x4 viewProj;
+    float4x4 viewMatrix;
+    float4x4 lightViewProj[NUM_CASCADES];
+    float3   sunLightDir;
+    float    _pad0;
+    float4   cascadeSplits;
+
+    frustum  viewFrustum;
+    float4x4 worldToLight;
+    float4   shadowCasterMinLS[NUM_CASCADES];
+    float4   shadowCasterMaxLS[NUM_CASCADES];
+
+    float3   cameraPos;
+    uint     numRegions;
+    uint     totalCapacity;
+    uint     numLods;
+    float    _pad1a;
+    float    _pad1b;
+    float4   lodDistances[3];
+
+    float2   hizDimensions;
+    float    maxHiZMip;
+    uint     hizEnabled;
+    float    impostorAlphaClip;
+    float3   _pad2;
+};
+
+struct RootConstant { uint assetIndex; };
+ConstantBuffer<RootConstant> rc : register(b1);
+
+struct InstanceRenderData
+{
+    float4x4 model;
+    float3x3 normal;
+    uint     treeId;
+};
+
+struct CullInstanceData
+{
+    box3 bbox;
+    uint baseSlot;
+    uint regionId;
+    uint active;
+};
+
+StructuredBuffer<uint>               impostorVisBuf     : register(t0);
+StructuredBuffer<InstanceRenderData> instBuf            : register(t1);
+StructuredBuffer<uint>               impostorSlotOffsets : register(t2);
+StructuredBuffer<CullInstanceData>   cullData           : register(t3);
+
+Texture2DArray                       t_ImpostorAlbedoAlpha : register(t4);
+Texture2DArray                       t_ImpostorNormal      : register(t5);
+Texture2DArray<float>                t_ImpostorDepth       : register(t6);
+Texture2DArray                       t_ShadowMap           : register(t7);
+
+// Per-asset bake-space bbox half extents. The render card and virtual
+// projections both use these bounds around the instance bbox center.
+StructuredBuffer<float4>             assetDims           : register(t8);
+
+SamplerState                         s_Sampler          : register(s0);
+SamplerComparisonState               s_ShadowSampler    : register(s1);
+SamplerState                         s_DepthSampler     : register(s2);
+
+struct V2P
+{
+    float4 pos       : SV_Position;
+    float3 frameWorldPos0 : FRAME_WORLD_POS0;
+    float3 frameWorldPos1 : FRAME_WORLD_POS1;
+    float3 frameWorldPos2 : FRAME_WORLD_POS2;
+    float3 depthAxis0 : DEPTH_AXIS0;
+    float3 depthAxis1 : DEPTH_AXIS1;
+    float3 depthAxis2 : DEPTH_AXIS2;
+    float2 uv0        : UV0;
+    float2 uv1        : UV1;
+    float2 uv2        : UV2;
+    nointerpolation float3 weights : BLEND_WEIGHTS;
+    nointerpolation float3 halfDepths : HALF_DEPTHS;
+    nointerpolation uint viewIndex0   : VIEW_INDEX0;
+    nointerpolation uint viewIndex1   : VIEW_INDEX1;
+    nointerpolation uint viewIndex2   : VIEW_INDEX2;
+    nointerpolation uint persistentId : PERSISTENT_ID;
+};
+
+float3 HemiOctahedronToUnitVector(float2 uv)
+{
+    float2 plane = uv * 2.0 - 1.0;
+    float2 oct = float2(plane.x + plane.y, plane.y - plane.x) * 0.5;
+    float y = max(1.0 - abs(oct.x) - abs(oct.y), 0.0);
+    return normalize(float3(oct.x - oct.y, y, oct.x + oct.y));
+}
+
+float2 UnitVectorToHemiOctahedron(float3 dirToCamera)
+{
+    float3 n = normalize(dirToCamera);
+    n.y = max(n.y, 0.0);
+
+    float2 oct = float2(n.x + n.z, n.z - n.x) * 0.5;
+    oct *= rcp(max(abs(oct.x) + n.y + abs(oct.y), 1e-6));
+
+    float2 plane = float2(oct.x - oct.y, oct.x + oct.y);
+    return saturate(plane * 0.5 + 0.5);
+}
+
+float2 ImpostorViewGridUV(uint viewIndex)
+{
+    uint x = viewIndex % IMPOSTOR_AZIMUTH_VIEWS;
+    uint y = viewIndex / IMPOSTOR_AZIMUTH_VIEWS;
+    return float2(
+        (float)x / (float)max(1u, IMPOSTOR_AZIMUTH_VIEWS - 1u),
+        (float)y / (float)max(1u, IMPOSTOR_ELEVATION_VIEWS - 1u));
+}
+
+float3 ImpostorViewDirection(uint viewIndex)
+{
+    return HemiOctahedronToUnitVector(ImpostorViewGridUV(viewIndex));
+}
+
+void ImpostorViewBasis(uint viewIndex, out float3 dirToCamera, out float3 right, out float3 viewUp)
+{
+    float3 worldUp = float3(0.0, 1.0, 0.0);
+
+    dirToCamera = ImpostorViewDirection(viewIndex);
+    float3 horizontal = float3(dirToCamera.x, 0.0, dirToCamera.z);
+    float horizontalLen = length(horizontal);
+    right = (horizontalLen >= 1e-6)
+        ? normalize(cross(worldUp, -horizontal / horizontalLen))
+        : float3(1.0, 0.0, 0.0);
+    viewUp = normalize(cross(-dirToCamera, right));
+}
+
+
+uint ImpostorViewIndex(uint2 gridCoord)
+{
+    uint x = min(gridCoord.x, IMPOSTOR_AZIMUTH_VIEWS - 1u);
+    uint y = min(gridCoord.y, IMPOSTOR_ELEVATION_VIEWS - 1u);
+    return y * IMPOSTOR_AZIMUTH_VIEWS + x;
+}
+
+void SelectImpostorViews(float3 dirToCamera, out uint3 viewIndices, out float3 weights)
+{
+    float2 gridMax = float2(
+        (float)(IMPOSTOR_AZIMUTH_VIEWS - 1u),
+        (float)(IMPOSTOR_ELEVATION_VIEWS - 1u));
+    float2 grid = UnitVectorToHemiOctahedron(dirToCamera) * gridMax;
+
+    uint maxBaseX = (IMPOSTOR_AZIMUTH_VIEWS > 1u) ? (IMPOSTOR_AZIMUTH_VIEWS - 2u) : 0u;
+    uint maxBaseY = (IMPOSTOR_ELEVATION_VIEWS > 1u) ? (IMPOSTOR_ELEVATION_VIEWS - 2u) : 0u;
+    float2 baseF = min(floor(grid), float2((float)maxBaseX, (float)maxBaseY));
+    float2 frac = grid - baseF;
+
+    uint2 c00 = uint2((uint)baseF.x, (uint)baseF.y);
+    uint2 c10 = uint2(min(c00.x + 1u, IMPOSTOR_AZIMUTH_VIEWS - 1u), c00.y);
+    uint2 c01 = uint2(c00.x, min(c00.y + 1u, IMPOSTOR_ELEVATION_VIEWS - 1u));
+    uint2 c11 = uint2(c10.x, c01.y);
+
+    if (frac.x + frac.y <= 1.0)
+    {
+        viewIndices = uint3(
+            ImpostorViewIndex(c00),
+            ImpostorViewIndex(c10),
+            ImpostorViewIndex(c01));
+        weights = float3(1.0 - frac.x - frac.y, frac.x, frac.y);
+    }
+    else
+    {
+        viewIndices = uint3(
+            ImpostorViewIndex(c11),
+            ImpostorViewIndex(c10),
+            ImpostorViewIndex(c01));
+        weights = float3(frac.x + frac.y - 1.0, 1.0 - frac.y, 1.0 - frac.x);
+    }
+
+    weights = max(weights, 0.0);
+    weights *= rcp(max(weights.x + weights.y + weights.z, 1e-6));
+}
+
+void ProjectImpostorFrame(
+    uint viewIndex,
+    float3 dims,
+    float3 center,
+    float3 relBake,
+    float3x3 instanceNormal,
+    out float2 uv,
+    out float3 frameWorldPos,
+    out float3 depthAxis,
+    out float halfDepth)
+{
+    float3 sampledDirToCameraBake;
+    float3 sampledRightBake;
+    float3 sampledUpBake;
+    ImpostorViewBasis(viewIndex, sampledDirToCameraBake, sampledRightBake, sampledUpBake);
+
+    float halfWidth = max(dot(dims, abs(sampledRightBake)), 0.01);
+    float halfHeight = max(dot(dims, abs(sampledUpBake)), 0.01);
+    halfDepth = max(dot(dims, abs(sampledDirToCameraBake)), 0.01);
+
+    float frameX = dot(relBake, sampledRightBake);
+    float frameY = dot(relBake, sampledUpBake);
+    float3 frameBakePos = sampledRightBake * frameX + sampledUpBake * frameY;
+
+    uv = float2(frameX / (2.0 * halfWidth) + 0.5, 0.5 - frameY / (2.0 * halfHeight));
+    frameWorldPos = center + mul(frameBakePos, instanceNormal);
+    depthAxis = normalize(mul(sampledDirToCameraBake, instanceNormal));
+}
+
+void impostor_vs(
+    in uint vertexId   : SV_VertexID,
+    in uint instanceId : SV_InstanceID,
+
+    out V2P o)
+{
+    uint persistentId = impostorVisBuf[impostorSlotOffsets[rc.assetIndex] + instanceId];
+    CullInstanceData cull = cullData[persistentId];
+    InstanceRenderData inst = instBuf[persistentId];
+
+    float3 dims = max(assetDims[rc.assetIndex].xyz, float3(0.01, 0.01, 0.01));
+
+    float3 worldCenter = (cull.bbox.min + cull.bbox.max) * 0.5;
+    float3 dirToCameraWorld = normalize(cameraPos - worldCenter);
+    // inverses the model matrix transformations
+    float3 dirToCameraBake = normalize(mul(dirToCameraWorld, transpose(inst.normal)));
+
+    uint3 viewIndices;
+    float3 weights;
+    SelectImpostorViews(dirToCameraBake, viewIndices, weights);
+
+    // Cylindrical billboard: right is the view's horizontal axis (Y zeroed so
+    // the card stays upright as the camera pitches), up is world Y.
+    float3 right = normalize(float3(viewMatrix[0][0], 0.0, viewMatrix[2][0]));
+    float3 up    = float3(0.0, 1.0, 0.0);
+
+    // Size the billboard from the actual card axes, not from any one selected
+    // frame. The three frame projections below then get equal geometric footing.
+    float3 cardRightBake = normalize(mul(right, transpose(inst.normal)));
+    float3 cardUpBake = normalize(mul(up, transpose(inst.normal)));
+    float cardHalfWidth = max(dot(dims, abs(cardRightBake)), 0.01);
+    float cardHalfHeight = max(dot(dims, abs(cardUpBake)), 0.01);
+
+    float3 center = worldCenter;
+
+    float2 corner;
+    corner.x = (vertexId == 1 || vertexId == 3) ? 1.0 : -1.0;
+    corner.y = (vertexId >= 2) ? 1.0 : 0.0;
+
+    float3 worldPos = center
+        + right * (corner.x * cardHalfWidth)
+        + up * ((corner.y - 0.5) * 2.0 * cardHalfHeight);
+
+    float3 relWorld = worldPos - center;
+    float3 relBake = mul(relWorld, transpose(inst.normal));
+
+    float2 uv0;
+    float2 uv1;
+    float2 uv2;
+    float3 frameWorldPos0;
+    float3 frameWorldPos1;
+    float3 frameWorldPos2;
+    float3 depthAxis0;
+    float3 depthAxis1;
+    float3 depthAxis2;
+    float halfDepth0;
+    float halfDepth1;
+    float halfDepth2;
+    ProjectImpostorFrame(viewIndices.x, dims, center, relBake, inst.normal, uv0, frameWorldPos0, depthAxis0, halfDepth0);
+    ProjectImpostorFrame(viewIndices.y, dims, center, relBake, inst.normal, uv1, frameWorldPos1, depthAxis1, halfDepth1);
+    ProjectImpostorFrame(viewIndices.z, dims, center, relBake, inst.normal, uv2, frameWorldPos2, depthAxis2, halfDepth2);
+
+    o.pos          = mul(float4(worldPos, 1.0), viewProj);
+    o.frameWorldPos0 = frameWorldPos0;
+    o.frameWorldPos1 = frameWorldPos1;
+    o.frameWorldPos2 = frameWorldPos2;
+    o.depthAxis0    = depthAxis0;
+    o.depthAxis1    = depthAxis1;
+    o.depthAxis2    = depthAxis2;
+    o.uv0           = uv0;
+    o.uv1           = uv1;
+    o.uv2           = uv2;
+    o.weights       = weights;
+    o.halfDepths    = float3(halfDepth0, halfDepth1, halfDepth2);
+    o.viewIndex0    = viewIndices.x;
+    o.viewIndex1    = viewIndices.y;
+    o.viewIndex2    = viewIndices.z;
+    o.persistentId = persistentId;
+}
+
+float SampleShadowCascade(float3 worldPos, uint cascadeIdx)
+{
+    float4 posLS = mul(float4(worldPos, 1.0), lightViewProj[cascadeIdx]);
+    float2 shadowUV = posLS.xy * float2(0.5, -0.5) + 0.5;
+
+    uint width, height, elements;
+    t_ShadowMap.GetDimensions(width, height, elements);
+    float2 texelSize = 1.0 / float2(width, height);
+
+    float shadow = 0.0;
+    [unroll]
+    for (int x = -1; x <= 1; ++x)
+    {
+        [unroll]
+        for (int y = -1; y <= 1; ++y)
+        {
+            float2 offset = float2(x, y) * texelSize;
+            shadow += t_ShadowMap.SampleCmpLevelZero(
+                s_ShadowSampler,
+                float3(shadowUV + offset, float(cascadeIdx)),
+                posLS.z);
+        }
+    }
+    return shadow / 9.0;
+}
+
+void impostor_ps(
+    in V2P i,
+    out float4 o_color : SV_Target0,
+    out float o_depth : SV_Depth)
+{
+    uint viewCount = IMPOSTOR_AZIMUTH_VIEWS * IMPOSTOR_ELEVATION_VIEWS;
+    uint slice0 = rc.assetIndex * viewCount + i.viewIndex0;
+    uint slice1 = rc.assetIndex * viewCount + i.viewIndex1;
+    uint slice2 = rc.assetIndex * viewCount + i.viewIndex2;
+
+    float4 albedoAlpha0 = t_ImpostorAlbedoAlpha.Sample(s_Sampler, float3(i.uv0, (float)slice0));
+    float4 albedoAlpha1 = t_ImpostorAlbedoAlpha.Sample(s_Sampler, float3(i.uv1, (float)slice1));
+    float4 albedoAlpha2 = t_ImpostorAlbedoAlpha.Sample(s_Sampler, float3(i.uv2, (float)slice2));
+
+    float3 alphaWeights = i.weights * float3(albedoAlpha0.a, albedoAlpha1.a, albedoAlpha2.a);
+    float alphaWeightSum = max(alphaWeights.x + alphaWeights.y + alphaWeights.z, 1e-6);
+    float blendedAlpha = dot(i.weights, float3(albedoAlpha0.a, albedoAlpha1.a, albedoAlpha2.a));
+    clip(blendedAlpha - impostorAlphaClip);
+
+    // The bake target clears transparent texels to black. Linear filtering near
+    // silhouettes therefore returns premultiplied-looking edge samples; divide
+    // by alpha before the cross-frame blend so black background cannot fringe.
+    float3 albedo0 = saturate(albedoAlpha0.rgb / max(albedoAlpha0.a, 1e-4));
+    float3 albedo1 = saturate(albedoAlpha1.rgb / max(albedoAlpha1.a, 1e-4));
+    float3 albedo2 = saturate(albedoAlpha2.rgb / max(albedoAlpha2.a, 1e-4));
+    float3 blendedAlbedo =
+        (albedo0 * alphaWeights.x +
+         albedo1 * alphaWeights.y +
+         albedo2 * alphaWeights.z) / alphaWeightSum;
+
+    float impostorDepth0 = t_ImpostorDepth.SampleLevel(s_DepthSampler, float3(i.uv0, (float)slice0), 0.0);
+    float impostorDepth1 = t_ImpostorDepth.SampleLevel(s_DepthSampler, float3(i.uv1, (float)slice1), 0.0);
+    float impostorDepth2 = t_ImpostorDepth.SampleLevel(s_DepthSampler, float3(i.uv2, (float)slice2), 0.0);
+    float3 depthWorldPos0 = i.frameWorldPos0 + normalize(i.depthAxis0) * ((0.5 - impostorDepth0) * (2.0 * i.halfDepths.x));
+    float3 depthWorldPos1 = i.frameWorldPos1 + normalize(i.depthAxis1) * ((0.5 - impostorDepth1) * (2.0 * i.halfDepths.y));
+    float3 depthWorldPos2 = i.frameWorldPos2 + normalize(i.depthAxis2) * ((0.5 - impostorDepth2) * (2.0 * i.halfDepths.z));
+    float3 depthWorldPos =
+        (depthWorldPos0 * alphaWeights.x +
+         depthWorldPos1 * alphaWeights.y +
+         depthWorldPos2 * alphaWeights.z) / alphaWeightSum;
+
+    float3 objectNormal0 = t_ImpostorNormal.Sample(s_Sampler, float3(i.uv0, (float)slice0)).rgb * 2.0 - 1.0;
+    float3 objectNormal1 = t_ImpostorNormal.Sample(s_Sampler, float3(i.uv1, (float)slice1)).rgb * 2.0 - 1.0;
+    float3 objectNormal2 = t_ImpostorNormal.Sample(s_Sampler, float3(i.uv2, (float)slice2)).rgb * 2.0 - 1.0;
+    float3 objectNormal = normalize(
+        (objectNormal0 * alphaWeights.x +
+         objectNormal1 * alphaWeights.y +
+         objectNormal2 * alphaWeights.z) / alphaWeightSum);
+    float3 worldNormal = normalize(mul(objectNormal, instBuf[i.persistentId].normal));
+
+    float3 lightDir = -normalize(sunLightDir);
+    float diffuse = max(dot(worldNormal, lightDir), 0.0);
+
+    float viewZ = mul(float4(depthWorldPos, 1.0), viewMatrix).z;
+
+    uint cascadeIdx = 3;
+    if      (viewZ < cascadeSplits.x) cascadeIdx = 0;
+    else if (viewZ < cascadeSplits.y) cascadeIdx = 1;
+    else if (viewZ < cascadeSplits.z) cascadeIdx = 2;
+
+    float notInShadow = SampleShadowCascade(depthWorldPos, cascadeIdx);
+    float ambient = 0.18;
+    float lighting = ambient + (1.0 - ambient) * diffuse * notInShadow;
+
+    // Keep depth writes stable by using the card depth. Writing the baked
+    // per-pixel depth exposes atlas-resolution quantization as visible bands.
+    // Apply a tiny shader-side bias because SV_Depth bypasses raster depth bias.
+#if XYLEM_USE_REVERSE_Z
+    o_depth = min(i.pos.z + 5e-4, 1.0);
+#else
+    o_depth = max(i.pos.z - 5e-4, 0.0);
+#endif
+    o_color = float4(blendedAlbedo * lighting, blendedAlpha);
+}

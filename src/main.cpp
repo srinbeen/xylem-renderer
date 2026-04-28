@@ -45,7 +45,7 @@ int main(int __argc, const char** __argv)
         deviceParams.enableNvrhiValidationLayer = true;
     #endif
 
-    deviceParams.depthBufferFormat = nvrhi::Format::D16;
+    deviceParams.depthBufferFormat = nvrhi::Format::D32;
 
     if (!deviceManager->CreateWindowDeviceAndSwapChain(deviceParams, g_WindowTitle)) {
         log::fatal("Cannot initialize a graphics device with the requested parameters");

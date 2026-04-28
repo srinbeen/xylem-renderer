@@ -33,6 +33,8 @@ cbuffer CB : register(b0)
     float2   hizDimensions;
     float    maxHiZMip;
     uint     hizEnabled;
+    float    impostorAlphaClip;
+    float3   _pad2;
 };
 
 struct CullInstanceData
@@ -53,6 +55,7 @@ StructuredBuffer<CullRegionData>   regionData           : register(t0);
 StructuredBuffer<CullInstanceData> instanceData         : register(t1);
 StructuredBuffer<uint>             mainSlotOffsets      : register(t2);
 StructuredBuffer<uint>             shadowSlotOffsets    : register(t3);
+StructuredBuffer<uint>             impostorSlotOffsets  : register(t5);
 
 RWStructuredBuffer<uint>           mainRegionVisBuf     : register(u0);
 RWStructuredBuffer<uint>           mainSlotCountBuf     : register(u1);
@@ -63,12 +66,16 @@ RWStructuredBuffer<uint>           shadowVisBuf         : register(u4);
 RWByteAddressBuffer                mainIndirectArgs     : register(u5);
 RWByteAddressBuffer                shadowIndirectArgs   : register(u6);
 RWByteAddressBuffer                shadowUniqueCounter  : register(u7);
+RWStructuredBuffer<uint>           impostorSlotCountBuf : register(u8);
+RWStructuredBuffer<uint>           impostorVisBuf       : register(u9);
+RWByteAddressBuffer                impostorIndirectArgs : register(u10);
 
 Texture2D<float2>                  hizTexture           : register(t4);
 SamplerState                       hizSampler           : register(s0);
 
 bool DoesAABBIntersectFrustum(box3 bbox, frustum f);
 uint SelectLOD(box3 bbox);
+bool SelectImpostor(box3 bbox);
 bool IsOccludedByHiZ(box3 bbox);
 
 
@@ -95,8 +102,21 @@ void CullMain(uint3 dtid : SV_DispatchThreadID)
     if (!mainRegionVisBuf[inst.regionId]) return;
     // instance frustum culled
     if (!DoesAABBIntersectFrustum(inst.bbox, viewFrustum)) return;
-    // Hi-Z occlusion culled
+    // hi-z occlusion
     if (IsOccludedByHiZ(inst.bbox)) return;
+
+    if (SelectImpostor(inst.bbox))
+    {
+        uint ai = inst.baseSlot / numLods;
+
+        uint writeIdx;
+        InterlockedAdd(impostorSlotCountBuf[ai], 1, writeIdx);
+        impostorVisBuf[impostorSlotOffsets[ai] + writeIdx] = idx;
+
+        uint dummy;
+        impostorIndirectArgs.InterlockedAdd(ai * 16 + 4, 1, dummy);
+        return;
+    }
 
     uint lod  = SelectLOD(inst.bbox);
     uint slot = inst.baseSlot + lod;
@@ -210,6 +230,13 @@ uint SelectLOD(box3 bbox)
     return numLods - 1;
 }
 
+bool SelectImpostor(box3 bbox)
+{
+    float3 nearest = clamp(cameraPos, bbox.min, bbox.max);
+    float dist = distance(cameraPos, nearest);
+    return dist >= lodDistances[numLods - 1].x;
+}
+
 bool IsOccludedByHiZ(box3 bbox)
 {
     // Disabled by CPU (bird's-eye view or frame 0)
@@ -263,16 +290,24 @@ bool IsOccludedByHiZ(box3 bbox)
     float mipLevel = ceil(log2(max(footprint.x, footprint.y)));
     mipLevel = clamp(mipLevel, 0, maxHiZMip);
 
-    // Sample Hi-Z at center of projected rect (.r = farthest-depth reduction)
+    // Sample several points in the projected rect. A single center sample can
+    // incorrectly cull large tree bboxes when only part of the screen rect is
+    // covered by nearer depth, causing row-sized popping around LOD thresholds.
     float2 centerUV = (minUV + maxUV) * 0.5;
-    float hizDepth = hizTexture.SampleLevel(hizSampler, centerUV, mipLevel).r;
+    float hiz0 = hizTexture.SampleLevel(hizSampler, centerUV, mipLevel).r;
+    float hiz1 = hizTexture.SampleLevel(hizSampler, minUV, mipLevel).r;
+    float hiz2 = hizTexture.SampleLevel(hizSampler, float2(maxUV.x, minUV.y), mipLevel).r;
+    float hiz3 = hizTexture.SampleLevel(hizSampler, float2(minUV.x, maxUV.y), mipLevel).r;
+    float hiz4 = hizTexture.SampleLevel(hizSampler, maxUV, mipLevel).r;
 
     // Occlusion test
 #if XYLEM_USE_REVERSE_Z
+    float hizDepth = min(hiz0, min(min(hiz1, hiz2), min(hiz3, hiz4)));
     // Reverse-Z: object's nearest depth (large value) < Hi-Z (nearest occluder, large value)
     // means object is behind the occluder
     return (closestDepth < hizDepth);
 #else
+    float hizDepth = max(hiz0, max(max(hiz1, hiz2), max(hiz3, hiz4)));
     // Forward-Z: object's nearest depth (small value) > Hi-Z (nearest occluder, small value)
     return (closestDepth > hizDepth);
 #endif

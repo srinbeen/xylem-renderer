@@ -10,7 +10,7 @@
   },
   "lods": {
     "radialSegments": [16, 8, 4],
-    "distances": [30.0, 100.0, 400.0]
+    "distances": [50.0, 100.0, 200.0]
   },
   "lsystems": [
     {

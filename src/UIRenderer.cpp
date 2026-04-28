@@ -49,8 +49,14 @@ void UIRenderer::buildUI() {
             ImGui::TextDisabled("GPU pass:   (pending)");
 
         ImGui::Separator();
-        ImGui::Text("Instances  visible: %u / %u  (culled: %u)",
-            m_ui.visibleInstanceCount, m_ui.totalInstanceCount, m_ui.culledInstanceCount);
+        if (m_ui.impostorVisibleCount > 0) {
+            ImGui::Text("Instances  visible: %u / %u  (impostors: %u, culled: %u)",
+                m_ui.visibleInstanceCount, m_ui.totalInstanceCount,
+                m_ui.impostorVisibleCount, m_ui.culledInstanceCount);
+        } else {
+            ImGui::Text("Instances  visible: %u / %u  (culled: %u)",
+                m_ui.visibleInstanceCount, m_ui.totalInstanceCount, m_ui.culledInstanceCount);
+        }
         ImGui::Text("Shadow casters:    %u / %u  (culled: %u)",
             m_ui.shadowVisibleCount, m_ui.totalInstanceCount, m_ui.shadowCulledCount);
         ImGui::Text("Cascade draws:     %u  (overdraw: %u)",
@@ -67,11 +73,13 @@ void UIRenderer::buildUI() {
         ImGui::Checkbox("Shadow Top-Down View", &m_ui.showDebugShadowTopDown);
         ImGui::Checkbox("Shadow Map", &m_ui.showShadowMap);
         ImGui::Checkbox("Hi-Z Mip Chain", &m_ui.showHiZ);
+        ImGui::Checkbox("Impostor Atlas", &m_ui.showImpostorAtlas);
         ImGui::Separator();
         ImGui::SliderFloat("Hi-Z Bypass Angle", &m_ui.hizBypassAngle, 0.f, 1.f, "%.2f");
         ImGui::SameLine();
         ImGui::TextDisabled(m_ui.hizActiveThisFrame ? "(active)" : "(bypassed)");
         ImGui::SliderFloat("PSSM Lambda", &m_ui.pssmLambda, 0.f, 1.f, "%.2f");
+        ImGui::SliderFloat("Impostor Alpha Clip", &m_ui.impostorAlphaClip, 0.01f, 0.95f, "%.2f");
     }
 
     ImGui::Spacing();
@@ -83,6 +91,7 @@ void UIRenderer::buildUI() {
     _buildDebugShadowTopDownSection();
     _buildShadowMapSection();
     _buildHiZSection();
+    _buildImpostorAtlasSection();
 }
 
 
@@ -745,6 +754,112 @@ void UIRenderer::_buildHiZSection() {
     } else {
         ImGui::TextDisabled("(not yet available — enable Hi-Z panel before first frame)");
     }
+
+    ImGui::End();
+}
+
+
+void UIRenderer::_buildImpostorAtlasSection() {
+    if (!m_ui.showImpostorAtlas) return;
+
+    const uint32_t numAssets = m_ui.impostorAssetCount;
+    const uint32_t numViews  = m_ui.impostorViewsPerAsset;
+    const uint32_t numAzimuthViews = m_ui.impostorAzimuthViews ? m_ui.impostorAzimuthViews : numViews;
+    const uint32_t numElevationViews = m_ui.impostorElevationViews ? m_ui.impostorElevationViews : 1;
+    if (numAssets == 0 || numViews == 0) return;
+
+    ImGui::SetNextWindowSize(ImVec2(620, 720), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Impostor Atlas", &m_ui.showImpostorAtlas)) {
+        ImGui::End();
+        return;
+    }
+
+    int selectedAsset = static_cast<int>(m_ui.impostorSelectedAsset);
+    int selectedAzimuth = static_cast<int>(m_ui.impostorSelectedAzimuth);
+    int selectedElevation = static_cast<int>(m_ui.impostorSelectedElevation);
+    if (selectedAsset >= (int)numAssets) selectedAsset = 0;
+    if (selectedAzimuth >= (int)numAzimuthViews) selectedAzimuth = 0;
+    if (selectedElevation >= (int)numElevationViews) selectedElevation = 0;
+
+    ImGui::Text("Asset:");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(160.f);
+    ImGui::SliderInt("##impAsset", &selectedAsset, 0, (int)numAssets - 1);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(%u assets)", numAssets);
+
+    ImGui::Text("Grid X:");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(160.f);
+    ImGui::SliderInt("##impAzimuth", &selectedAzimuth, 0, (int)numAzimuthViews - 1);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(%u views)", numAzimuthViews);
+
+    ImGui::Text("Grid Y:");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(160.f);
+    ImGui::SliderInt("##impElevation", &selectedElevation, 0, (int)numElevationViews - 1);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(%u views)", numElevationViews);
+
+    ImGui::Text("Alpha Clip:");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(160.f);
+    ImGui::SliderFloat("##impAlphaClip", &m_ui.impostorAlphaClip, 0.01f, 0.95f, "%.2f");
+
+    ImGui::Separator();
+
+    m_ui.impostorSelectedAsset = static_cast<uint32_t>(selectedAsset);
+    m_ui.impostorSelectedAzimuth = static_cast<uint32_t>(selectedAzimuth);
+    m_ui.impostorSelectedElevation = static_cast<uint32_t>(selectedElevation);
+
+    void* albedo = m_ui.impostorAlbedoTexture;
+    void* normal = m_ui.impostorNormalTexture;
+    void* depth  = m_ui.impostorDepthTexture;
+    void* albedoAtlas = m_ui.impostorAlbedoAtlasTexture;
+    void* normalAtlas = m_ui.impostorNormalAtlasTexture;
+    void* depthAtlas  = m_ui.impostorDepthAtlasTexture;
+
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+
+    static int atlasChannel = 0;
+    const char* channels[] = { "Albedo+Alpha", "Normal", "Depth" };
+    ImGui::Text("Selected asset atlas:");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(160.f);
+    ImGui::Combo("##impAtlasChannel", &atlasChannel, channels, 3);
+
+    void* atlasTex = atlasChannel == 0 ? albedoAtlas : (atlasChannel == 1 ? normalAtlas : depthAtlas);
+    if (atlasTex) {
+        float atlasWidth = std::max(avail.x, 64.f);
+        float atlasHeight = atlasWidth * (float)numElevationViews / (float)numAzimuthViews;
+        atlasHeight = std::min(atlasHeight, 420.f);
+        ImGui::Image(ImTextureRef(atlasTex), ImVec2(atlasWidth, atlasHeight));
+    } else {
+        ImGui::TextDisabled("(atlas preview not available yet)");
+    }
+
+    ImGui::Separator();
+    ImGui::Text("Selected frame:");
+
+    // Three thumbnails side-by-side, square; account for spacing between them.
+    const float spacing = ImGui::GetStyle().ItemSpacing.x;
+    float thumb = std::max((ImGui::GetContentRegionAvail().x - spacing * 2.f) / 3.f, 64.f);
+    thumb = std::min(thumb, 180.f);
+
+    auto drawThumb = [&](const char* label, void* tex) {
+        ImGui::BeginGroup();
+        ImGui::TextUnformatted(label);
+        if (tex) ImGui::Image(ImTextureRef(tex), ImVec2(thumb, thumb));
+        else     ImGui::Dummy(ImVec2(thumb, thumb));
+        ImGui::EndGroup();
+    };
+
+    drawThumb("Albedo+Alpha", albedo);
+    ImGui::SameLine();
+    drawThumb("Normal",       normal);
+    ImGui::SameLine();
+    drawThumb("Depth",        depth);
 
     ImGui::End();
 }

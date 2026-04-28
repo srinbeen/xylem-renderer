@@ -17,6 +17,7 @@
 #include "Render.hpp"
 #include "UIData.hpp"
 #include "ViewHandler.hpp"
+#include "macros.h"
 
 namespace Xylem {
 
@@ -27,6 +28,10 @@ public:
     static constexpr uint32_t k_QueuedFrames  = 3;
     static constexpr uint32_t k_ShadowRes     = 2048;
     static constexpr float    k_CapacitySlack = 1.5f;
+    static constexpr uint32_t k_ImpostorAzimuthViews   = XYLEM_IMPOSTOR_AZIMUTH_VIEWS;
+    static constexpr uint32_t k_ImpostorElevationViews = XYLEM_IMPOSTOR_ELEVATION_VIEWS;
+    static constexpr uint32_t k_ImpostorViewCount      = XYLEM_IMPOSTOR_VIEW_COUNT;
+    static constexpr uint32_t k_ImpostorBakeResolution = 256;
 
     ComputeRenderPass(app::DeviceManager* dm, SceneRegistry& registry, UIData& ui, ViewHandler& vh)
         : IRenderPass{dm}, m_Registry{registry}, m_UI{ui}, m_ViewHandler{vh} {}
@@ -84,6 +89,10 @@ private:
         nvrhi::BufferHandle              countBuffer;          // UAV uint32[numSlots]
         nvrhi::BufferHandle              visibilityBuffer;     // UAV uint32[visBufferSize]
         nvrhi::BufferHandle              indirectArgsBuffer;   // UAV DrawIndexedIndirectArguments[numSlots] (also indirect args)
+        nvrhi::BufferHandle              impostorCountBuffer;        // UAV uint32[numAssets]
+        nvrhi::BufferHandle              impostorVisBuffer;          // UAV uint32[impostorVisBufferSize]
+        nvrhi::BufferHandle              impostorSlotOffsetBuffer;   // SRV uint32[numAssets]
+        nvrhi::BufferHandle              impostorIndirectArgsBuffer; // UAV DrawIndirectArguments[numAssets]
         nvrhi::BufferHandle              shadowCountBuffer;      // UAV uint32[numAssets]
         nvrhi::BufferHandle              shadowVisBuffer;        // UAV uint32[shadowVisBufferSize]
         nvrhi::BufferHandle              shadowSlotOffsetBuffer; // SRV uint32[numAssets]
@@ -102,6 +111,36 @@ private:
         nvrhi::BindingLayoutHandle             bindingLayout;
         std::vector<nvrhi::BindingSetHandle>   bindingSets;
         nvrhi::GraphicsPipelineHandle          pipeline;
+    };
+
+    struct ImpostorPassResources {
+        nvrhi::ShaderHandle                    vertexShader;
+        nvrhi::ShaderHandle                    pixelShader;
+        nvrhi::ShaderHandle                    bakeVertexShader;
+        nvrhi::ShaderHandle                    bakePixelShader;
+        nvrhi::InputLayoutHandle               bakeInputLayout;
+        nvrhi::BindingLayoutHandle             bindingLayout;
+        nvrhi::BindingLayoutHandle             bakeBindingLayout;
+        nvrhi::SamplerHandle                   sampler;
+        nvrhi::SamplerHandle                   depthSampler;
+        std::vector<nvrhi::BindingSetHandle>   bindingSets;
+        std::vector<nvrhi::BindingSetHandle>   bakeBindingSets;
+        nvrhi::BufferHandle                    bakeConstantBuffer;
+        nvrhi::BufferHandle                    assetDimsBuffer;     // SRV float4[numAssets], bake-space bbox halfExtents (xyz) + pad
+        nvrhi::TextureHandle                   albedoAlphaTexture;
+        nvrhi::TextureHandle                   normalTexture;
+        nvrhi::TextureHandle                   depthTexture;
+        // Per-slice single-2D copies for ImGui inspection of the bake atlas.
+        nvrhi::TextureHandle                   debugAlbedoTexture;
+        nvrhi::TextureHandle                   debugNormalTexture;
+        nvrhi::TextureHandle                   debugDepthTexture;
+        // Per-selected-asset atlas sheets for ImGui inspection.
+        nvrhi::TextureHandle                   debugAlbedoAtlasTexture;
+        nvrhi::TextureHandle                   debugNormalAtlasTexture;
+        nvrhi::TextureHandle                   debugDepthAtlasTexture;
+        std::vector<nvrhi::FramebufferHandle>  bakeFramebuffers;
+        nvrhi::GraphicsPipelineHandle          pipeline;
+        nvrhi::GraphicsPipelineHandle          bakePipeline;
     };
 
     struct ShadowPassResources {
@@ -185,6 +224,7 @@ private:
     SharedResources                                    m_Shared;
     CullPassResources                                  m_CullPass;
     TreePassResources                                  m_TreePass;
+    ImpostorPassResources                              m_ImpostorPass;
     ShadowPassResources                                m_ShadowPass;
     TerrainPassResources                               m_TerrainPass;
     SkyPassResources                                   m_SkyPass;
@@ -200,6 +240,7 @@ private:
     nvrhi::BufferHandle                                m_ReadbackBuffers[k_QueuedFrames];
     uint32_t                                           m_ReadbackFrameIndex    = 0;
     uint32_t                                           m_ReadbackCountEntries  = 0;
+    uint32_t                                           m_ReadbackImpostorEntries = 0;
     uint32_t                                           m_ReadbackShadowEntries = 0;
 
     UIData&                                            m_UI;
@@ -222,11 +263,17 @@ private:
     std::vector<uint32_t>                              m_MaxSlotCounts;     // max instances per slot [numSlots]
     uint32_t                                           m_VisBufferSize = 0;
 
+    // Impostor terminal LOD layout (main pass: numAssets slots)
+    std::vector<uint32_t>                              m_ImpostorSlotOffsets;
+    std::vector<uint32_t>                              m_ImpostorMaxSlotCounts;
+    uint32_t                                           m_ImpostorVisBufferSize = 0;
+
     // Region CPU-frustum-cull visibility (written each frame, uploaded to regionVisibleBuffer)
     std::vector<uint32_t>                              m_RegionVisibleStaging;
 
     // Indirect args staging (pre-filled with indexCount, instanceCount=0)
     std::vector<nvrhi::DrawIndexedIndirectArguments>   m_IndirectArgsStaging;
+    std::vector<nvrhi::DrawIndirectArguments>          m_ImpostorIndirectArgsStaging;
     std::vector<nvrhi::DrawIndexedIndirectArguments>   m_ShadowIndirectArgsStaging;
 
     // Shadow slot layout (per-asset, no LOD axis)
@@ -239,6 +286,7 @@ private:
     bool _InitShared();
     bool _InitCullPass(nvrhi::ICommandList* initCL);
     bool _InitTreePass(nvrhi::ICommandList* initCL, engine::CommonRenderPasses& commonPasses);
+    bool _InitImpostorPass();
     bool _InitShadowPass();
     bool _InitTerrainPass(nvrhi::ICommandList* initCL);
     bool _InitSkyPass();
@@ -253,6 +301,7 @@ private:
     void _BuildSlotLayout();
     void _UploadCullBuffers(nvrhi::ICommandList* commandList);
     void _RebuildCullBindings();
+    bool _BakeImpostors(nvrhi::ICommandList* commandList);
 
     // -----------------------------------------------------------------------
     // Render helpers
@@ -268,6 +317,7 @@ private:
     void _RenderSkyPass(nvrhi::IFramebuffer* framebuffer);
     void _RenderShadowPass();
     void _RenderScenePass(nvrhi::IFramebuffer* framebuffer);
+    void _RenderImpostorPass(nvrhi::IFramebuffer* framebuffer);
 };
 
 } // namespace Xylem

@@ -278,15 +278,13 @@ void SceneRegistry::_rebuildRegion(RegionDef& region) {
     const uint32_t seedRot = g_MasterSeed ^ 0xFEEDBEEF ^ static_cast<uint32_t>(&region - m_Regions.data());
 
     const dm::float2 range = region.bounds.diagonal();
-    const dm::affine3 xRotOnly = dm::rotation(dm::float3(1.f, 0.f, 0.f), -dm::PI_f / 2.0f);
 
     // Compute max radius for spatial grid cell size.
     float maxRadius = 0.f;
     for (size_t aid : region.assetIds) {
         const auto* asset = findAsset(aid);
         if (!asset || asset->lods.empty()) continue;
-        dm::box3   rotatedBox = asset->lods[0].bbox * xRotOnly;
-        dm::float3 diag       = rotatedBox.diagonal();
+        dm::float3 diag = asset->lods[0].bbox.diagonal();
         float r = dm::max(diag.x, diag.z) * 0.5f;
         maxRadius = dm::max(maxRadius, r);
     }
@@ -404,8 +402,7 @@ void SceneRegistry::_rebuildRegion(RegionDef& region) {
         float posY = m_Terrain ? m_Terrain->getHeightAt(p.pos.x, p.pos.y) : 0.f;
 
         dm::affine3 worldMatrix =
-            dm::rotation(dm::float3(1.f, 0.f, 0.f), -dm::PI_f / 2.0f)
-            * dm::rotation(dm::float3(0.f, 1.f, 0.f), p.rotY)
+            dm::rotation(dm::float3(0.f, 1.f, 0.f), p.rotY)
             * dm::translation(dm::float3(p.pos.x, posY - 0.5f, p.pos.y));
 
         dm::float3x3 normalMatrix;

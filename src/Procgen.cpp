@@ -5,6 +5,13 @@
 
 using namespace Xylem::ProcGen;
 
+namespace {
+constexpr dm::float3 kGrowthForwardAxis = unit_j;               // +Y local
+constexpr dm::float3 kYawAxis           = dm::float3(0.f, 0.f, -1.f);
+constexpr dm::float3 kPitchAxis         = unit_i;
+constexpr dm::float3 kRollAxis          = kGrowthForwardAxis;
+}
+
 void LSystem::generate(uint32_t iterations) {
     lstring_t next;
     for (uint32_t i = 0; i < iterations; i++) {
@@ -41,7 +48,7 @@ void TreeGenerator::generateVertexAndIndexBuffers(const lstring_t& lSystemString
         switch (op) {
         case F:
             state.branchLength += state.stepLength;
-            state.pos          += dm::applyQuat(state.orientation, unit_k) * state.stepLength;
+            state.pos          += dm::applyQuat(state.orientation, kGrowthForwardAxis) * state.stepLength;
             state.radius       *= params.taperRatio  * (1.f + 0.03f * branchRand());
             state.stepLength   *= params.stepRatio   * (1.f + 0.03f * branchRand());
             state.baseRingIndex = createRing(state, buffers);
@@ -49,17 +56,17 @@ void TreeGenerator::generateVertexAndIndexBuffers(const lstring_t& lSystemString
         case X:
             break;
         case Y_POS:
-            state.orientation *= dm::rotationQuat(unit_j,  params.branchAngle);  break;
+            state.orientation *= dm::rotationQuat(kYawAxis,   params.branchAngle);  break;
         case Y_NEG:
-            state.orientation *= dm::rotationQuat(unit_j, -params.branchAngle);  break;
+            state.orientation *= dm::rotationQuat(kYawAxis,  -params.branchAngle);  break;
         case P_POS:
-            state.orientation *= dm::rotationQuat(unit_i,  params.branchAngle);  break;
+            state.orientation *= dm::rotationQuat(kPitchAxis, params.branchAngle);  break;
         case P_NEG:
-            state.orientation *= dm::rotationQuat(unit_i, -params.branchAngle);  break;
+            state.orientation *= dm::rotationQuat(kPitchAxis,-params.branchAngle);  break;
         case R_POS:
-            state.orientation *= dm::rotationQuat(unit_k,  params.branchAngle);  break;
+            state.orientation *= dm::rotationQuat(kRollAxis,  params.branchAngle);  break;
         case R_NEG:
-            state.orientation *= dm::rotationQuat(unit_k, -params.branchAngle);  break;
+            state.orientation *= dm::rotationQuat(kRollAxis, -params.branchAngle);  break;
         case S_PUSH:
             stateStack.push(state);
             state.radius     *= params.taperRatio  * (1.f + 0.03f * branchRand());
@@ -76,7 +83,7 @@ void TreeGenerator::generateVertexAndIndexBuffers(const lstring_t& lSystemString
 }
 
 uint32_t TreeGenerator::createRing(const TurtleState& state, Buffers& buffers) {
-    const dm::float3 forward = dm::applyQuat(state.orientation, unit_k);
+    const dm::float3 forward = dm::applyQuat(state.orientation, kGrowthForwardAxis);
     const dm::float3 right   = dm::applyQuat(state.orientation, unit_i);
     const dm::float3 up      = dm::cross(forward, right);
 
@@ -123,8 +130,15 @@ uint32_t TreeGenerator::createRing(const TurtleState& state, Buffers& buffers) {
         }
     }
 
-    buffers.bbox.m_mins = dm::min(buffers.bbox.m_mins, state.pos + state.radius * dm::normalize(dm::float3(-1.f)));
-    buffers.bbox.m_maxs = dm::max(buffers.bbox.m_maxs, state.pos + state.radius * dm::normalize(dm::float3( 1.f)));
+    // Ring vertices are placed at state.pos + radius * (cos α * right + sin α * up),
+    // i.e. anywhere on a circle of radius `state.radius` in the plane perpendicular
+    // to `forward`. The conservative AABB enclosing that circle for *any* ring
+    // orientation expands state.pos by ±radius along all three world axes.
+    // (The previous normalize(±1)*r only expanded by r/√3 ≈ 0.577r, which clipped
+    //  the silhouette in every downstream consumer of the bbox.)
+    const dm::float3 r3(state.radius);
+    buffers.bbox.m_mins = dm::min(buffers.bbox.m_mins, state.pos - r3);
+    buffers.bbox.m_maxs = dm::max(buffers.bbox.m_maxs, state.pos + r3);
 
     return nextRingIndex;
 }

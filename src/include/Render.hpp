@@ -105,7 +105,7 @@ struct CullConstantBufferEntry {
     uint32_t     numLods;
     float        _pad1a;
     float        _pad1b;
-    dm::float4   lodDistances[3];
+    dm::float4   lodDistances;
 
     // Hi-Z fields (read by CullCS for occlusion test)
     dm::float2   hizDimensions;    // mip 0 width, height

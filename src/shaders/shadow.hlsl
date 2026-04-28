@@ -1,10 +1,11 @@
 #include "../include/macros.h"
+#include "ShaderRegisterMap.hlsli"
 
 #pragma pack_matrix(row_major)
 
 static const uint NUM_CASCADES = 4;
 
-cbuffer CB : register(b0)
+cbuffer CB : register(XY_REG_B_TRADITIONAL_SHADOW_CB_FRAME)
 {
     float4x4 viewProj;
     float4x4 viewMatrix;
@@ -16,7 +17,7 @@ cbuffer CB : register(b0)
 };
 
 struct CascadeIdx { uint idx; };
-ConstantBuffer<CascadeIdx> cascadeRC : register(b1);
+ConstantBuffer<CascadeIdx> cascadeRC : register(XY_REG_B_TRADITIONAL_SHADOW_PUSH_C_CASCADE_INDEX);
 
 void tree_vs(
 	in float3 	i_pos 		: POSITION,

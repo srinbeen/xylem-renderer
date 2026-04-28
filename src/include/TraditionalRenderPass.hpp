@@ -18,12 +18,14 @@
 #include "Render.hpp"
 #include "UIData.hpp"
 #include "ViewHandler.hpp"
+#include "frame/FrameContracts.hpp"
+#include "frame/FrameStages.hpp"
 
 namespace Xylem {
 
 using namespace donut;
 
-class TraditionalRenderPass : public app::IRenderPass {
+class TraditionalRenderPass : public app::IRenderPass, public frame::IFrameStagedPass {
 public:
     static constexpr uint32_t m_QueuedFrames = 4;
     static constexpr uint32_t m_ShadowRes = 2048;
@@ -35,8 +37,15 @@ public:
 
     bool Init();
     void Animate(float seconds) override;
-    void BackBufferResizing() override { m_TreePass.pipeline = nullptr; m_TerrainPass.pipeline = nullptr; m_ShadowPass.treePipeline = nullptr; m_ShadowPass.terrainPipeline = nullptr; m_SkyPass.pipeline = nullptr; }
+    void BackBufferResizing() override {
+        m_StageResources.sceneTreeStage.pipeline = nullptr;
+        m_StageResources.sceneTerrainStage.pipeline = nullptr;
+        m_StageResources.shadowStage.treePipeline = nullptr;
+        m_StageResources.shadowStage.terrainPipeline = nullptr;
+        m_StageResources.skyStage.pipeline = nullptr;
+    }
     void Render(nvrhi::IFramebuffer* framebuffer) override;
+    const frame::FrameStageOrder& GetFrameStageOrder() const override { return frame::kDefaultFrameStageOrder; }
 
     // Hot-reload callbacks
     void onAssetsDirty(const std::vector<size_t>& dirtyAssetIndices);
@@ -59,7 +68,7 @@ private:
         nvrhi::BufferHandle       constantBuffer;
     };
 
-    // Main color pass — tree geometry
+    // Main color pass - tree geometry
     struct TreePassResources {
         nvrhi::ShaderHandle                    vertexShader;
         nvrhi::ShaderHandle                    pixelShader;
@@ -112,11 +121,16 @@ private:
         nvrhi::GraphicsPipelineHandle          pipeline;
     };
 
-    SharedResources                                    m_Shared;
-    TreePassResources                                  m_TreePass;
-    ShadowPassResources                                m_ShadowPass;
-    TerrainPassResources                               m_TerrainPass;
-    SkyPassResources                                   m_SkyPass;
+    struct StageOwnedResources {
+        SharedResources      frameShared;
+        ShadowPassResources  shadowStage;
+        SkyPassResources     skyStage;
+        TreePassResources    sceneTreeStage;
+        TerrainPassResources sceneTerrainStage;
+    };
+
+    StageOwnedResources                                m_StageResources;
+    frame::StageOutputs                                m_StageOutputs;
 
     nvrhi::CommandListHandle                           m_CommandList;
     ViewHandler&                                       m_ViewHandler;
@@ -169,3 +183,6 @@ private:
 } // namespace Xylem
 
 #endif // XYLEM_TRADITIONAL_RENDER_PASS_H
+
+
+

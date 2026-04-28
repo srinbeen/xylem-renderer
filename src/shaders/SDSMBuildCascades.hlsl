@@ -1,8 +1,9 @@
 #pragma pack_matrix(row_major)
+#include "ShaderRegisterMap.hlsli"
 
 static const uint NUM_CASCADES = 4;
 
-cbuffer SDSMInput : register(b0)
+cbuffer SDSMInput : register(XY_REG_B_COMPUTE_SDSM_CB_INPUT)
 {
     float4x4 worldToLight;          // view space is camera-space; worldToLight maps world->light
     float4x4 viewToWorldToLight;    // = inverse(viewMatrix) * worldToLight
@@ -21,7 +22,7 @@ cbuffer SDSMInput : register(b0)
     float2   _pad;
 };
 
-Texture2D<float2> hizTexture : register(t0);
+Texture2D<float2> hizTexture : register(XY_REG_T_COMPUTE_SDSM_SRV_HI_Z);
 
 struct SDSMCascadeOut {
     float4x4 lightViewProj[NUM_CASCADES];
@@ -29,7 +30,7 @@ struct SDSMCascadeOut {
     float4   shadowCasterMinLS[NUM_CASCADES];
     float4   shadowCasterMaxLS[NUM_CASCADES];
 };
-RWStructuredBuffer<SDSMCascadeOut> outBuffer : register(u0);
+RWStructuredBuffer<SDSMCascadeOut> outBuffer : register(XY_REG_U_COMPUTE_SDSM_UAV_CASCADE_OUT);
 
 groupshared float g_splits[NUM_CASCADES + 1];
 

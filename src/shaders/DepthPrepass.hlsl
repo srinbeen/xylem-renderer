@@ -1,12 +1,13 @@
 #pragma pack_matrix(row_major)
+#include "ShaderRegisterMap.hlsli"
 
-cbuffer CB : register(b0)
+cbuffer CB : register(XY_REG_B_COMPUTE_DEPTHPREPASS_CB_FRAME)
 {
     float4x4 viewProj;
 };
 
 struct RootConstant { uint slot; };
-ConstantBuffer<RootConstant> rc : register(b1);
+ConstantBuffer<RootConstant> rc : register(XY_REG_B_COMPUTE_DEPTHPREPASS_PUSH_C_SLOT);
 
 // Layout matches C++ Render::InstanceBufferEntry (104 bytes, packed).
 struct InstanceRenderData
@@ -16,9 +17,9 @@ struct InstanceRenderData
     uint     treeId;    // offset 100, size 4
 };
 
-StructuredBuffer<uint>                  visBuf      : register(t0);
-StructuredBuffer<InstanceRenderData>    instBuf     : register(t1);
-StructuredBuffer<uint>                  slotOffsets : register(t2);
+StructuredBuffer<uint>                  visBuf      : register(XY_REG_T_COMPUTE_DEPTHPREPASS_SRV_VIS);
+StructuredBuffer<InstanceRenderData>    instBuf     : register(XY_REG_T_COMPUTE_DEPTHPREPASS_SRV_INSTANCES);
+StructuredBuffer<uint>                  slotOffsets : register(XY_REG_T_COMPUTE_DEPTHPREPASS_SRV_SLOT_OFFSETS);
 
 void tree_vs(
     in float3  i_pos : POSITION,

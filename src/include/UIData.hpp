@@ -6,13 +6,13 @@
 
 namespace Xylem {
 
-enum class Pipeline { Traditional = 0, ComputeCull = 1 };
+enum class Pipeline { Traditional = 0, Compute = 1, MeshShader = 2 };
 
 struct UIData {
     bool ShowUI = true;
 
-    Pipeline activePipeline    = Pipeline::ComputeCull;
-    Pipeline requestedPipeline = Pipeline::ComputeCull;
+    Pipeline activePipeline    = Pipeline::Compute;
+    Pipeline requestedPipeline = Pipeline::Compute;
 
     float    gpuFrameTimeMs       = -1.0f; // -1 = not yet available
     float    cpuRenderTimeMs      = 0.0f;
@@ -37,6 +37,13 @@ struct UIData {
 
     float pssmLambda       = 0.85f; // PSSM/SDSM blend: 0=linear splits, 1=logarithmic splits
     float impostorAlphaClip = 0.25f;
+
+    // Mesh-shader pipeline stats
+    uint32_t asMeshletsDispatched = 0;
+    uint32_t asMeshletsCulled     = 0;
+    uint32_t msInvocations        = 0;
+    float    meshletMegaBufferMB  = 0.0f;
+    uint32_t totalMeshletCount    = 0;
 
     void*    shadowMapTexture = nullptr;  // nvrhi::ITexture*, set by active render pass
     std::vector<void*> shadowCascadeTextures;  // per-cascade nvrhi::ITexture* for debug display

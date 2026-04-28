@@ -40,7 +40,12 @@ int main(int __argc, const char** __argv)
 
     app::DeviceCreationParameters deviceParams;
 
-    #ifdef _DEBUG
+    #if DONUT_WITH_AFTERMATH
+        // Aftermath and the D3D12 debug layer are mutually exclusive — the debug
+        // layer intercepts the device in a way that prevents Aftermath from
+        // installing its GPU crash dump tracking.
+        deviceParams.enableAftermath = true;
+    #elif defined(_DEBUG)
         deviceParams.enableDebugRuntime         = true;
         deviceParams.enableNvrhiValidationLayer = true;
     #endif
@@ -52,6 +57,11 @@ int main(int __argc, const char** __argv)
         return 1;
     }
     log::info("Physical Device: %s", deviceManager->GetRendererString());
+
+    if (!deviceManager->GetDevice()->queryFeatureSupport(nvrhi::Feature::Meshlets)) {
+        log::fatal("Device does not support mesh shaders (Feature::Meshlets). Requires DX12 + SM 6.5 capable GPU.");
+        return 1;
+    }
 
     {
         auto* d3d12Device = static_cast<ID3D12Device*>(

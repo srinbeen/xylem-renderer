@@ -1,10 +1,11 @@
 #include "../include/macros.h"
+#include "ShaderRegisterMap.hlsli"
 
 #pragma pack_matrix(row_major)
 
 static const uint NUM_CASCADES = 4;
 
-cbuffer CB : register(b0)
+cbuffer CB : register(XY_REG_B_COMPUTE_TERRAIN_CB_FRAME)
 {
     float4x4 viewProj;
     float4x4 viewMatrix;
@@ -35,8 +36,8 @@ void terrain_vs(
     o_height   = i_pos.y;
 }
 
-Texture2DArray         t_ShadowMap     : register(t0);
-SamplerComparisonState s_ShadowSampler : register(s0);
+Texture2DArray         t_ShadowMap     : register(XY_REG_T_COMPUTE_TERRAIN_TEX_SHADOW_MAP);
+SamplerComparisonState s_ShadowSampler : register(XY_REG_S_COMPUTE_TERRAIN_SAMPLER_SHADOW);
 
 float SampleShadowCascade(float3 worldPos, uint cascadeIdx)
 {

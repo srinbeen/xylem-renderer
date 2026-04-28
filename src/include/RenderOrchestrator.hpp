@@ -11,7 +11,9 @@
 #include "ViewHandler.hpp"
 #include "TraditionalRenderPass.hpp"
 #include "ComputeRenderPass.hpp"
+#include "MeshShaderRenderPass.hpp"
 #include "UIRenderer.hpp"
+#include "frame/FrameStages.hpp"
 
 namespace Xylem {
 
@@ -28,6 +30,7 @@ public:
         , m_UI{ui}
         , m_Traditional{dm, registry, ui, m_ViewHandler}
         , m_Compute{dm, registry, ui, m_ViewHandler}
+        , m_MeshShader{dm, registry, ui, m_ViewHandler}
         , m_UIPass{dm, &registry, ui, &m_ViewHandler}
     {}
 
@@ -57,11 +60,13 @@ private:
     ViewHandler             m_ViewHandler;
     TraditionalRenderPass   m_Traditional;
     ComputeRenderPass       m_Compute;
+    MeshShaderRenderPass    m_MeshShader;
     UIRenderer              m_UIPass;
 
     std::shared_ptr<engine::ShaderFactory> m_ShaderFactory;
 
     app::IRenderPass* _activePass();
+    frame::IFrameStagedPass* _activeStagedPass();
 
     void _switchPipelineIfNeeded();
 };

@@ -1,3 +1,6 @@
 [submodule "Donut"]
 	path = Donut
 	url = git@github.com:srinbeen/Donut.git
+[submodule "meshoptimizer"]
+	path = meshoptimizer
+	url = https://github.com/zeux/meshoptimizer.git

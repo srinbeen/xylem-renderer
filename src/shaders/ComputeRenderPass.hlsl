@@ -1,10 +1,11 @@
 #pragma pack_matrix(row_major)
 
 #include "types.hlsli"
+#include "ShaderRegisterMap.hlsli"
 
 static const uint NUM_CASCADES = 4;
 
-cbuffer CB : register(b0)
+cbuffer CB : register(XY_REG_B_COMPUTE_SCENE_CB_FRAME)
 {
     float4x4 viewProj;
     float4x4 viewMatrix;
@@ -15,7 +16,7 @@ cbuffer CB : register(b0)
 };
 
 struct RootConstant { uint slot; };
-ConstantBuffer<RootConstant> rc : register(b1);
+ConstantBuffer<RootConstant> rc : register(XY_REG_B_COMPUTE_SCENE_PUSH_C_SLOT);
 
 // Layout matches C++ Render::InstanceBufferEntry (104 bytes, packed — HLSL
 // StructuredBuffers use natural layout, not cbuffer 16-byte-row padding).
@@ -26,9 +27,9 @@ struct InstanceRenderData
     uint     treeId;    // offset 100, size 4
 };
 
-StructuredBuffer<uint>                  visBuf       : register(t0);
-StructuredBuffer<InstanceRenderData>    instBuf      : register(t1);
-StructuredBuffer<uint>                  slotOffsets  : register(t2);
+StructuredBuffer<uint>                  visBuf       : register(XY_REG_T_COMPUTE_SCENE_SRV_VIS);
+StructuredBuffer<InstanceRenderData>    instBuf      : register(XY_REG_T_COMPUTE_SCENE_SRV_INSTANCES);
+StructuredBuffer<uint>                  slotOffsets  : register(XY_REG_T_COMPUTE_SCENE_SRV_SLOT_OFFSETS);
 
 
 void main_vs(
@@ -64,12 +65,12 @@ void main_vs(
 }
 
 
-Texture2D              t_Diffuse        : register(t3);
-Texture2D              t_NormalMap      : register(t4);
-Texture2DArray         t_ShadowMap      : register(t5);
+Texture2D              t_Diffuse        : register(XY_REG_T_COMPUTE_SCENE_TEX_DIFFUSE);
+Texture2D              t_NormalMap      : register(XY_REG_T_COMPUTE_SCENE_TEX_NORMAL_MAP);
+Texture2DArray         t_ShadowMap      : register(XY_REG_T_COMPUTE_SCENE_TEX_SHADOW_MAP);
 
-SamplerState           s_Sampler        : register(s0);
-SamplerComparisonState s_ShadowSampler  : register(s1);
+SamplerState           s_Sampler        : register(XY_REG_S_COMPUTE_SCENE_SAMPLER_MAIN);
+SamplerComparisonState s_ShadowSampler  : register(XY_REG_S_COMPUTE_SCENE_SAMPLER_SHADOW);
 
 
 float SampleShadowCascade(float3 worldPos, uint cascadeIdx)

@@ -1,14 +1,16 @@
 #pragma pack_matrix(row_major)
 
-cbuffer BakeCB : register(b0)
+#include "ShaderRegisterMap.hlsli"
+
+cbuffer BakeCB : register(XY_REG_B_COMPUTE_IMPOSTORBAKE_CB_BAKE)
 {
     float4x4    mvp;
     float4      _pad[12];
 };
 
-Texture2D    t_Diffuse   : register(t0);
-Texture2D    t_NormalMap : register(t1);
-SamplerState s_Sampler   : register(s0);
+Texture2D    t_Diffuse   : register(XY_REG_T_COMPUTE_IMPOSTORBAKE_TEX_DIFFUSE);
+Texture2D    t_NormalMap : register(XY_REG_T_COMPUTE_IMPOSTORBAKE_TEX_NORMAL_MAP);
+SamplerState s_Sampler   : register(XY_REG_S_COMPUTE_IMPOSTORBAKE_SAMPLER_MAIN);
 
 struct V2P
 {

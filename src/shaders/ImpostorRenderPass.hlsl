@@ -2,12 +2,13 @@
 
 #include "../include/macros.h"
 #include "types.hlsli"
+#include "ShaderRegisterMap.hlsli"
 
 static const uint NUM_CASCADES = 4;
 static const uint IMPOSTOR_AZIMUTH_VIEWS = XYLEM_IMPOSTOR_AZIMUTH_VIEWS;
 static const uint IMPOSTOR_ELEVATION_VIEWS = XYLEM_IMPOSTOR_ELEVATION_VIEWS;
 
-cbuffer CB : register(b0)
+cbuffer CB : register(XY_REG_B_COMPUTE_IMPOSTOR_CB_FRAME)
 {
     float4x4 viewProj;
     float4x4 viewMatrix;
@@ -27,7 +28,7 @@ cbuffer CB : register(b0)
     uint     numLods;
     float    _pad1a;
     float    _pad1b;
-    float4   lodDistances[3];
+    float4   lodDistances;
 
     float2   hizDimensions;
     float    maxHiZMip;
@@ -37,7 +38,7 @@ cbuffer CB : register(b0)
 };
 
 struct RootConstant { uint assetIndex; };
-ConstantBuffer<RootConstant> rc : register(b1);
+ConstantBuffer<RootConstant> rc : register(XY_REG_B_COMPUTE_IMPOSTOR_PUSH_C_ASSET_INDEX);
 
 struct InstanceRenderData
 {
@@ -54,23 +55,23 @@ struct CullInstanceData
     uint active;
 };
 
-StructuredBuffer<uint>               impostorVisBuf     : register(t0);
-StructuredBuffer<InstanceRenderData> instBuf            : register(t1);
-StructuredBuffer<uint>               impostorSlotOffsets : register(t2);
-StructuredBuffer<CullInstanceData>   cullData           : register(t3);
+StructuredBuffer<uint>               impostorVisBuf     : register(XY_REG_T_COMPUTE_IMPOSTOR_SRV_VIS);
+StructuredBuffer<InstanceRenderData> instBuf            : register(XY_REG_T_COMPUTE_IMPOSTOR_SRV_INSTANCES);
+StructuredBuffer<uint>               impostorSlotOffsets : register(XY_REG_T_COMPUTE_IMPOSTOR_SRV_SLOT_OFFSETS);
+StructuredBuffer<CullInstanceData>   cullData           : register(XY_REG_T_COMPUTE_IMPOSTOR_SRV_CULL_DATA);
 
-Texture2DArray                       t_ImpostorAlbedoAlpha : register(t4);
-Texture2DArray                       t_ImpostorNormal      : register(t5);
-Texture2DArray<float>                t_ImpostorDepth       : register(t6);
-Texture2DArray                       t_ShadowMap           : register(t7);
+Texture2DArray                       t_ImpostorAlbedoAlpha : register(XY_REG_T_COMPUTE_IMPOSTOR_TEX_ALBEDO);
+Texture2DArray                       t_ImpostorNormal      : register(XY_REG_T_COMPUTE_IMPOSTOR_TEX_NORMAL);
+Texture2DArray<float>                t_ImpostorDepth       : register(XY_REG_T_COMPUTE_IMPOSTOR_TEX_DEPTH);
+Texture2DArray                       t_ShadowMap           : register(XY_REG_T_COMPUTE_IMPOSTOR_TEX_SHADOW_MAP);
 
 // Per-asset bake-space bbox half extents. The render card and virtual
 // projections both use these bounds around the instance bbox center.
-StructuredBuffer<float4>             assetDims           : register(t8);
+StructuredBuffer<float4>             assetDims           : register(XY_REG_T_COMPUTE_IMPOSTOR_SRV_ASSET_DIMS);
 
-SamplerState                         s_Sampler          : register(s0);
-SamplerComparisonState               s_ShadowSampler    : register(s1);
-SamplerState                         s_DepthSampler     : register(s2);
+SamplerState                         s_Sampler          : register(XY_REG_S_COMPUTE_IMPOSTOR_SAMPLER_MAIN);
+SamplerComparisonState               s_ShadowSampler    : register(XY_REG_S_COMPUTE_IMPOSTOR_SAMPLER_SHADOW);
+SamplerState                         s_DepthSampler     : register(XY_REG_S_COMPUTE_IMPOSTOR_SAMPLER_DEPTH);
 
 struct V2P
 {

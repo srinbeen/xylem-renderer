@@ -1,10 +1,11 @@
 #include "../include/macros.h"
+#include "ShaderRegisterMap.hlsli"
 
 #pragma pack_matrix(row_major)
 
 static const uint NUM_CASCADES = 4;
 
-cbuffer CB : register(b0)
+cbuffer CB : register(XY_REG_B_TRADITIONAL_TREE_CB_FRAME)
 {
     float4x4 viewProj;
     float4x4 viewMatrix;
@@ -61,11 +62,11 @@ void main_vs(
 }
 
 
-Texture2D      t_Diffuse       : register(t0);
-Texture2D      t_NormalMap     : register(t1);
-Texture2DArray t_ShadowMap     : register(t2);
-SamplerState           s_Sampler        : register(s0);
-SamplerComparisonState s_ShadowSampler  : register(s1);
+Texture2D      t_Diffuse       : register(XY_REG_T_TRADITIONAL_TREE_TEX_DIFFUSE);
+Texture2D      t_NormalMap     : register(XY_REG_T_TRADITIONAL_TREE_TEX_NORMAL_MAP);
+Texture2DArray t_ShadowMap     : register(XY_REG_T_TRADITIONAL_TREE_TEX_SHADOW_MAP);
+SamplerState           s_Sampler        : register(XY_REG_S_TRADITIONAL_TREE_SAMPLER_MAIN);
+SamplerComparisonState s_ShadowSampler  : register(XY_REG_S_TRADITIONAL_TREE_SAMPLER_SHADOW);
 
 float SampleShadowCascade(float3 worldPos, uint cascadeIdx)
 {

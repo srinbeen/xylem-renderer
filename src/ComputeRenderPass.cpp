@@ -2205,8 +2205,11 @@ bool ComputeRenderPass::_BakeImpostors(nvrhi::ICommandList* commandList) {
     if (!m_StageResources.impostor.albedoAlphaTexture || !m_StageResources.impostor.normalTexture || !m_StageResources.impostor.depthTexture)
         return false;
 
-    m_StageResources.impostor.bakeFramebuffers.resize(numSlices);
-    for (uint32_t slice = 0; slice < numSlices; slice++) {
+    // Framebuffers for each array slice are created just-in-time inside the bake
+    // loop below. They consume RTV/DSV descriptor heap slots, so persisting one
+    // per (asset × view) blew the heap once asset counts grew. They're only
+    // needed during this single bake, so let them go out of scope per-slice.
+    auto makeBakeFramebuffer = [&](uint32_t slice) {
         nvrhi::FramebufferDesc fbDesc;
         fbDesc
             .addColorAttachment(nvrhi::FramebufferAttachment()
@@ -2218,11 +2221,12 @@ bool ComputeRenderPass::_BakeImpostors(nvrhi::ICommandList* commandList) {
             .setDepthAttachment(nvrhi::FramebufferAttachment()
                 .setTexture(m_StageResources.impostor.depthTexture)
                 .setArraySlice(slice));
+        return device->createFramebuffer(fbDesc);
+    };
 
-        m_StageResources.impostor.bakeFramebuffers[slice] = device->createFramebuffer(fbDesc);
-        if (!m_StageResources.impostor.bakeFramebuffers[slice])
-            return false;
-    }
+    nvrhi::FramebufferHandle pipelineProtoFB = makeBakeFramebuffer(0);
+    if (!pipelineProtoFB)
+        return false;
 
     m_StageResources.impostor.bakeBindingSets.resize(m_StageResources.sceneTree.textureSets.size());
     for (size_t i = 0; i < m_StageResources.sceneTree.textureSets.size(); i++) {
@@ -2247,7 +2251,7 @@ bool ComputeRenderPass::_BakeImpostors(nvrhi::ICommandList* commandList) {
     psoDesc.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
     psoDesc.renderState.rasterState.setCullNone();
     m_StageResources.impostor.bakePipeline = device->createGraphicsPipeline(
-        psoDesc, m_StageResources.impostor.bakeFramebuffers[0]->getFramebufferInfo());
+        psoDesc, pipelineProtoFB->getFramebufferInfo());
     if (!m_StageResources.impostor.bakePipeline)
         return false;
 
@@ -2277,7 +2281,11 @@ bool ComputeRenderPass::_BakeImpostors(nvrhi::ICommandList* commandList) {
 
         for (uint32_t vi = 0; vi < k_ImpostorViewCount; vi++) {
             const uint32_t slice = ai * k_ImpostorViewCount + vi;
-            nvrhi::IFramebuffer* framebuffer = m_StageResources.impostor.bakeFramebuffers[slice];
+            nvrhi::FramebufferHandle framebuffer = (slice == 0)
+                ? pipelineProtoFB
+                : makeBakeFramebuffer(slice);
+            if (!framebuffer)
+                return false;
 
             nvrhi::utils::ClearColorAttachment(commandList, framebuffer, 0, nvrhi::Color(0.f, 0.f, 0.f, 0.f));
             nvrhi::utils::ClearColorAttachment(commandList, framebuffer, 1, nvrhi::Color(0.5f, 0.5f, 1.f, 0.f));

@@ -141,7 +141,6 @@ private:
         nvrhi::TextureHandle                   debugAlbedoAtlasTexture;
         nvrhi::TextureHandle                   debugNormalAtlasTexture;
         nvrhi::TextureHandle                   debugDepthAtlasTexture;
-        std::vector<nvrhi::FramebufferHandle>  bakeFramebuffers;
         nvrhi::GraphicsPipelineHandle          pipeline;
         nvrhi::GraphicsPipelineHandle          bakePipeline;
     };

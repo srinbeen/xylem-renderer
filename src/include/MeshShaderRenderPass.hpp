@@ -17,6 +17,7 @@
 #include "UIData.hpp"
 #include "ViewHandler.hpp"
 #include "Meshlet.hpp"
+#include "macros.h"
 #include "shaders/ShaderContracts.hpp"
 #include "frame/FrameContracts.hpp"
 #include "frame/FrameStages.hpp"
@@ -38,6 +39,10 @@ public:
     static constexpr uint32_t k_QueuedFrames  = 3;
     static constexpr uint32_t k_ShadowRes     = 2048;
     static constexpr float    k_CapacitySlack = 1.5f;
+    static constexpr uint32_t k_ImpostorAzimuthViews   = XYLEM_IMPOSTOR_AZIMUTH_VIEWS;
+    static constexpr uint32_t k_ImpostorElevationViews = XYLEM_IMPOSTOR_ELEVATION_VIEWS;
+    static constexpr uint32_t k_ImpostorViewCount      = XYLEM_IMPOSTOR_VIEW_COUNT;
+    static constexpr uint32_t k_ImpostorBakeResolution = 256;
 
     MeshShaderRenderPass(app::DeviceManager* dm, SceneRegistry& registry, UIData& ui, ViewHandler& vh)
         : IRenderPass{dm}, m_Registry{registry}, m_UI{ui}, m_ViewHandler{vh} {}
@@ -119,6 +124,12 @@ private:
         nvrhi::BufferHandle              shadowDispatchArgsBuffer;
         nvrhi::BufferHandle              shadowUniqueCounter;   // UAV raw, single uint32
 
+        // Impostor terminal-LOD slot buffers (numAssets slots, one per asset)
+        nvrhi::BufferHandle              impostorSlotOffsetBuffer;   // SRV uint32[numAssets]
+        nvrhi::BufferHandle              impostorCountBuffer;        // UAV uint32[numAssets]
+        nvrhi::BufferHandle              impostorVisBuffer;          // UAV uint32[impostorVisBufferSize]
+        nvrhi::BufferHandle              impostorIndirectArgsBuffer; // UAV DrawIndirectArguments[numAssets]
+
         nvrhi::BufferHandle              regionVisibleBuffer;
     };
 
@@ -133,6 +144,33 @@ private:
         nvrhi::BindingLayoutHandle       bindingLayout;
         std::vector<nvrhi::BindingSetHandle> bindingSets;
         nvrhi::MeshletPipelineHandle     pipeline;
+    };
+
+    // Hemi-octahedral impostor render + bake. Mirrors ComputeRenderPass's
+    // ImpostorPassResources — impostors are drawn as quad cards via the same
+    // VS+PS pipeline (ImpostorRenderPass.hlsl). Slots are per-asset.
+    struct ImpostorPassResources {
+        nvrhi::ShaderHandle                    vertexShader;
+        nvrhi::ShaderHandle                    pixelShader;
+        nvrhi::ShaderHandle                    bakeVertexShader;
+        nvrhi::ShaderHandle                    bakePixelShader;
+        nvrhi::InputLayoutHandle               bakeInputLayout;
+        nvrhi::BindingLayoutHandle             bindingLayout;
+        nvrhi::BindingLayoutHandle             bakeBindingLayout;
+        nvrhi::SamplerHandle                   sampler;
+        nvrhi::SamplerHandle                   depthSampler;
+        std::vector<nvrhi::BindingSetHandle>   bindingSets;     // one per texture set
+        std::vector<nvrhi::BindingSetHandle>   bakeBindingSets; // one per texture set
+        nvrhi::BufferHandle                    bakeConstantBuffer;
+        nvrhi::BufferHandle                    assetDimsBuffer;     // SRV float4[numAssets]
+        nvrhi::TextureHandle                   albedoAlphaTexture;  // Tex2DArray, RGBA8
+        nvrhi::TextureHandle                   normalTexture;       // Tex2DArray, RGBA8
+        nvrhi::TextureHandle                   depthTexture;        // Tex2DArray, D32
+        nvrhi::TextureHandle                   debugAlbedoAtlasTexture;
+        nvrhi::TextureHandle                   debugNormalAtlasTexture;
+        nvrhi::TextureHandle                   debugDepthAtlasTexture;
+        nvrhi::GraphicsPipelineHandle          pipeline;
+        nvrhi::GraphicsPipelineHandle          bakePipeline;
     };
 
     struct ShadowPassResources {
@@ -220,6 +258,7 @@ private:
         MeshletResources      sceneMeshletData;
         CullPassResources     cull;
         DrawResources         sceneDraw;
+        ImpostorPassResources impostor;
         ShadowPassResources   shadow;
         DepthPrepassResources depthPrepass;
         HiZPassResources      hiz;
@@ -265,16 +304,22 @@ private:
     std::vector<uint32_t>                             m_ShadowASInvocsPerSlot;
     uint32_t                                          m_ShadowVisBufferSize = 0;
 
+    // Impostor terminal-LOD slot layout (per-asset: numAssets slots)
+    std::vector<uint32_t>                             m_ImpostorSlotOffsets;
+    std::vector<uint32_t>                             m_ImpostorMaxSlotCounts;
+    uint32_t                                          m_ImpostorVisBufferSize = 0;
+
     // Dispatch arg templates (re-uploaded each frame to reset groupsX to 0).
     struct DispatchRecord { uint32_t slotIdx; uint32_t gx; uint32_t gy; uint32_t gz; };
     std::vector<DispatchRecord>                       m_MainDispatchArgsStaging;
     std::vector<DispatchRecord>                       m_ShadowDispatchArgsStaging;
 
-    // Readback ring: [main counts][shadow counts][shadow unique]
+    // Readback ring: [main counts][shadow counts][impostor counts][shadow unique]
     nvrhi::BufferHandle                               m_ReadbackBuffers[k_QueuedFrames];
-    uint32_t                                          m_ReadbackFrameIndex    = 0;
-    uint32_t                                          m_ReadbackMainEntries   = 0;
-    uint32_t                                          m_ReadbackShadowEntries = 0;
+    uint32_t                                          m_ReadbackFrameIndex      = 0;
+    uint32_t                                          m_ReadbackMainEntries     = 0;
+    uint32_t                                          m_ReadbackShadowEntries   = 0;
+    uint32_t                                          m_ReadbackImpostorEntries = 0;
 
     // -----------------------------------------------------------------------
     // Init helpers
@@ -288,6 +333,8 @@ private:
     bool _InitSDSMPass();
     bool _InitTerrainPass(nvrhi::ICommandList* initCL);
     bool _InitSkyPass();
+    bool _InitImpostorPass();
+    bool _BakeImpostors(nvrhi::ICommandList* commandList);
     bool _LoadBarkTextures(nvrhi::ICommandList* initCL, engine::CommonRenderPasses& commonPasses);
 
     void _RebuildMeshletMegabuffers(nvrhi::ICommandList* cl);
@@ -317,6 +364,8 @@ private:
     void _RenderSkyPass(nvrhi::IFramebuffer* framebuffer);
     void _RenderShadowPass();
     void _RenderScenePass(nvrhi::IFramebuffer* framebuffer);
+    void _RenderImpostorPass(nvrhi::IFramebuffer* framebuffer);
+    void _RebuildImpostorBindingSets();
 };
 
 } // namespace Xylem

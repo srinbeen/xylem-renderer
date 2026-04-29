@@ -112,6 +112,7 @@ namespace Mesh {
 namespace Cull {
 inline constexpr uint32_t kCB_Frame = 0;
 inline constexpr uint32_t kSRV_HiZ = 6;
+inline constexpr uint32_t kSRV_ImpostorSlotOffsets = 7;
 inline constexpr uint32_t kSRV_InstanceData = 1;
 inline constexpr uint32_t kSRV_MainInvocations = 3;
 inline constexpr uint32_t kSRV_MainSlotOffsets = 2;
@@ -119,6 +120,9 @@ inline constexpr uint32_t kSRV_RegionData = 0;
 inline constexpr uint32_t kSRV_ShadowInvocations = 5;
 inline constexpr uint32_t kSRV_ShadowSlotOffsets = 4;
 inline constexpr uint32_t kSampler_HiZ = 0;
+inline constexpr uint32_t kUAV_ImpostorCount = 8;
+inline constexpr uint32_t kUAV_ImpostorIndirectArgs = 10;
+inline constexpr uint32_t kUAV_ImpostorVis = 9;
 inline constexpr uint32_t kUAV_MainCount = 1;
 inline constexpr uint32_t kUAV_MainDispatch = 3;
 inline constexpr uint32_t kUAV_MainRegionVis = 0;

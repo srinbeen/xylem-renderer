@@ -37,6 +37,8 @@ cbuffer CB : register(XY_REG_B_MESH_CULL_CB_FRAME)
     float2   hizDimensions;
     float    maxHiZMip;
     uint     hizEnabled;
+    float    impostorAlphaClip;
+    float3   _pad2;
 };
 
 struct CullInstanceData
@@ -58,6 +60,7 @@ StructuredBuffer<uint>             mainSlotOffsets        : register(XY_REG_T_ME
 StructuredBuffer<uint>             mainInvocsPerSlot      : register(XY_REG_T_MESH_CULL_SRV_MAIN_INVOCATIONS);
 StructuredBuffer<uint>             shadowSlotOffsets      : register(XY_REG_T_MESH_CULL_SRV_SHADOW_SLOT_OFFSETS);
 StructuredBuffer<uint>             shadowInvocsPerSlot    : register(XY_REG_T_MESH_CULL_SRV_SHADOW_INVOCATIONS);
+StructuredBuffer<uint>             impostorSlotOffsets    : register(XY_REG_T_MESH_CULL_SRV_IMPOSTOR_SLOT_OFFSETS);
 
 RWStructuredBuffer<uint>           mainRegionVisBuf       : register(XY_REG_U_MESH_CULL_UAV_MAIN_REGION_VIS);
 RWStructuredBuffer<uint>           mainSlotCountBuf       : register(XY_REG_U_MESH_CULL_UAV_MAIN_COUNT);
@@ -67,12 +70,16 @@ RWStructuredBuffer<uint>           shadowSlotCountBuf     : register(XY_REG_U_ME
 RWStructuredBuffer<uint>           shadowVisBuf           : register(XY_REG_U_MESH_CULL_UAV_SHADOW_VIS);
 RWByteAddressBuffer                shadowDispatchArgs     : register(XY_REG_U_MESH_CULL_UAV_SHADOW_DISPATCH);
 RWByteAddressBuffer                shadowUniqueCounter    : register(XY_REG_U_MESH_CULL_UAV_SHADOW_UNIQUE);
+RWStructuredBuffer<uint>           impostorSlotCountBuf   : register(XY_REG_U_MESH_CULL_UAV_IMPOSTOR_COUNT);
+RWStructuredBuffer<uint>           impostorVisBuf         : register(XY_REG_U_MESH_CULL_UAV_IMPOSTOR_VIS);
+RWByteAddressBuffer                impostorIndirectArgs   : register(XY_REG_U_MESH_CULL_UAV_IMPOSTOR_INDIRECT_ARGS);
 
 Texture2D<float2>                  hizTexture             : register(XY_REG_T_MESH_CULL_SRV_HI_Z);
 SamplerState                       hizSampler             : register(XY_REG_S_MESH_CULL_SAMPLER_HI_Z);
 
 bool DoesAABBIntersectFrustum(box3 bbox, frustum f);
 uint SelectLOD(box3 bbox);
+bool SelectImpostor(box3 bbox);
 bool IsOccludedByHiZ(box3 bbox);
 
 [numthreads(64, 1, 1)]
@@ -94,6 +101,21 @@ void MeshCullMain(uint3 dtid : SV_DispatchThreadID)
     if (!mainRegionVisBuf[inst.regionId]) return;
     if (!DoesAABBIntersectFrustum(inst.bbox, viewFrustum)) return;
     if (IsOccludedByHiZ(inst.bbox)) return;
+
+    if (SelectImpostor(inst.bbox))
+    {
+        uint ai = inst.baseSlot / numLods;
+
+        uint writeIdx;
+        InterlockedAdd(impostorSlotCountBuf[ai], 1, writeIdx);
+        impostorVisBuf[impostorSlotOffsets[ai] + writeIdx] = idx;
+
+        // DrawIndirectArguments layout (16 bytes per asset):
+        //   offset 0: vertexCount, offset 4: instanceCount, offset 8: startVertex, offset 12: startInstance
+        uint dummy;
+        impostorIndirectArgs.InterlockedAdd(ai * 16 + 4, 1, dummy);
+        return;
+    }
 
     uint lod  = SelectLOD(inst.bbox);
     uint slot = inst.baseSlot + lod;
@@ -199,6 +221,13 @@ uint SelectLOD(box3 bbox)
             return i;
     }
     return numLods - 1;
+}
+
+bool SelectImpostor(box3 bbox)
+{
+    float3 nearest = clamp(cameraPos, bbox.min, bbox.max);
+    float dist = distance(cameraPos, nearest);
+    return dist >= lodDistances[numLods - 1].x;
 }
 
 bool IsOccludedByHiZ(box3 bbox)

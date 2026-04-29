@@ -127,17 +127,21 @@ float3 ImpostorViewDirection(uint viewIndex)
     return HemiOctahedronToUnitVector(ImpostorViewGridUV(viewIndex));
 }
 
-void ImpostorViewBasis(uint viewIndex, out float3 dirToCamera, out float3 right, out float3 viewUp)
+void ViewBasis(float3 dirToCamera, out float3 right, out float3 viewUp)
 {
     float3 worldUp = float3(0.0, 1.0, 0.0);
-
-    dirToCamera = ImpostorViewDirection(viewIndex);
     float3 horizontal = float3(dirToCamera.x, 0.0, dirToCamera.z);
     float horizontalLen = length(horizontal);
     right = (horizontalLen >= 1e-6)
         ? normalize(cross(worldUp, -horizontal / horizontalLen))
         : float3(1.0, 0.0, 0.0);
     viewUp = normalize(cross(-dirToCamera, right));
+}
+
+void ImpostorViewBasis(uint viewIndex, out float3 dirToCamera, out float3 right, out float3 viewUp)
+{
+    dirToCamera = ImpostorViewDirection(viewIndex);
+    ViewBasis(dirToCamera, right, viewUp);
 }
 
 
@@ -157,29 +161,43 @@ void SelectImpostorViews(float3 dirToCamera, out uint3 viewIndices, out float3 w
 
     uint maxBaseX = (IMPOSTOR_AZIMUTH_VIEWS > 1u) ? (IMPOSTOR_AZIMUTH_VIEWS - 2u) : 0u;
     uint maxBaseY = (IMPOSTOR_ELEVATION_VIEWS > 1u) ? (IMPOSTOR_ELEVATION_VIEWS - 2u) : 0u;
+    // bottom-left atlas index within a quad
+    // clamped to one ring of outermost atlas to allow for blending
     float2 baseF = min(floor(grid), float2((float)maxBaseX, (float)maxBaseY));
     float2 frac = grid - baseF;
 
-    uint2 c00 = uint2((uint)baseF.x, (uint)baseF.y);
-    uint2 c10 = uint2(min(c00.x + 1u, IMPOSTOR_AZIMUTH_VIEWS - 1u), c00.y);
-    uint2 c01 = uint2(c00.x, min(c00.y + 1u, IMPOSTOR_ELEVATION_VIEWS - 1u));
-    uint2 c11 = uint2(c10.x, c01.y);
+    // bottom/top-left/right
+    uint2 bl = uint2((uint)baseF.x, (uint)baseF.y);
+    uint2 br = uint2(min(bl.x + 1u, IMPOSTOR_AZIMUTH_VIEWS - 1u), bl.y);
+    uint2 tl = uint2(bl.x, min(bl.y + 1u, IMPOSTOR_ELEVATION_VIEWS - 1u));
+    uint2 tr = uint2(br.x, tl.y);
 
-    if (frac.x + frac.y <= 1.0)
+    // within the right triangle (defined cw)
+    // frac.x + frac.y == 1.0 : on the diagonal
+    // therefore <= 1.0 is inside tri, > 1.0 is in other tri
+    /*
+     *  |\
+     *  | \  <-- outside tri barycentric coords > 1
+     *  |__\
+     */
+    
+    float bary = frac.x + frac.y;
+    if (bary <= 1.0)
     {
         viewIndices = uint3(
-            ImpostorViewIndex(c00),
-            ImpostorViewIndex(c10),
-            ImpostorViewIndex(c01));
-        weights = float3(1.0 - frac.x - frac.y, frac.x, frac.y);
+            ImpostorViewIndex(bl),
+            ImpostorViewIndex(tl),
+            ImpostorViewIndex(br));
+        weights = float3(1.0 - bary, frac.y, frac.x);
     }
     else
     {
         viewIndices = uint3(
-            ImpostorViewIndex(c11),
-            ImpostorViewIndex(c10),
-            ImpostorViewIndex(c01));
-        weights = float3(frac.x + frac.y - 1.0, 1.0 - frac.y, 1.0 - frac.x);
+            ImpostorViewIndex(br),
+            ImpostorViewIndex(tl),
+            ImpostorViewIndex(tr));
+        // treat tr as origin and 1-x as +x and 1-y as +y
+        weights = float3(1.0 - frac.y, 1.0 - frac.x, bary - 1.0);
     }
 
     weights = max(weights, 0.0);
@@ -236,30 +254,29 @@ void impostor_vs(
     float3 weights;
     SelectImpostorViews(dirToCameraBake, viewIndices, weights);
 
-    // Cylindrical billboard: right is the view's horizontal axis (Y zeroed so
-    // the card stays upright as the camera pitches), up is world Y.
-    float3 right = normalize(float3(viewMatrix[0][0], 0.0, viewMatrix[2][0]));
-    float3 up    = float3(0.0, 1.0, 0.0);
+    // Construct a viewpoint-oriented basis that prevents roll and faces the camera directly
+    float3 worldUp = float3(0.0, 1.0, 0.0);
+    float3 horizontal = float3(dirToCameraWorld.x, 0.0, dirToCameraWorld.z);
+    float horizontalLen = length(horizontal);
 
-    // Size the billboard from the actual card axes, not from any one selected
-    // frame. The three frame projections below then get equal geometric footing.
-    float3 cardRightBake = normalize(mul(right, transpose(inst.normal)));
-    float3 cardUpBake = normalize(mul(up, transpose(inst.normal)));
-    float cardHalfWidth = max(dot(dims, abs(cardRightBake)), 0.01);
-    float cardHalfHeight = max(dot(dims, abs(cardUpBake)), 0.01);
+    float3 camRightInWorld, camUpInWorld;
+    ViewBasis(dirToCameraWorld, camRightInWorld, camUpInWorld);
+    float3 worldHalfExt = (cull.bbox.max - cull.bbox.min) * 0.5;
 
-    float3 center = worldCenter;
+
+    float cardHalfWidth = max(dot(worldHalfExt, abs(camRightInWorld)), 0.01);
+    float cardHalfHeight = max(dot(worldHalfExt, abs(camUpInWorld)), 0.01);
 
     float2 corner;
     corner.x = (vertexId == 1 || vertexId == 3) ? 1.0 : -1.0;
-    corner.y = (vertexId >= 2) ? 1.0 : 0.0;
+    corner.y = (vertexId >= 2) ? 1.0 : -1.0;
 
-    float3 worldPos = center
-        + right * (corner.x * cardHalfWidth)
-        + up * ((corner.y - 0.5) * 2.0 * cardHalfHeight);
+    float3 worldPos = worldCenter
+        + camRightInWorld  * (corner.x * cardHalfWidth)
+        + camUpInWorld     * (corner.y * cardHalfHeight);
 
-    float3 relWorld = worldPos - center;
-    float3 relBake = mul(relWorld, transpose(inst.normal));
+    float3 vertWorld = worldPos - worldCenter;
+    float3 vertBake = mul(vertWorld, transpose(inst.normal));
 
     float2 uv0;
     float2 uv1;
@@ -273,9 +290,9 @@ void impostor_vs(
     float halfDepth0;
     float halfDepth1;
     float halfDepth2;
-    ProjectImpostorFrame(viewIndices.x, dims, center, relBake, inst.normal, uv0, frameWorldPos0, depthAxis0, halfDepth0);
-    ProjectImpostorFrame(viewIndices.y, dims, center, relBake, inst.normal, uv1, frameWorldPos1, depthAxis1, halfDepth1);
-    ProjectImpostorFrame(viewIndices.z, dims, center, relBake, inst.normal, uv2, frameWorldPos2, depthAxis2, halfDepth2);
+    ProjectImpostorFrame(viewIndices.x, dims, worldCenter, vertBake, inst.normal, uv0, frameWorldPos0, depthAxis0, halfDepth0);
+    ProjectImpostorFrame(viewIndices.y, dims, worldCenter, vertBake, inst.normal, uv1, frameWorldPos1, depthAxis1, halfDepth1);
+    ProjectImpostorFrame(viewIndices.z, dims, worldCenter, vertBake, inst.normal, uv2, frameWorldPos2, depthAxis2, halfDepth2);
 
     o.pos          = mul(float4(worldPos, 1.0), viewProj);
     o.frameWorldPos0 = frameWorldPos0;
@@ -388,10 +405,18 @@ void impostor_ps(
     // Keep depth writes stable by using the card depth. Writing the baked
     // per-pixel depth exposes atlas-resolution quantization as visible bands.
     // Apply a tiny shader-side bias because SV_Depth bypasses raster depth bias.
+
+float3 toCamera = normalize(cameraPos - depthWorldPos);
+float worldSpaceBias = 0.1; 
+float3 biasedWorldPos = depthWorldPos; // + toCamera * worldSpaceBias;
+
+float4 clipPos = mul(float4(biasedWorldPos, 1.0), viewProj);
+float projectedDepth = clipPos.z / clipPos.w;
+
 #if XYLEM_USE_REVERSE_Z
-    o_depth = min(i.pos.z + 5e-4, 1.0);
+    o_depth = projectedDepth;
 #else
-    o_depth = max(i.pos.z - 5e-4, 0.0);
+    o_depth = projectedDepth;
 #endif
     o_color = float4(blendedAlbedo * lighting, blendedAlpha);
 }

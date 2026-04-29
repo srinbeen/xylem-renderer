@@ -867,7 +867,7 @@ void ComputeRenderPass::_RenderDepthPrepass() {
         #else
             pso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
         #endif
-            pso.renderState.rasterState.setCullNone();
+            pso.renderState.rasterState.setCullBack();
             m_StageResources.depthPrepass.terrainPipeline = GetDevice()->createGraphicsPipeline(
                 pso, m_StageResources.depthPrepass.framebuffer->getFramebufferInfo());
         }
@@ -1181,14 +1181,11 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     frame::PublishStageOutputsToUI(m_StageOutputs, m_UI);
 
     // Impostor atlas debug pointers. Stable preview textures; the
-    // selected array slice is copied into them at the end of Render.
+    // selected asset's atlas sheet is copied into them at the end of Render.
     m_UI.impostorAssetCount     = static_cast<uint32_t>(m_GPUAssets.size());
     m_UI.impostorViewsPerAsset  = k_ImpostorViewCount;
     m_UI.impostorAzimuthViews   = k_ImpostorAzimuthViews;
     m_UI.impostorElevationViews = k_ImpostorElevationViews;
-    m_UI.impostorAlbedoTexture       = m_StageResources.impostor.debugAlbedoTexture;
-    m_UI.impostorNormalTexture       = m_StageResources.impostor.debugNormalTexture;
-    m_UI.impostorDepthTexture        = m_StageResources.impostor.debugDepthTexture;
     m_UI.impostorAlbedoAtlasTexture  = m_StageResources.impostor.debugAlbedoAtlasTexture;
     m_UI.impostorNormalAtlasTexture  = m_StageResources.impostor.debugNormalAtlasTexture;
     m_UI.impostorDepthAtlasTexture   = m_StageResources.impostor.debugDepthAtlasTexture;
@@ -1392,9 +1389,6 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         && m_StageResources.impostor.albedoAlphaTexture
         && m_StageResources.impostor.normalTexture
         && m_StageResources.impostor.depthTexture
-        && m_StageResources.impostor.debugAlbedoTexture
-        && m_StageResources.impostor.debugNormalTexture
-        && m_StageResources.impostor.debugDepthTexture
         && m_StageResources.impostor.debugAlbedoAtlasTexture
         && m_StageResources.impostor.debugNormalAtlasTexture
         && m_StageResources.impostor.debugDepthAtlasTexture)
@@ -1402,20 +1396,6 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         const uint32_t assetIdx = std::min(
             m_UI.impostorSelectedAsset,
             m_GPUAssets.empty() ? 0u : static_cast<uint32_t>(m_GPUAssets.size() - 1));
-        const uint32_t azIdx = std::min(m_UI.impostorSelectedAzimuth, k_ImpostorAzimuthViews - 1);
-        const uint32_t elIdx = std::min(m_UI.impostorSelectedElevation, k_ImpostorElevationViews - 1);
-        const uint32_t viewIdx = elIdx * k_ImpostorAzimuthViews + azIdx;
-        const uint32_t slice = assetIdx * k_ImpostorViewCount + viewIdx;
-
-        m_CommandList->copyTexture(
-            m_StageResources.impostor.debugAlbedoTexture, nvrhi::TextureSlice(),
-            m_StageResources.impostor.albedoAlphaTexture, nvrhi::TextureSlice().setArraySlice(slice));
-        m_CommandList->copyTexture(
-            m_StageResources.impostor.debugNormalTexture, nvrhi::TextureSlice(),
-            m_StageResources.impostor.normalTexture, nvrhi::TextureSlice().setArraySlice(slice));
-        m_CommandList->copyTexture(
-            m_StageResources.impostor.debugDepthTexture, nvrhi::TextureSlice(),
-            m_StageResources.impostor.depthTexture, nvrhi::TextureSlice().setArraySlice(slice));
 
         for (uint32_t view = 0; view < k_ImpostorViewCount; view++) {
             const uint32_t tileX = view % k_ImpostorAzimuthViews;
@@ -1436,26 +1416,6 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
                 m_StageResources.impostor.debugDepthAtlasTexture, dst,
                 m_StageResources.impostor.depthTexture, nvrhi::TextureSlice().setArraySlice(tileSlice));
         }
-
-        m_CommandList->setTextureState(
-            m_StageResources.impostor.debugAlbedoTexture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
-        m_CommandList->setTextureState(
-            m_StageResources.impostor.debugNormalTexture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
-        m_CommandList->setTextureState(
-            m_StageResources.impostor.debugDepthTexture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
-        m_CommandList->setTextureState(
-            m_StageResources.impostor.debugAlbedoAtlasTexture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
-        m_CommandList->setTextureState(
-            m_StageResources.impostor.debugNormalAtlasTexture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
-        m_CommandList->setTextureState(
-            m_StageResources.impostor.debugDepthAtlasTexture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
-        m_CommandList->setTextureState(
-            m_StageResources.impostor.albedoAlphaTexture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
-        m_CommandList->setTextureState(
-            m_StageResources.impostor.normalTexture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
-        m_CommandList->setTextureState(
-            m_StageResources.impostor.depthTexture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
-        m_CommandList->commitBarriers();
     }
 
     // m_CommandList->endMarker(); // Frame
@@ -2174,7 +2134,6 @@ bool ComputeRenderPass::_BakeImpostors(nvrhi::ICommandList* commandList) {
             .setDimension(nvrhi::TextureDimension::Texture2DArray)
             .setFormat(nvrhi::Format::RGBA8_UNORM)
             .setIsRenderTarget(true)
-            .setClearValue(nvrhi::Color(0.f, 0.f, 0.f, 0.f))
             .enableAutomaticStateTracking(nvrhi::ResourceStates::RenderTarget)
             .setDebugName("ImpostorAlbedoAlphaArray"));
 
@@ -2186,7 +2145,7 @@ bool ComputeRenderPass::_BakeImpostors(nvrhi::ICommandList* commandList) {
             .setDimension(nvrhi::TextureDimension::Texture2DArray)
             .setFormat(nvrhi::Format::RGBA8_UNORM)
             .setIsRenderTarget(true)
-            .setClearValue(nvrhi::Color(0.5f, 0.5f, 1.f, 0.f))
+            // .setClearValue(nvrhi::Color(0.5f, 0.5f, 1.f, 0.f))
             .enableAutomaticStateTracking(nvrhi::ResourceStates::RenderTarget)
             .setDebugName("ImpostorNormalArray"));
 
@@ -2198,7 +2157,7 @@ bool ComputeRenderPass::_BakeImpostors(nvrhi::ICommandList* commandList) {
             .setDimension(nvrhi::TextureDimension::Texture2DArray)
             .setFormat(nvrhi::Format::D32)
             .setIsRenderTarget(true)
-            .setClearValue(nvrhi::Color(1.f))
+            // .setClearValue(nvrhi::Color(1.f))
             .enableAutomaticStateTracking(nvrhi::ResourceStates::DepthWrite)
             .setDebugName("ImpostorDepthArray"));
 
@@ -2301,32 +2260,10 @@ bool ComputeRenderPass::_BakeImpostors(nvrhi::ICommandList* commandList) {
         }
     }
 
-    // Per-slice debug copies for ImGui inspection of the baked atlas. Mirrors the
-    // shadow-cascade debug-texture pattern. Created here (after the bake) so the
-    // copies happen while the array textures are still in RenderTarget/DepthWrite
-    // state — copyTexture handles the transition.
+    // Per-asset atlas-sheet debug textures for ImGui inspection of the baked atlas.
+    // Created here (after the bake) so the copies happen while the array textures
+    // are still in RenderTarget/DepthWrite state — copyTexture handles the transition.
     {
-        m_StageResources.impostor.debugAlbedoTexture = device->createTexture(
-            nvrhi::TextureDesc()
-                .setWidth(k_ImpostorBakeResolution).setHeight(k_ImpostorBakeResolution)
-                .setFormat(nvrhi::Format::RGBA8_UNORM)
-                .setInitialState(nvrhi::ResourceStates::ShaderResource)
-                .setKeepInitialState(true)
-                .setDebugName("ImpostorAlbedoDebug"));
-        m_StageResources.impostor.debugNormalTexture = device->createTexture(
-            nvrhi::TextureDesc()
-                .setWidth(k_ImpostorBakeResolution).setHeight(k_ImpostorBakeResolution)
-                .setFormat(nvrhi::Format::RGBA8_UNORM)
-                .setInitialState(nvrhi::ResourceStates::ShaderResource)
-                .setKeepInitialState(true)
-                .setDebugName("ImpostorNormalDebug"));
-        m_StageResources.impostor.debugDepthTexture = device->createTexture(
-            nvrhi::TextureDesc()
-                .setWidth(k_ImpostorBakeResolution).setHeight(k_ImpostorBakeResolution)
-                .setFormat(nvrhi::Format::R32_FLOAT)
-                .setInitialState(nvrhi::ResourceStates::ShaderResource)
-                .setKeepInitialState(true)
-                .setDebugName("ImpostorDepthDebug"));
         m_StageResources.impostor.debugAlbedoAtlasTexture = device->createTexture(
             nvrhi::TextureDesc()
                 .setWidth(k_ImpostorBakeResolution * k_ImpostorAzimuthViews)
@@ -2351,35 +2288,11 @@ bool ComputeRenderPass::_BakeImpostors(nvrhi::ICommandList* commandList) {
                 .setInitialState(nvrhi::ResourceStates::ShaderResource)
                 .setKeepInitialState(true)
                 .setDebugName("ImpostorDepthAtlasDebug"));
-        if (!m_StageResources.impostor.debugAlbedoTexture
-            || !m_StageResources.impostor.debugNormalTexture
-            || !m_StageResources.impostor.debugDepthTexture
-            || !m_StageResources.impostor.debugAlbedoAtlasTexture
+        if (!m_StageResources.impostor.debugAlbedoAtlasTexture
             || !m_StageResources.impostor.debugNormalAtlasTexture
             || !m_StageResources.impostor.debugDepthAtlasTexture)
             return false;
-
-        commandList->copyTexture(
-            m_StageResources.impostor.debugAlbedoTexture, nvrhi::TextureSlice(),
-            m_StageResources.impostor.albedoAlphaTexture, nvrhi::TextureSlice());
-        commandList->copyTexture(
-            m_StageResources.impostor.debugNormalTexture, nvrhi::TextureSlice(),
-            m_StageResources.impostor.normalTexture, nvrhi::TextureSlice());
-        commandList->copyTexture(
-            m_StageResources.impostor.debugDepthTexture, nvrhi::TextureSlice(),
-            m_StageResources.impostor.depthTexture, nvrhi::TextureSlice());
     }
-
-    commandList->setTextureState(m_StageResources.impostor.debugAlbedoTexture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
-    commandList->setTextureState(m_StageResources.impostor.debugNormalTexture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
-    commandList->setTextureState(m_StageResources.impostor.debugDepthTexture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
-    commandList->setTextureState(m_StageResources.impostor.debugAlbedoAtlasTexture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
-    commandList->setTextureState(m_StageResources.impostor.debugNormalAtlasTexture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
-    commandList->setTextureState(m_StageResources.impostor.debugDepthAtlasTexture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
-    commandList->setTextureState(m_StageResources.impostor.albedoAlphaTexture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
-    commandList->setTextureState(m_StageResources.impostor.normalTexture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
-    commandList->setTextureState(m_StageResources.impostor.depthTexture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
-    commandList->commitBarriers();
 
     m_StageResources.impostor.pipeline = nullptr;
     return true;

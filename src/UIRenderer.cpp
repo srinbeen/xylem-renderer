@@ -775,11 +775,7 @@ void UIRenderer::_buildImpostorAtlasSection() {
     }
 
     int selectedAsset = static_cast<int>(m_ui.impostorSelectedAsset);
-    int selectedAzimuth = static_cast<int>(m_ui.impostorSelectedAzimuth);
-    int selectedElevation = static_cast<int>(m_ui.impostorSelectedElevation);
     if (selectedAsset >= (int)numAssets) selectedAsset = 0;
-    if (selectedAzimuth >= (int)numAzimuthViews) selectedAzimuth = 0;
-    if (selectedElevation >= (int)numElevationViews) selectedElevation = 0;
 
     ImGui::Text("Asset:");
     ImGui::SameLine();
@@ -788,34 +784,10 @@ void UIRenderer::_buildImpostorAtlasSection() {
     ImGui::SameLine();
     ImGui::TextDisabled("(%u assets)", numAssets);
 
-    ImGui::Text("Grid X:");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(160.f);
-    ImGui::SliderInt("##impAzimuth", &selectedAzimuth, 0, (int)numAzimuthViews - 1);
-    ImGui::SameLine();
-    ImGui::TextDisabled("(%u views)", numAzimuthViews);
-
-    ImGui::Text("Grid Y:");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(160.f);
-    ImGui::SliderInt("##impElevation", &selectedElevation, 0, (int)numElevationViews - 1);
-    ImGui::SameLine();
-    ImGui::TextDisabled("(%u views)", numElevationViews);
-
-    ImGui::Text("Alpha Clip:");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(160.f);
-    ImGui::SliderFloat("##impAlphaClip", &m_ui.impostorAlphaClip, 0.01f, 0.95f, "%.2f");
-
     ImGui::Separator();
 
     m_ui.impostorSelectedAsset = static_cast<uint32_t>(selectedAsset);
-    m_ui.impostorSelectedAzimuth = static_cast<uint32_t>(selectedAzimuth);
-    m_ui.impostorSelectedElevation = static_cast<uint32_t>(selectedElevation);
 
-    void* albedo = m_ui.impostorAlbedoTexture;
-    void* normal = m_ui.impostorNormalTexture;
-    void* depth  = m_ui.impostorDepthTexture;
     void* albedoAtlas = m_ui.impostorAlbedoAtlasTexture;
     void* normalAtlas = m_ui.impostorNormalAtlasTexture;
     void* depthAtlas  = m_ui.impostorDepthAtlasTexture;
@@ -833,33 +805,10 @@ void UIRenderer::_buildImpostorAtlasSection() {
     if (atlasTex) {
         float atlasWidth = std::max(avail.x, 64.f);
         float atlasHeight = atlasWidth * (float)numElevationViews / (float)numAzimuthViews;
-        atlasHeight = std::min(atlasHeight, 420.f);
         ImGui::Image(ImTextureRef(atlasTex), ImVec2(atlasWidth, atlasHeight));
     } else {
         ImGui::TextDisabled("(atlas preview not available yet)");
     }
-
-    ImGui::Separator();
-    ImGui::Text("Selected frame:");
-
-    // Three thumbnails side-by-side, square; account for spacing between them.
-    const float spacing = ImGui::GetStyle().ItemSpacing.x;
-    float thumb = std::max((ImGui::GetContentRegionAvail().x - spacing * 2.f) / 3.f, 64.f);
-    thumb = std::min(thumb, 180.f);
-
-    auto drawThumb = [&](const char* label, void* tex) {
-        ImGui::BeginGroup();
-        ImGui::TextUnformatted(label);
-        if (tex) ImGui::Image(ImTextureRef(tex), ImVec2(thumb, thumb));
-        else     ImGui::Dummy(ImVec2(thumb, thumb));
-        ImGui::EndGroup();
-    };
-
-    drawThumb("Albedo+Alpha", albedo);
-    ImGui::SameLine();
-    drawThumb("Normal",       normal);
-    ImGui::SameLine();
-    drawThumb("Depth",        depth);
 
     ImGui::End();
 }

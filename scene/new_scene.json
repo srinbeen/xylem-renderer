@@ -10,7 +10,7 @@
   },
   "lods": {
     "radialSegments": [16, 8, 4],
-    "distances": [50.0, 100.0, 200.0]
+    "distances": [25.0, 50.0, 200.0]
   },
   "lsystems": [
     {
@@ -297,11 +297,11 @@
     }
   ],
   "terrain": {
-    "seed": 42,
-    "octaves": 5,
+    "seed": 12,
+    "octaves": 13,
     "frequency": 0.02,
-    "amplitude": 15.0,
-    "gridSpacing": 1.0
+    "amplitude": 50.0,
+    "gridSpacing": 5.0
   },
   "regions": [
     {

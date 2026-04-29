@@ -133,10 +133,6 @@ private:
         nvrhi::TextureHandle                   albedoAlphaTexture;
         nvrhi::TextureHandle                   normalTexture;
         nvrhi::TextureHandle                   depthTexture;
-        // Per-slice single-2D copies for ImGui inspection of the bake atlas.
-        nvrhi::TextureHandle                   debugAlbedoTexture;
-        nvrhi::TextureHandle                   debugNormalTexture;
-        nvrhi::TextureHandle                   debugDepthTexture;
         // Per-selected-asset atlas sheets for ImGui inspection.
         nvrhi::TextureHandle                   debugAlbedoAtlasTexture;
         nvrhi::TextureHandle                   debugNormalAtlasTexture;

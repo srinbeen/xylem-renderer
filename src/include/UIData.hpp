@@ -58,11 +58,6 @@ struct UIData {
     uint32_t impostorElevationViews = 0;
     uint32_t impostorAssetCount    = 0;
     uint32_t impostorSelectedAsset = 0;
-    uint32_t impostorSelectedAzimuth = 0;
-    uint32_t impostorSelectedElevation = 0;
-    void*    impostorAlbedoTexture = nullptr;
-    void*    impostorNormalTexture = nullptr;
-    void*    impostorDepthTexture = nullptr;
     void*    impostorAlbedoAtlasTexture = nullptr;
     void*    impostorNormalAtlasTexture = nullptr;
     void*    impostorDepthAtlasTexture = nullptr;

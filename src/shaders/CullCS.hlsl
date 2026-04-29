@@ -79,7 +79,6 @@ uint SelectLOD(box3 bbox);
 bool SelectImpostor(box3 bbox);
 bool IsOccludedByHiZ(box3 bbox);
 
-
 [numthreads(64, 1, 1)]
 void CullRegion(uint3 dtid : SV_DispatchThreadID)
 {
@@ -270,8 +269,7 @@ bool IsOccludedByHiZ(box3 bbox)
         if (clip.w <= 0.0) return false;
 
         float3 ndc = clip.xyz / clip.w;
-        float2 uv = ndc.xy * 0.5 + 0.5;
-        uv.y = 1.0 - uv.y;
+        float2 uv = saturate(ndc.xy * float2(0.5, -0.5) + 0.5);
 
         minUV = min(minUV, uv);
         maxUV = max(maxUV, uv);
@@ -282,10 +280,6 @@ bool IsOccludedByHiZ(box3 bbox)
 #endif
     }
 
-    // Clamp to screen bounds
-    minUV = saturate(minUV);
-    maxUV = saturate(maxUV);
-
     // Pick mip level based on projected footprint in pixels
     float2 footprint = (maxUV - minUV) * hizDimensions;
     float mipLevel = ceil(log2(max(footprint.x, footprint.y)));
@@ -295,21 +289,12 @@ bool IsOccludedByHiZ(box3 bbox)
     // incorrectly cull large tree bboxes when only part of the screen rect is
     // covered by nearer depth, causing row-sized popping around LOD thresholds.
     float2 centerUV = (minUV + maxUV) * 0.5;
-    float hiz0 = hizTexture.SampleLevel(hizSampler, centerUV, mipLevel).r;
-    float hiz1 = hizTexture.SampleLevel(hizSampler, minUV, mipLevel).r;
-    float hiz2 = hizTexture.SampleLevel(hizSampler, float2(maxUV.x, minUV.y), mipLevel).r;
-    float hiz3 = hizTexture.SampleLevel(hizSampler, float2(minUV.x, maxUV.y), mipLevel).r;
-    float hiz4 = hizTexture.SampleLevel(hizSampler, maxUV, mipLevel).r;
+    float hiz = hizTexture.SampleLevel(hizSampler, centerUV, mipLevel).r;
 
     // Occlusion test
 #if XYLEM_USE_REVERSE_Z
-    float hizDepth = min(hiz0, min(min(hiz1, hiz2), min(hiz3, hiz4)));
-    // Reverse-Z: object's nearest depth (large value) < Hi-Z (nearest occluder, large value)
-    // means object is behind the occluder
-    return (closestDepth < hizDepth);
+    return (closestDepth < hiz);
 #else
-    float hizDepth = max(hiz0, max(max(hiz1, hiz2), max(hiz3, hiz4)));
-    // Forward-Z: object's nearest depth (small value) > Hi-Z (nearest occluder, small value)
-    return (closestDepth > hizDepth);
+    return (closestDepth > hiz);
 #endif
 }

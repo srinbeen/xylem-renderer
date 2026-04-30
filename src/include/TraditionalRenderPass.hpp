@@ -15,6 +15,7 @@
 #include <array>
 
 #include "SceneRegistry.hpp"
+#include "SharedGPUAssets.hpp"
 #include "Render.hpp"
 #include "UIData.hpp"
 #include "ViewHandler.hpp"
@@ -34,6 +35,7 @@ public:
         : IRenderPass{dm}, m_Registry{registry}, m_UI{ui}, m_ViewHandler{vh} {}
 
     void SetShaderFactory(std::shared_ptr<engine::ShaderFactory> sf) { m_ShaderFactory = std::move(sf); }
+    void SetSharedAssets(SharedGPUAssets* shared) { m_Shared = shared; }
 
     bool Init();
     void Animate(float seconds) override;
@@ -52,11 +54,6 @@ public:
     void onRegionsDirty(const std::vector<size_t>& dirtyRegionIndices);
 
 private:
-    struct TextureSet {
-        nvrhi::TextureHandle      diffuse;
-        nvrhi::TextureHandle      normalMap;
-    };
-
     // GPU-side per-asset data (VB/IB per LOD).
     struct GPUTreeAsset {
         std::vector<Scene::TreeLODData> lods;
@@ -68,14 +65,14 @@ private:
         nvrhi::BufferHandle       constantBuffer;
     };
 
-    // Main color pass - tree geometry
+    // Main color pass - tree geometry. Bark textures + sampler now come from
+    // SharedGPUAssets — only the binding sets (one per shared texture set) and
+    // the pass-local geometry/instance state live here.
     struct TreePassResources {
         nvrhi::ShaderHandle                    vertexShader;
         nvrhi::ShaderHandle                    pixelShader;
         nvrhi::InputLayoutHandle               inputLayout;
         nvrhi::BufferHandle                    instanceBuffer;
-        std::vector<TextureSet>                textureSets;
-        nvrhi::SamplerHandle                   sampler;
         nvrhi::BindingLayoutHandle             bindingLayout;
         std::vector<nvrhi::BindingSetHandle>   bindingSets;
         nvrhi::GraphicsPipelineHandle          pipeline;
@@ -141,6 +138,7 @@ private:
 
     UIData&                                            m_UI;
     SceneRegistry&                                     m_Registry;
+    SharedGPUAssets*                                   m_Shared = nullptr;
 
     // GPU-side asset tracking
     std::vector<GPUTreeAsset>                          m_GPUAssets;

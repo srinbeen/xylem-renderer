@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "SceneRegistry.hpp"
+#include "SharedGPUAssets.hpp"
 #include "Render.hpp"
 #include "UIData.hpp"
 #include "ViewHandler.hpp"
@@ -39,15 +40,17 @@ public:
     static constexpr uint32_t k_QueuedFrames  = 3;
     static constexpr uint32_t k_ShadowRes     = 2048;
     static constexpr float    k_CapacitySlack = 1.5f;
-    static constexpr uint32_t k_ImpostorAzimuthViews   = XYLEM_IMPOSTOR_AZIMUTH_VIEWS;
-    static constexpr uint32_t k_ImpostorElevationViews = XYLEM_IMPOSTOR_ELEVATION_VIEWS;
-    static constexpr uint32_t k_ImpostorViewCount      = XYLEM_IMPOSTOR_VIEW_COUNT;
-    static constexpr uint32_t k_ImpostorBakeResolution = 256;
+    // Hemi-octahedral view counts mirror SharedGPUAssets — kept here for
+    // per-pass impostor slot/visibility buffer sizing math.
+    static constexpr uint32_t k_ImpostorAzimuthViews   = SharedGPUAssets::k_ImpostorAzimuthViews;
+    static constexpr uint32_t k_ImpostorElevationViews = SharedGPUAssets::k_ImpostorElevationViews;
+    static constexpr uint32_t k_ImpostorViewCount      = SharedGPUAssets::k_ImpostorViewCount;
 
     MeshShaderRenderPass(app::DeviceManager* dm, SceneRegistry& registry, UIData& ui, ViewHandler& vh)
         : IRenderPass{dm}, m_Registry{registry}, m_UI{ui}, m_ViewHandler{vh} {}
 
     void SetShaderFactory(std::shared_ptr<engine::ShaderFactory> sf) { m_ShaderFactory = std::move(sf); }
+    void SetSharedAssets(SharedGPUAssets* shared) { m_Shared = shared; }
 
     bool Init();
     void Animate(float seconds) override;
@@ -59,11 +62,6 @@ public:
     void onRegionsDirty(const std::vector<size_t>& dirtyRegionIndices);
 
 private:
-    struct TextureSet {
-        nvrhi::TextureHandle diffuse;
-        nvrhi::TextureHandle normalMap;
-    };
-
     struct RegionBufferWindow {
         uint32_t offset;
         uint32_t capacity;
@@ -133,12 +131,11 @@ private:
         nvrhi::BufferHandle              regionVisibleBuffer;
     };
 
+    // Bark textures + sampler now come from SharedGPUAssets.
     struct DrawResources {
         nvrhi::ShaderHandle              amplificationShader;
         nvrhi::ShaderHandle              meshShader;
         nvrhi::ShaderHandle              pixelShader;
-        std::vector<TextureSet>          textureSets;
-        nvrhi::SamplerHandle             sampler;
         nvrhi::SamplerHandle             shadowSampler;
         nvrhi::SamplerHandle             hizSampler;
         nvrhi::BindingLayoutHandle       bindingLayout;
@@ -146,31 +143,16 @@ private:
         nvrhi::MeshletPipelineHandle     pipeline;
     };
 
-    // Hemi-octahedral impostor render + bake. Mirrors ComputeRenderPass's
-    // ImpostorPassResources — impostors are drawn as quad cards via the same
-    // VS+PS pipeline (ImpostorRenderPass.hlsl). Slots are per-asset.
+    // Hemi-octahedral impostor *render* side. Atlas, asset-dims, debug atlases,
+    // and the bake pipeline live in SharedGPUAssets.
     struct ImpostorPassResources {
         nvrhi::ShaderHandle                    vertexShader;
         nvrhi::ShaderHandle                    pixelShader;
-        nvrhi::ShaderHandle                    bakeVertexShader;
-        nvrhi::ShaderHandle                    bakePixelShader;
-        nvrhi::InputLayoutHandle               bakeInputLayout;
         nvrhi::BindingLayoutHandle             bindingLayout;
-        nvrhi::BindingLayoutHandle             bakeBindingLayout;
         nvrhi::SamplerHandle                   sampler;
         nvrhi::SamplerHandle                   depthSampler;
-        std::vector<nvrhi::BindingSetHandle>   bindingSets;     // one per texture set
-        std::vector<nvrhi::BindingSetHandle>   bakeBindingSets; // one per texture set
-        nvrhi::BufferHandle                    bakeConstantBuffer;
-        nvrhi::BufferHandle                    assetDimsBuffer;     // SRV float4[numAssets]
-        nvrhi::TextureHandle                   albedoAlphaTexture;  // Tex2DArray, RGBA8
-        nvrhi::TextureHandle                   normalTexture;       // Tex2DArray, RGBA8
-        nvrhi::TextureHandle                   depthTexture;        // Tex2DArray, D32
-        nvrhi::TextureHandle                   debugAlbedoAtlasTexture;
-        nvrhi::TextureHandle                   debugNormalAtlasTexture;
-        nvrhi::TextureHandle                   debugDepthAtlasTexture;
+        std::vector<nvrhi::BindingSetHandle>   bindingSets;     // one per shared texture set
         nvrhi::GraphicsPipelineHandle          pipeline;
-        nvrhi::GraphicsPipelineHandle          bakePipeline;
     };
 
     struct ShadowPassResources {
@@ -276,6 +258,7 @@ private:
 
     UIData&                                           m_UI;
     SceneRegistry&                                    m_Registry;
+    SharedGPUAssets*                                  m_Shared = nullptr;
 
     // Native D3D12 command signature for ExecuteIndirect(DISPATCH_MESH) on the
     // main color pipeline.
@@ -321,6 +304,11 @@ private:
     uint32_t                                          m_ReadbackShadowEntries   = 0;
     uint32_t                                          m_ReadbackImpostorEntries = 0;
 
+    // Readback ring for SDSM debug (mirrors ComputeRenderPass)
+    nvrhi::BufferHandle                               m_SDSMReadbackBuffers[k_QueuedFrames];
+    uint32_t                                          m_SDSMReadbackFrameIndex = 0;
+    bool                                              m_SDSMReadbackPending[k_QueuedFrames] = { false, false, false };
+
     // -----------------------------------------------------------------------
     // Init helpers
     // -----------------------------------------------------------------------
@@ -334,8 +322,6 @@ private:
     bool _InitTerrainPass(nvrhi::ICommandList* initCL);
     bool _InitSkyPass();
     bool _InitImpostorPass();
-    bool _BakeImpostors(nvrhi::ICommandList* commandList);
-    bool _LoadBarkTextures(nvrhi::ICommandList* initCL, engine::CommonRenderPasses& commonPasses);
 
     void _RebuildMeshletMegabuffers(nvrhi::ICommandList* cl);
     void _UploadMeshletMegabuffers(nvrhi::ICommandList* cl);

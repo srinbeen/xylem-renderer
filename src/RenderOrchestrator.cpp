@@ -1,4 +1,5 @@
 #include "include/RenderOrchestrator.hpp"
+#include "include/frame/FrameLifecycle.hpp"
 #include <donut/core/log.h>
 #include <imgui.h>
 
@@ -7,6 +8,7 @@ using namespace Xylem;
 void RenderOrchestrator::SetShaderFactory(std::shared_ptr<engine::ShaderFactory> sf)
 {
     m_ShaderFactory = sf;
+    m_Shared.SetShaderFactory(sf);
     m_Traditional.SetShaderFactory(sf);
     m_Compute.SetShaderFactory(sf);
     m_MeshShader.SetShaderFactory(sf);
@@ -17,6 +19,11 @@ bool RenderOrchestrator::Init()
     const SceneRegistry::CameraInit& ci = m_Registry.getCameraInit();
     m_ViewHandler.camera.LookTo(ci.pos, ci.cameraDir);
     m_ViewHandler.camera.SetMoveSpeed(ci.moveSpeed);
+
+    if (!m_Shared.Init()) {
+        donut::log::error("RenderOrchestrator: shared GPU assets failed to initialise");
+        return false;
+    }
 
     bool traditionalOk = m_Traditional.Init();
     bool computeOk     = m_Compute.Init();
@@ -77,6 +84,38 @@ void RenderOrchestrator::Animate(float seconds)
 {
     _switchPipelineIfNeeded();
     m_ViewHandler.camera.Animate(seconds);
+
+    // Drive the dirty cycle here so SharedGPUAssets re-bakes the impostor atlas
+    // *after* CPU mesh data is regenerated and *before* the active pass rebuilds
+    // its impostor binding sets that reference the atlas.
+    if (m_Registry.anyDirty()) {
+        auto dirtyAssets  = m_Registry.getDirtyAssetIndices();
+        auto dirtyRegions = m_Registry.getDirtyRegionIndices();
+
+        m_Registry.rebuildDirtyAssets();
+        m_Registry.rebuildDirtyRegions();
+
+        if (!dirtyAssets.empty()) m_Shared.OnAssetsDirty();
+
+        switch (m_UI.activePipeline) {
+            case Pipeline::Traditional:
+                if (!dirtyAssets.empty())  m_Traditional.onAssetsDirty(dirtyAssets);
+                if (!dirtyRegions.empty()) m_Traditional.onRegionsDirty(dirtyRegions);
+                break;
+            case Pipeline::Compute:
+                if (!dirtyAssets.empty())  m_Compute.onAssetsDirty(dirtyAssets);
+                if (!dirtyRegions.empty()) m_Compute.onRegionsDirty(dirtyRegions);
+                break;
+            case Pipeline::MeshShader:
+                if (!dirtyAssets.empty())  m_MeshShader.onAssetsDirty(dirtyAssets);
+                if (!dirtyRegions.empty()) m_MeshShader.onRegionsDirty(dirtyRegions);
+                break;
+            default: break;
+        }
+
+        m_Registry.clearDirtyFlags();
+    }
+
     _activePass()->Animate(seconds);
     m_UIPass.Animate(seconds);
 }

@@ -25,85 +25,8 @@ using namespace Xylem;
 namespace shader_cb = Xylem::shader::cb;
 namespace compute_reg = Xylem::shader::reg::Compute;
 
-namespace {
-
-struct ImpostorBakeCB {
-    dm::float4x4    mvp;
-    dm::float4      _pad[12];
-};
-
-static constexpr size_t c_ImpostorBakeCBSize =
-    (sizeof(ImpostorBakeCB) + (nvrhi::c_ConstantBufferOffsetSizeAlignment - 1))
-    & ~(nvrhi::c_ConstantBufferOffsetSizeAlignment - 1);
-
-dm::affine3 BuildtoObjectTransform()
-{
-    return dm::affine3::identity();
-}
-
-dm::float3 HemiOctahedronToUnitVector(const dm::float2& uv)
-{
-    const float planeX = uv.x * 2.f - 1.f;
-    const float planeY = uv.y * 2.f - 1.f;
-    const float octX = (planeX + planeY) * 0.5f;
-    const float octZ = (planeY - planeX) * 0.5f;
-    const float y = std::max(1.f - std::abs(octX) - std::abs(octZ), 0.f);
-    return dm::normalize(dm::float3(octX - octZ, y, octX + octZ));
-}
-
-dm::float2 ImpostorViewGridUV(uint32_t viewIndex)
-{
-    const uint32_t x = viewIndex % ComputeRenderPass::k_ImpostorAzimuthViews;
-    const uint32_t y = viewIndex / ComputeRenderPass::k_ImpostorAzimuthViews;
-    return dm::float2(
-        float(x) / float(std::max(1u, ComputeRenderPass::k_ImpostorAzimuthViews - 1u)),
-        float(y) / float(std::max(1u, ComputeRenderPass::k_ImpostorElevationViews - 1u)));
-}
-
-dm::float3 ImpostorViewDirection(uint32_t viewIndex)
-{
-    return HemiOctahedronToUnitVector(ImpostorViewGridUV(viewIndex));
-}
-
-void ImpostorViewBasis(uint32_t viewIndex, dm::float3& dirToCamera, dm::float3& right, dm::float3& viewUp)
-{
-    dirToCamera = ImpostorViewDirection(viewIndex);
-
-    const dm::float3 worldUp(0.f, 1.f, 0.f);
-    const dm::float3 horizontal(dirToCamera.x, 0.f, dirToCamera.z);
-    const float horizontalLen = std::sqrt(horizontal.x * horizontal.x + horizontal.z * horizontal.z);
-    right = horizontalLen >= 1e-6f
-        ? dm::normalize(dm::cross(worldUp, -horizontal / horizontalLen))
-        : dm::float3(1.f, 0.f, 0.f);
-    viewUp = dm::normalize(dm::cross(-dirToCamera, right));
-}
-
-dm::float4x4 BuildtoProjTransform(const dm::box3& localBbox, uint32_t viewIndex)
-{
-    const dm::affine3 modelxfm = BuildtoObjectTransform();
-
-    dm::float3 treeToCam;
-    dm::float3 right;
-    dm::float3 trueUp;
-    ImpostorViewBasis(viewIndex, treeToCam, right, trueUp);
-
-    const dm::float3 look = -treeToCam;
-    const dm::affine3 viewxfm = dm::affine3::from_cols(right, trueUp, look, dm::float3::zero());
-    const dm::affine modelviewxfm = modelxfm * viewxfm;
-
-    dm::box3 bbox = localBbox * modelxfm;
-    bbox *= viewxfm;
-
-    const dm::float4x4 projxfm = dm::orthoProjD3DStyle(
-        bbox.m_mins.x, bbox.m_maxs.x,
-        bbox.m_mins.y, bbox.m_maxs.y,
-        bbox.m_mins.z, bbox.m_maxs.z
-    );
-
-    return dm::affineToHomogeneous(modelviewxfm) * projxfm;
-}
-
-} // namespace
+// Impostor bake helpers (BuildtoObjectTransform / BuildtoProjTransform / etc.)
+// now live in SharedGPUAssets — this pass only consumes the baked atlas.
 
 // ===========================================================================
 // GPU asset upload helpers (identical to P0)
@@ -609,8 +532,9 @@ void ComputeRenderPass::_RebuildCullBindings() {
     m_StageResources.cull.bindingSet = device->createBindingSet(cullBSD, m_StageResources.cull.bindingLayout);
 
     // Tree pass binding sets - visibility/instance/slotOffset SRVs + textures
-    m_StageResources.sceneTree.bindingSets.resize(m_StageResources.sceneTree.textureSets.size());
-    for (size_t i = 0; i < m_StageResources.sceneTree.textureSets.size(); i++) {
+    const auto& barkTextures = m_Shared->barkTextures();
+    m_StageResources.sceneTree.bindingSets.resize(barkTextures.size());
+    for (size_t i = 0; i < barkTextures.size(); i++) {
         nvrhi::BindingSetDesc bsd;
         bsd.bindings = {
             nvrhi::BindingSetItem::ConstantBuffer(compute_reg::Scene::kCB_Frame, m_StageResources.frameShared.constantBuffer,
@@ -621,18 +545,18 @@ void ComputeRenderPass::_RebuildCullBindings() {
             nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::Scene::kSRV_Instances, m_StageResources.cull.persistentInstBuffer),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::Scene::kSRV_SlotOffsets, m_StageResources.cull.slotOffsetBuffer),
 
-            nvrhi::BindingSetItem::Texture_SRV(compute_reg::Scene::kTex_Diffuse, m_StageResources.sceneTree.textureSets[i].diffuse),
-            nvrhi::BindingSetItem::Texture_SRV(compute_reg::Scene::kTex_NormalMap, m_StageResources.sceneTree.textureSets[i].normalMap),
+            nvrhi::BindingSetItem::Texture_SRV(compute_reg::Scene::kTex_Diffuse, barkTextures[i].diffuse),
+            nvrhi::BindingSetItem::Texture_SRV(compute_reg::Scene::kTex_NormalMap, barkTextures[i].normalMap),
             nvrhi::BindingSetItem::Texture_SRV(compute_reg::Scene::kTex_ShadowMap, m_StageResources.shadow.depthTexture),
 
-            nvrhi::BindingSetItem::Sampler(compute_reg::Scene::kSampler_Main, m_StageResources.sceneTree.sampler),
+            nvrhi::BindingSetItem::Sampler(compute_reg::Scene::kSampler_Main, m_Shared->barkSampler()),
             nvrhi::BindingSetItem::Sampler(compute_reg::Scene::kSampler_Shadow, m_StageResources.shadow.comparisonSampler),
         };
         m_StageResources.sceneTree.bindingSets[i] = device->createBindingSet(bsd, m_StageResources.sceneTree.bindingLayout);
     }
 
-    m_StageResources.impostor.bindingSets.resize(m_StageResources.sceneTree.textureSets.size());
-    for (size_t i = 0; i < m_StageResources.sceneTree.textureSets.size(); i++) {
+    m_StageResources.impostor.bindingSets.resize(barkTextures.size());
+    for (size_t i = 0; i < barkTextures.size(); i++) {
         nvrhi::BindingSetDesc bsd;
         bsd.bindings = {
             nvrhi::BindingSetItem::ConstantBuffer(compute_reg::Impostor::kCB_Frame, m_StageResources.frameShared.constantBuffer,
@@ -644,11 +568,11 @@ void ComputeRenderPass::_RebuildCullBindings() {
             nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::Impostor::kSRV_SlotOffsets, m_StageResources.cull.impostorSlotOffsetBuffer),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::Impostor::kSRV_CullData, m_StageResources.cull.cullDataBuffer),
 
-            nvrhi::BindingSetItem::Texture_SRV(compute_reg::Impostor::kTex_Albedo, m_StageResources.impostor.albedoAlphaTexture),
-            nvrhi::BindingSetItem::Texture_SRV(compute_reg::Impostor::kTex_Normal, m_StageResources.impostor.normalTexture),
-            nvrhi::BindingSetItem::Texture_SRV(compute_reg::Impostor::kTex_Depth, m_StageResources.impostor.depthTexture, nvrhi::Format::R32_FLOAT),
+            nvrhi::BindingSetItem::Texture_SRV(compute_reg::Impostor::kTex_Albedo, m_Shared->impostorAlbedo()),
+            nvrhi::BindingSetItem::Texture_SRV(compute_reg::Impostor::kTex_Normal, m_Shared->impostorNormal()),
+            nvrhi::BindingSetItem::Texture_SRV(compute_reg::Impostor::kTex_Depth, m_Shared->impostorDepth(), nvrhi::Format::R32_FLOAT),
             nvrhi::BindingSetItem::Texture_SRV(compute_reg::Impostor::kTex_ShadowMap, m_StageResources.shadow.depthTexture),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::Impostor::kSRV_AssetDims, m_StageResources.impostor.assetDimsBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::Impostor::kSRV_AssetDims, m_Shared->assetDimsBuffer()),
 
             nvrhi::BindingSetItem::Sampler(compute_reg::Impostor::kSampler_Main, m_StageResources.impostor.sampler),
             nvrhi::BindingSetItem::Sampler(compute_reg::Impostor::kSampler_Shadow, m_StageResources.shadow.comparisonSampler),
@@ -1030,6 +954,15 @@ void ComputeRenderPass::_RunSDSMBuildCascades(const dm::box3& sceneBbox,
     m_CommandList->copyBuffer(m_StageResources.frameShared.constantBuffer, kOffShadowCasterMax,
                               m_StageResources.sdsm.cascadeDataBuffer, kSrcShadowCasterMax,
                               sizeof(dm::float4) * Render::c_NumCascades);
+
+    // Debug readback: copy the entire SDSM output into a ring slot for CPU inspection N frames later.
+    {
+        uint32_t ringSlot = m_SDSMReadbackFrameIndex % k_QueuedFrames;
+        m_CommandList->copyBuffer(m_SDSMReadbackBuffers[ringSlot], 0,
+                                  m_StageResources.sdsm.cascadeDataBuffer, 0,
+                                  sizeof(shader_cb::SDSMCascadeBuildOutput));
+        m_SDSMReadbackPending[ringSlot] = true;
+    }
 }
 
 // ===========================================================================
@@ -1057,7 +990,6 @@ bool ComputeRenderPass::Init() {
         if (!_InitShadowPass())                            return false;
         if (!_InitTreePass(initCL, commonPasses))          return false;
         if (!_InitImpostorPass())                          return false;
-        if (!_BakeImpostors(initCL))                       return false;
         if (!_InitTerrainPass(initCL))                     return false;
         if (!_InitSkyPass())                               return false;
         if (!_InitHiZShaders())                            return false;
@@ -1087,9 +1019,11 @@ bool ComputeRenderPass::Init() {
 // Animate
 // ===========================================================================
 
-void ComputeRenderPass::Animate(float seconds) {
+void ComputeRenderPass::Animate(float /*seconds*/) {
     GetDeviceManager()->SetInformativeWindowTitle(g_WindowTitle);
-    frame::RunDirtyCycle(m_Registry, *this);
+    // Dirty cycle is driven by RenderOrchestrator (so SharedGPUAssets re-bakes
+    // the impostor atlas before this pass rebuilds binding sets that reference
+    // the atlas).
 }
 
 void ComputeRenderPass::BackBufferResizing() {
@@ -1142,11 +1076,11 @@ void ComputeRenderPass::onAssetsDirty(const std::vector<size_t>& dirtyAssetIndic
         }
     }
 
-    // Re-upload CullDataBuffer bboxes (asset geometry changed -> bboxes changed)
+    // Re-upload CullDataBuffer bboxes (asset geometry changed -> bboxes changed).
+    // The shared impostor atlas is re-baked by RenderOrchestrator before this fires.
     _BuildRegionWindows();
     _BuildSlotLayout();
     _UploadCullBuffers(cl);
-    _BakeImpostors(cl);
     _RebuildCullBindings();
 
     cl->close();
@@ -1179,16 +1113,6 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         m_StageResources.shadow.debugTextures);
     frame::SetHiZDebugOutputs(m_StageOutputs, m_StageResources.hiz.debugMipTextures);
     frame::PublishStageOutputsToUI(m_StageOutputs, m_UI);
-
-    // Impostor atlas debug pointers. Stable preview textures; the
-    // selected asset's atlas sheet is copied into them at the end of Render.
-    m_UI.impostorAssetCount     = static_cast<uint32_t>(m_GPUAssets.size());
-    m_UI.impostorViewsPerAsset  = k_ImpostorViewCount;
-    m_UI.impostorAzimuthViews   = k_ImpostorAzimuthViews;
-    m_UI.impostorElevationViews = k_ImpostorElevationViews;
-    m_UI.impostorAlbedoAtlasTexture  = m_StageResources.impostor.debugAlbedoAtlasTexture;
-    m_UI.impostorNormalAtlasTexture  = m_StageResources.impostor.debugNormalAtlasTexture;
-    m_UI.impostorDepthAtlasTexture   = m_StageResources.impostor.debugDepthAtlasTexture;
 
     app::HiResTimer cpuTimer;
     cpuTimer.Start();
@@ -1386,35 +1310,36 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_CommandList->endMarker(); // Draw
 
     if (m_UI.showImpostorAtlas
-        && m_StageResources.impostor.albedoAlphaTexture
-        && m_StageResources.impostor.normalTexture
-        && m_StageResources.impostor.depthTexture
-        && m_StageResources.impostor.debugAlbedoAtlasTexture
-        && m_StageResources.impostor.debugNormalAtlasTexture
-        && m_StageResources.impostor.debugDepthAtlasTexture)
+        && m_Shared->impostorAlbedo()
+        && m_Shared->impostorNormal()
+        && m_Shared->impostorDepth()
+        && m_Shared->impostorDebugAlbedoAtlas()
+        && m_Shared->impostorDebugNormalAtlas()
+        && m_Shared->impostorDebugDepthAtlas())
     {
         const uint32_t assetIdx = std::min(
             m_UI.impostorSelectedAsset,
             m_GPUAssets.empty() ? 0u : static_cast<uint32_t>(m_GPUAssets.size() - 1));
 
+        constexpr uint32_t bakeRes = SharedGPUAssets::k_ImpostorBakeResolution;
         for (uint32_t view = 0; view < k_ImpostorViewCount; view++) {
             const uint32_t tileX = view % k_ImpostorAzimuthViews;
             const uint32_t tileY = view / k_ImpostorAzimuthViews;
             const uint32_t tileSlice = assetIdx * k_ImpostorViewCount + view;
             nvrhi::TextureSlice dst = nvrhi::TextureSlice()
-                .setOrigin(tileX * k_ImpostorBakeResolution, tileY * k_ImpostorBakeResolution, 0)
-                .setWidth(k_ImpostorBakeResolution)
-                .setHeight(k_ImpostorBakeResolution);
+                .setOrigin(tileX * bakeRes, tileY * bakeRes, 0)
+                .setWidth(bakeRes)
+                .setHeight(bakeRes);
 
             m_CommandList->copyTexture(
-                m_StageResources.impostor.debugAlbedoAtlasTexture, dst,
-                m_StageResources.impostor.albedoAlphaTexture, nvrhi::TextureSlice().setArraySlice(tileSlice));
+                m_Shared->impostorDebugAlbedoAtlas(), dst,
+                m_Shared->impostorAlbedo(), nvrhi::TextureSlice().setArraySlice(tileSlice));
             m_CommandList->copyTexture(
-                m_StageResources.impostor.debugNormalAtlasTexture, dst,
-                m_StageResources.impostor.normalTexture, nvrhi::TextureSlice().setArraySlice(tileSlice));
+                m_Shared->impostorDebugNormalAtlas(), dst,
+                m_Shared->impostorNormal(), nvrhi::TextureSlice().setArraySlice(tileSlice));
             m_CommandList->copyTexture(
-                m_StageResources.impostor.debugDepthAtlasTexture, dst,
-                m_StageResources.impostor.depthTexture, nvrhi::TextureSlice().setArraySlice(tileSlice));
+                m_Shared->impostorDebugDepthAtlas(), dst,
+                m_Shared->impostorDepth(), nvrhi::TextureSlice().setArraySlice(tileSlice));
         }
     }
 
@@ -1472,6 +1397,42 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         }
     }
     m_ReadbackFrameIndex++;
+
+    // SDSM debug readback: read the oldest pending ring slot (k_QueuedFrames old).
+    // SDSM only runs when hizActive, so slots may be empty.
+    if (hizActive) {
+        m_SDSMReadbackFrameIndex++;
+    }
+    {
+        uint32_t readSlot = m_SDSMReadbackFrameIndex % k_QueuedFrames;
+        if (m_SDSMReadbackPending[readSlot]) {
+            void* pData = GetDevice()->mapBuffer(m_SDSMReadbackBuffers[readSlot], nvrhi::CpuAccessMode::Read);
+            if (pData) {
+                const auto* out = static_cast<const shader_cb::SDSMCascadeBuildOutput*>(pData);
+
+                m_UI.sdsmDebugValid    = true;
+                m_UI.sdsmNearDepthVal  = out->debugDepthExtents.x;
+                m_UI.sdsmFarDepthVal   = out->debugDepthExtents.y;
+                m_UI.sdsmTightNear     = out->debugDepthExtents.z;
+                m_UI.sdsmTightFar      = out->debugDepthExtents.w;
+
+                m_UI.sdsmCascadeSplits[0] = out->cascadeSplits.x;
+                m_UI.sdsmCascadeSplits[1] = out->cascadeSplits.y;
+                m_UI.sdsmCascadeSplits[2] = out->cascadeSplits.z;
+                m_UI.sdsmCascadeSplits[3] = out->cascadeSplits.w;
+
+                m_UI.sdsmCascade0MinLS[0] = out->shadowCasterMinLS[0].x;
+                m_UI.sdsmCascade0MinLS[1] = out->shadowCasterMinLS[0].y;
+                m_UI.sdsmCascade0MinLS[2] = out->shadowCasterMinLS[0].z;
+                m_UI.sdsmCascade0MaxLS[0] = out->shadowCasterMaxLS[0].x;
+                m_UI.sdsmCascade0MaxLS[1] = out->shadowCasterMaxLS[0].y;
+                m_UI.sdsmCascade0MaxLS[2] = out->shadowCasterMaxLS[0].z;
+
+                GetDevice()->unmapBuffer(m_SDSMReadbackBuffers[readSlot]);
+            }
+            m_SDSMReadbackPending[readSlot] = false;
+        }
+    }
 
     cpuTimer.Stop();
     m_UI.cpuRenderTimeMs = (float)cpuTimer.Milliseconds();
@@ -1539,9 +1500,6 @@ void ComputeRenderPass::_RenderSkyPass(nvrhi::IFramebuffer* framebuffer) {
 // ===========================================================================
 
 void ComputeRenderPass::_RenderShadowPass() {
-    if (m_ViewHandler.shadowCasterBboxLS.isempty())
-        return;
-
     if (!m_StageResources.shadow.treePipeline) {
         nvrhi::GraphicsPipelineDesc pso;
         pso.VS             = m_StageResources.shadow.treeVS;
@@ -1576,17 +1534,21 @@ void ComputeRenderPass::_RenderShadowPass() {
     const uint32_t numLods   = static_cast<uint32_t>(m_Registry.getLodSegments().size());
     const uint32_t lowestLOD = numLods > 0 ? numLods - 1 : 0;
     const auto* terrainPtr = m_Registry.getTerrain();
-    const auto& cascades   = m_ViewHandler.cascades;
 
+    // Clear all cascade slices unconditionally. SDSM may produce content for
+    // cascades whose CPU-computed bbox is empty (different near/far ranges),
+    // so a per-cascade emptiness gate would leave stale depth in those slices
+    // and the PS would sample it with this frame's lightViewProj — visible as
+    // shadow swimming as the camera rotates.
     for (uint32_t cascade = 0; cascade < Render::c_NumCascades; cascade++) {
-        const auto& cBbox = cascades[cascade].shadowCasterBboxLS;
-        if (cBbox.isempty()) continue;
-
         nvrhi::utils::ClearDepthStencilAttachment(m_CommandList,
             m_StageResources.shadow.framebuffers[cascade], 1.0f, 0);
+    }
 
+    for (uint32_t cascade = 0; cascade < Render::c_NumCascades; cascade++) {
         // Trees: one indirect draw per asset, reading its per-(asset x cascade)
         // window in shadowVisBuf via shadowSlotOffsets[ai * NUM_CASCADES + cascade].
+        // Slots with no GPU-culled instances have instanceCount=0 → no-op draws.
         nvrhi::GraphicsState shadowState;
         shadowState.pipeline    = m_StageResources.shadow.treePipeline;
         shadowState.framebuffer = m_StageResources.shadow.framebuffers[cascade];
@@ -1619,9 +1581,11 @@ void ComputeRenderPass::_RenderShadowPass() {
         }
         m_CommandList->endMarker();
 
-        // Terrain shadow - only if terrain bbox intersects this cascade's LS bbox.
-        if (m_StageResources.sceneTerrain.indexCount > 0 && terrainPtr
-            && (terrainPtr->getBbox() * m_ViewHandler.worldToLight).intersects(cBbox)) {
+        // Terrain shadow. The CPU per-cascade intersection test would use the
+        // CPU-computed cascade bbox, which can disagree with the SDSM-overridden
+        // matrix actually used to project; render unconditionally and rely on
+        // ortho clip to discard fragments outside each cascade's NDC.
+        if (m_StageResources.sceneTerrain.indexCount > 0 && terrainPtr) {
             nvrhi::GraphicsState terrShadow;
             terrShadow.pipeline    = m_StageResources.shadow.terrainPipeline;
             terrShadow.framebuffer = m_StageResources.shadow.framebuffers[cascade];
@@ -1907,40 +1871,8 @@ bool ComputeRenderPass::_InitTreePass(nvrhi::ICommandList* initCL, engine::Commo
         attributes, uint32_t(std::size(attributes)), m_StageResources.sceneTree.vertexShader);
     if (!m_StageResources.sceneTree.inputLayout) return false;
 
-    // Load textures
-    const auto& barkTextureSets = m_Registry.getBarkTextureSets();
-    engine::TextureCache textureCache(GetDevice(), std::make_shared<vfs::NativeFileSystem>(), nullptr);
-    m_StageResources.sceneTree.textureSets.resize(barkTextureSets.size());
-
-    for (size_t i = 0; i < barkTextureSets.size(); i++) {
-        std::filesystem::path texDir = g_ProjectDirectory / "media" / barkTextureSets[i] / "textures";
-        std::filesystem::path diffPath, normPath;
-
-        for (const auto& entry : std::filesystem::directory_iterator(texDir)) {
-            std::string filename = entry.path().filename().string();
-            if (filename.find("_diff_") != std::string::npos && entry.path().extension() == ".jpg")
-                diffPath = entry.path();
-            else if (filename.find("_nor_dx_") != std::string::npos && entry.path().extension() == ".jpg")
-                normPath = entry.path();
-        }
-
-        auto diffLoaded = textureCache.LoadTextureFromFile(diffPath, true,  &commonPasses, initCL);
-        auto normLoaded = textureCache.LoadTextureFromFile(normPath, false, &commonPasses, initCL);
-
-        m_StageResources.sceneTree.textureSets[i].diffuse   = diffLoaded->texture;
-        m_StageResources.sceneTree.textureSets[i].normalMap = normLoaded->texture;
-
-        if (!m_StageResources.sceneTree.textureSets[i].diffuse || !m_StageResources.sceneTree.textureSets[i].normalMap)
-            return false;
-    }
-
-    m_StageResources.sceneTree.sampler = GetDevice()->createSampler(
-        nvrhi::SamplerDesc()
-            .setAllAddressModes(nvrhi::SamplerAddressMode::Wrap)
-            .setAllFilters(true)
-            .setMaxAnisotropy(8.f)
-    );
-    if (!m_StageResources.sceneTree.sampler) return false;
+    // Bark textures + sampler come from SharedGPUAssets — bound at binding-set
+    // creation time in _RebuildCullBindings.
 
     // Create tree pass binding layout (with push constants for slot index)
     nvrhi::BindingLayoutDesc treeLayoutDesc;
@@ -1969,49 +1901,8 @@ bool ComputeRenderPass::_InitImpostorPass() {
         "app/ImpostorRenderPass.hlsl", "impostor_vs", nullptr, nvrhi::ShaderType::Vertex);
     m_StageResources.impostor.pixelShader = m_ShaderFactory->CreateShader(
         "app/ImpostorRenderPass.hlsl", "impostor_ps", nullptr, nvrhi::ShaderType::Pixel);
-    m_StageResources.impostor.bakeVertexShader = m_ShaderFactory->CreateShader(
-        "app/ImpostorBake.hlsl", "bake_vs", nullptr, nvrhi::ShaderType::Vertex);
-    m_StageResources.impostor.bakePixelShader = m_ShaderFactory->CreateShader(
-        "app/ImpostorBake.hlsl", "bake_ps", nullptr, nvrhi::ShaderType::Pixel);
-    if (!m_StageResources.impostor.vertexShader || !m_StageResources.impostor.pixelShader
-        || !m_StageResources.impostor.bakeVertexShader || !m_StageResources.impostor.bakePixelShader)
+    if (!m_StageResources.impostor.vertexShader || !m_StageResources.impostor.pixelShader)
         return false;
-
-    nvrhi::VertexAttributeDesc attributes[] = {
-        nvrhi::VertexAttributeDesc()
-            .setName("POSITION")
-            .setFormat(nvrhi::Format::RGB32_FLOAT)
-            .setOffset(0)
-            .setBufferIndex(0)
-            .setElementStride(sizeof(dm::float3)),
-        nvrhi::VertexAttributeDesc()
-            .setName("NORMAL")
-            .setFormat(nvrhi::Format::RGB32_FLOAT)
-            .setOffset(0)
-            .setBufferIndex(1)
-            .setElementStride(sizeof(dm::float3)),
-        nvrhi::VertexAttributeDesc()
-            .setName("TANGENT")
-            .setFormat(nvrhi::Format::RGB32_FLOAT)
-            .setOffset(0)
-            .setBufferIndex(2)
-            .setElementStride(sizeof(dm::float3)),
-        nvrhi::VertexAttributeDesc()
-            .setName("BITANGENT")
-            .setFormat(nvrhi::Format::RGB32_FLOAT)
-            .setOffset(0)
-            .setBufferIndex(3)
-            .setElementStride(sizeof(dm::float3)),
-        nvrhi::VertexAttributeDesc()
-            .setName("UV")
-            .setFormat(nvrhi::Format::RG32_FLOAT)
-            .setOffset(0)
-            .setBufferIndex(4)
-            .setElementStride(sizeof(dm::float2)),
-    };
-    m_StageResources.impostor.bakeInputLayout = GetDevice()->createInputLayout(
-        attributes, uint32_t(std::size(attributes)), m_StageResources.impostor.bakeVertexShader);
-    if (!m_StageResources.impostor.bakeInputLayout) return false;
 
     nvrhi::BindingLayoutDesc layoutDesc;
     layoutDesc.visibility = nvrhi::ShaderType::All;
@@ -2047,255 +1938,7 @@ bool ComputeRenderPass::_InitImpostorPass() {
         nvrhi::SamplerDesc()
             .setAllAddressModes(nvrhi::SamplerAddressMode::Clamp)
             .setAllFilters(false));
-    if (!m_StageResources.impostor.depthSampler) return false;
-
-    nvrhi::BindingLayoutDesc bakeLayoutDesc;
-    bakeLayoutDesc.visibility = nvrhi::ShaderType::All;
-    bakeLayoutDesc.bindings = {
-        nvrhi::BindingLayoutItem::VolatileConstantBuffer(compute_reg::ImpostorBake::kCB_Bake),
-        nvrhi::BindingLayoutItem::Texture_SRV(compute_reg::ImpostorBake::kTex_Diffuse),
-        nvrhi::BindingLayoutItem::Texture_SRV(compute_reg::ImpostorBake::kTex_NormalMap),
-        nvrhi::BindingLayoutItem::Sampler(compute_reg::ImpostorBake::kSampler_Main),
-    };
-    m_StageResources.impostor.bakeBindingLayout = GetDevice()->createBindingLayout(bakeLayoutDesc);
-    if (!m_StageResources.impostor.bakeBindingLayout) return false;
-
-    m_StageResources.impostor.bakeConstantBuffer = GetDevice()->createBuffer(
-        nvrhi::BufferDesc()
-            .setByteSize(c_ImpostorBakeCBSize)
-            .setIsConstantBuffer(true)
-            .setIsVolatile(true)
-            .setMaxVersions(std::max(1u, static_cast<uint32_t>(m_GPUAssets.size()) * k_ImpostorViewCount))
-            .setDebugName("ImpostorBakeCB")
-            .enableAutomaticStateTracking(nvrhi::ResourceStates::ConstantBuffer));
-    if (!m_StageResources.impostor.bakeConstantBuffer) return false;
-
-    return true;
-}
-
-bool ComputeRenderPass::_BakeImpostors(nvrhi::ICommandList* commandList) {
-    if (!commandList || !m_StageResources.impostor.bakeVertexShader || !m_StageResources.impostor.bakePixelShader)
-        return false;
-
-    auto device = GetDevice();
-    const uint32_t numAssets = static_cast<uint32_t>(m_GPUAssets.size());
-    const uint32_t numSlices = std::max(1u, numAssets * k_ImpostorViewCount);
-
-    if (!m_StageResources.impostor.bakeConstantBuffer
-        || m_StageResources.impostor.bakeConstantBuffer->getDesc().maxVersions < numSlices)
-    {
-        m_StageResources.impostor.bakeConstantBuffer = device->createBuffer(
-            nvrhi::BufferDesc()
-                .setByteSize(c_ImpostorBakeCBSize)
-                .setIsConstantBuffer(true)
-                .setIsVolatile(true)
-                .setMaxVersions(numSlices)
-                .setDebugName("ImpostorBakeCB")
-                .enableAutomaticStateTracking(nvrhi::ResourceStates::ConstantBuffer));
-        if (!m_StageResources.impostor.bakeConstantBuffer)
-            return false;
-    }
-
-    // Per-asset bake bounds data. Runtime virtual projection is centered on the
-    // instance world bbox, so only half extents are needed on the GPU.
-    {
-        const dm::affine3 toImpostor = BuildtoObjectTransform();
-        std::vector<dm::float4> assetDims(std::max(1u, numAssets), dm::float4(0.f));
-        for (uint32_t ai = 0; ai < numAssets; ai++) {
-            const auto& asset = m_GPUAssets[ai];
-            if (asset.lods.empty()) continue;
-
-            dm::box3 rotated = asset.lods[0].bbox * toImpostor;
-            const dm::float3 half = rotated.diagonal() * 0.5f;
-            assetDims[ai] = dm::float4(half, 0.f);
-        }
-
-        m_StageResources.impostor.assetDimsBuffer = device->createBuffer(
-            nvrhi::BufferDesc()
-                .setByteSize(assetDims.size() * sizeof(dm::float4))
-                .setStructStride(sizeof(dm::float4))
-                .setDebugName("ImpostorAssetDims")
-                .setCanHaveUAVs(false)
-                .setInitialState(nvrhi::ResourceStates::CopyDest));
-        if (!m_StageResources.impostor.assetDimsBuffer)
-            return false;
-
-        commandList->beginTrackingBufferState(m_StageResources.impostor.assetDimsBuffer, nvrhi::ResourceStates::CopyDest);
-        commandList->writeBuffer(m_StageResources.impostor.assetDimsBuffer,
-            assetDims.data(), assetDims.size() * sizeof(dm::float4));
-        commandList->setPermanentBufferState(m_StageResources.impostor.assetDimsBuffer, nvrhi::ResourceStates::ShaderResource);
-    }
-
-    m_StageResources.impostor.albedoAlphaTexture = device->createTexture(
-        nvrhi::TextureDesc()
-            .setWidth(k_ImpostorBakeResolution)
-            .setHeight(k_ImpostorBakeResolution)
-            .setArraySize(numSlices)
-            .setDimension(nvrhi::TextureDimension::Texture2DArray)
-            .setFormat(nvrhi::Format::RGBA8_UNORM)
-            .setIsRenderTarget(true)
-            .enableAutomaticStateTracking(nvrhi::ResourceStates::RenderTarget)
-            .setDebugName("ImpostorAlbedoAlphaArray"));
-
-    m_StageResources.impostor.normalTexture = device->createTexture(
-        nvrhi::TextureDesc()
-            .setWidth(k_ImpostorBakeResolution)
-            .setHeight(k_ImpostorBakeResolution)
-            .setArraySize(numSlices)
-            .setDimension(nvrhi::TextureDimension::Texture2DArray)
-            .setFormat(nvrhi::Format::RGBA8_UNORM)
-            .setIsRenderTarget(true)
-            // .setClearValue(nvrhi::Color(0.5f, 0.5f, 1.f, 0.f))
-            .enableAutomaticStateTracking(nvrhi::ResourceStates::RenderTarget)
-            .setDebugName("ImpostorNormalArray"));
-
-    m_StageResources.impostor.depthTexture = device->createTexture(
-        nvrhi::TextureDesc()
-            .setWidth(k_ImpostorBakeResolution)
-            .setHeight(k_ImpostorBakeResolution)
-            .setArraySize(numSlices)
-            .setDimension(nvrhi::TextureDimension::Texture2DArray)
-            .setFormat(nvrhi::Format::D32)
-            .setIsRenderTarget(true)
-            // .setClearValue(nvrhi::Color(1.f))
-            .enableAutomaticStateTracking(nvrhi::ResourceStates::DepthWrite)
-            .setDebugName("ImpostorDepthArray"));
-
-    if (!m_StageResources.impostor.albedoAlphaTexture || !m_StageResources.impostor.normalTexture || !m_StageResources.impostor.depthTexture)
-        return false;
-
-    // Framebuffers for each array slice are created just-in-time inside the bake
-    // loop below. They consume RTV/DSV descriptor heap slots, so persisting one
-    // per (asset × view) blew the heap once asset counts grew. They're only
-    // needed during this single bake, so let them go out of scope per-slice.
-    auto makeBakeFramebuffer = [&](uint32_t slice) {
-        nvrhi::FramebufferDesc fbDesc;
-        fbDesc
-            .addColorAttachment(nvrhi::FramebufferAttachment()
-                .setTexture(m_StageResources.impostor.albedoAlphaTexture)
-                .setArraySlice(slice))
-            .addColorAttachment(nvrhi::FramebufferAttachment()
-                .setTexture(m_StageResources.impostor.normalTexture)
-                .setArraySlice(slice))
-            .setDepthAttachment(nvrhi::FramebufferAttachment()
-                .setTexture(m_StageResources.impostor.depthTexture)
-                .setArraySlice(slice));
-        return device->createFramebuffer(fbDesc);
-    };
-
-    nvrhi::FramebufferHandle pipelineProtoFB = makeBakeFramebuffer(0);
-    if (!pipelineProtoFB)
-        return false;
-
-    m_StageResources.impostor.bakeBindingSets.resize(m_StageResources.sceneTree.textureSets.size());
-    for (size_t i = 0; i < m_StageResources.sceneTree.textureSets.size(); i++) {
-        nvrhi::BindingSetDesc bsd;
-        bsd.bindings = {
-            nvrhi::BindingSetItem::ConstantBuffer(compute_reg::ImpostorBake::kCB_Bake, m_StageResources.impostor.bakeConstantBuffer),
-            nvrhi::BindingSetItem::Texture_SRV(compute_reg::ImpostorBake::kTex_Diffuse, m_StageResources.sceneTree.textureSets[i].diffuse),
-            nvrhi::BindingSetItem::Texture_SRV(compute_reg::ImpostorBake::kTex_NormalMap, m_StageResources.sceneTree.textureSets[i].normalMap),
-            nvrhi::BindingSetItem::Sampler(compute_reg::ImpostorBake::kSampler_Main, m_StageResources.sceneTree.sampler),
-        };
-        m_StageResources.impostor.bakeBindingSets[i] = device->createBindingSet(bsd, m_StageResources.impostor.bakeBindingLayout);
-        if (!m_StageResources.impostor.bakeBindingSets[i])
-            return false;
-    }
-
-    nvrhi::GraphicsPipelineDesc psoDesc;
-    psoDesc.VS = m_StageResources.impostor.bakeVertexShader;
-    psoDesc.PS = m_StageResources.impostor.bakePixelShader;
-    psoDesc.inputLayout = m_StageResources.impostor.bakeInputLayout;
-    psoDesc.bindingLayouts = { m_StageResources.impostor.bakeBindingLayout };
-    psoDesc.primType = nvrhi::PrimitiveType::TriangleList;
-    psoDesc.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
-    psoDesc.renderState.rasterState.setCullNone();
-    m_StageResources.impostor.bakePipeline = device->createGraphicsPipeline(
-        psoDesc, pipelineProtoFB->getFramebufferInfo());
-    if (!m_StageResources.impostor.bakePipeline)
-        return false;
-
-    nvrhi::GraphicsState state;
-    state.pipeline = m_StageResources.impostor.bakePipeline;
-    state.viewport.addViewportAndScissorRect(nvrhi::Viewport(
-        float(k_ImpostorBakeResolution), float(k_ImpostorBakeResolution)));
-
-    for (uint32_t ai = 0; ai < numAssets; ai++) {
-        const auto& asset = m_GPUAssets[ai];
-        if (asset.lods.empty() || asset.textureSetIdx >= m_StageResources.impostor.bakeBindingSets.size())
-            continue;
-
-        const auto& lod = asset.lods[0];
-        if (lod.indexCount == 0)
-            continue;
-
-        state.bindings = { m_StageResources.impostor.bakeBindingSets[asset.textureSetIdx] };
-        state.vertexBuffers = {
-            { lod.vbs.position,  0, 0 },
-            { lod.vbs.normal,    1, 0 },
-            { lod.vbs.tangent,   2, 0 },
-            { lod.vbs.bitangent, 3, 0 },
-            { lod.vbs.uv,        4, 0 },
-        };
-        state.indexBuffer = { lod.indexBuffer, nvrhi::Format::R32_UINT, 0 };
-
-        for (uint32_t vi = 0; vi < k_ImpostorViewCount; vi++) {
-            const uint32_t slice = ai * k_ImpostorViewCount + vi;
-            nvrhi::FramebufferHandle framebuffer = (slice == 0)
-                ? pipelineProtoFB
-                : makeBakeFramebuffer(slice);
-            if (!framebuffer)
-                return false;
-
-            nvrhi::utils::ClearColorAttachment(commandList, framebuffer, 0, nvrhi::Color(0.f, 0.f, 0.f, 0.f));
-            nvrhi::utils::ClearColorAttachment(commandList, framebuffer, 1, nvrhi::Color(0.5f, 0.5f, 1.f, 0.f));
-            nvrhi::utils::ClearDepthStencilAttachment(commandList, framebuffer, 1.f, 0);
-
-            ImpostorBakeCB cb;
-            cb.mvp = BuildtoProjTransform(lod.bbox, vi);
-            commandList->writeBuffer(m_StageResources.impostor.bakeConstantBuffer, &cb, sizeof(cb));
-
-            state.framebuffer = framebuffer;
-            commandList->setGraphicsState(state);
-            commandList->drawIndexed(nvrhi::DrawArguments().setVertexCount(lod.indexCount));
-        }
-    }
-
-    // Per-asset atlas-sheet debug textures for ImGui inspection of the baked atlas.
-    // Created here (after the bake) so the copies happen while the array textures
-    // are still in RenderTarget/DepthWrite state — copyTexture handles the transition.
-    {
-        m_StageResources.impostor.debugAlbedoAtlasTexture = device->createTexture(
-            nvrhi::TextureDesc()
-                .setWidth(k_ImpostorBakeResolution * k_ImpostorAzimuthViews)
-                .setHeight(k_ImpostorBakeResolution * k_ImpostorElevationViews)
-                .setFormat(nvrhi::Format::RGBA8_UNORM)
-                .setInitialState(nvrhi::ResourceStates::ShaderResource)
-                .setKeepInitialState(true)
-                .setDebugName("ImpostorAlbedoAtlasDebug"));
-        m_StageResources.impostor.debugNormalAtlasTexture = device->createTexture(
-            nvrhi::TextureDesc()
-                .setWidth(k_ImpostorBakeResolution * k_ImpostorAzimuthViews)
-                .setHeight(k_ImpostorBakeResolution * k_ImpostorElevationViews)
-                .setFormat(nvrhi::Format::RGBA8_UNORM)
-                .setInitialState(nvrhi::ResourceStates::ShaderResource)
-                .setKeepInitialState(true)
-                .setDebugName("ImpostorNormalAtlasDebug"));
-        m_StageResources.impostor.debugDepthAtlasTexture = device->createTexture(
-            nvrhi::TextureDesc()
-                .setWidth(k_ImpostorBakeResolution * k_ImpostorAzimuthViews)
-                .setHeight(k_ImpostorBakeResolution * k_ImpostorElevationViews)
-                .setFormat(nvrhi::Format::R32_FLOAT)
-                .setInitialState(nvrhi::ResourceStates::ShaderResource)
-                .setKeepInitialState(true)
-                .setDebugName("ImpostorDepthAtlasDebug"));
-        if (!m_StageResources.impostor.debugAlbedoAtlasTexture
-            || !m_StageResources.impostor.debugNormalAtlasTexture
-            || !m_StageResources.impostor.debugDepthAtlasTexture)
-            return false;
-    }
-
-    m_StageResources.impostor.pipeline = nullptr;
-    return true;
+    return m_StageResources.impostor.depthSampler != nullptr;
 }
 
 // bool ComputeRenderPass::_InitTimerQueries() {
@@ -2639,6 +2282,17 @@ bool ComputeRenderPass::_InitSDSMPass() {
     };
     m_StageResources.sdsm.buildBindingSet = device->createBindingSet(bsd, m_StageResources.sdsm.buildBindingLayout);
     if (!m_StageResources.sdsm.buildBindingSet) return false;
+
+    // Debug readback ring: one CPU-readable buffer per queued frame, sized to mirror SDSM output.
+    for (uint32_t i = 0; i < k_QueuedFrames; i++) {
+        m_SDSMReadbackBuffers[i] = device->createBuffer(
+            nvrhi::BufferDesc()
+                .setByteSize(sizeof(shader_cb::SDSMCascadeBuildOutput))
+                .setCpuAccess(nvrhi::CpuAccessMode::Read)
+                .setDebugName(("SDSMReadback_" + std::to_string(i)).c_str())
+        );
+        if (!m_SDSMReadbackBuffers[i]) return false;
+    }
 
     return true;
 }

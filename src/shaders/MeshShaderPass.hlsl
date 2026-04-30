@@ -321,7 +321,9 @@ void shadow_as(uint3 gid  : SV_GroupID,
     GroupMemoryBarrierWithGroupSync();
 
     uint slotIdx         = g_SlotIdx;              // shadow slot = ai*NUM_CASCADES + c
-    uint assetLodSlot    = (slotIdx / NUM_CASCADES) * g_NumLods; // LOD 0 range
+    // Shadow casts from the lowest LOD (matches compute pipeline). Casting from
+    // LOD 0 self-shadows the inscribed lower-LOD surface in the color pass.
+    uint assetLodSlot    = (slotIdx / NUM_CASCADES) * g_NumLods + (g_NumLods - 1);
     uint ASInvocsPerInst = max(1u, g_ASInvocsPerSlot[slotIdx]);
     uint visibleCount    = g_SlotCounts[slotIdx];
 
@@ -369,7 +371,7 @@ void shadow_ms(
 {
     uint meshletLocalIdx = i_payload.meshletIndices[gid.x];
     uint shadowSlot      = i_payload.assetLod;
-    uint assetLodSlot    = (shadowSlot / NUM_CASCADES) * g_NumLods;
+    uint assetLodSlot    = (shadowSlot / NUM_CASCADES) * g_NumLods + (g_NumLods - 1);
     uint cascade         = shadowSlot % NUM_CASCADES;
 
     AssetLodRange      al   = g_AssetLodRanges[assetLodSlot];

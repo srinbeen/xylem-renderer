@@ -29,6 +29,7 @@ struct SDSMCascadeOut {
     float4   cascadeSplits;
     float4   shadowCasterMinLS[NUM_CASCADES];
     float4   shadowCasterMaxLS[NUM_CASCADES];
+    float4   debugDepthExtents;  // (nearDepthVal, farDepthVal, tightNear, tightFar)
 };
 RWStructuredBuffer<SDSMCascadeOut> outBuffer : register(XY_REG_U_COMPUTE_SDSM_UAV_CASCADE_OUT);
 
@@ -77,6 +78,9 @@ void BuildCascades(uint3 gtid : SV_GroupThreadID)
             float linSplit = pssmNear + (tightFar - pssmNear) * t;
             g_splits[i] = lambda * logSplit + (1.0 - lambda) * linSplit;
         }
+
+        // Diagnostic readback for debugging shadow swimming.
+        outBuffer[0].debugDepthExtents = float4(nearDepthVal, farDepthVal, tightNear, tightFar);
     }
 
     GroupMemoryBarrierWithGroupSync();

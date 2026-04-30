@@ -116,16 +116,17 @@ void TraditionalRenderPass::_RebuildInstanceBuffers() {
 void TraditionalRenderPass::_RebuildBindingSets() {
     uint32_t totalInstances = std::max<uint32_t>(1, m_Registry.totalInstanceCount());
 
-    m_StageResources.sceneTreeStage.bindingSets.resize(m_StageResources.sceneTreeStage.textureSets.size());
+    const auto& barkTextures = m_Shared->barkTextures();
+    m_StageResources.sceneTreeStage.bindingSets.resize(barkTextures.size());
 
-    for (size_t i = 0; i < m_StageResources.sceneTreeStage.textureSets.size(); i++) {
+    for (size_t i = 0; i < barkTextures.size(); i++) {
         nvrhi::BindingSetDesc bsd;
         bsd.bindings = {
             nvrhi::BindingSetItem::ConstantBuffer(traditional_reg::Tree::kCB_Frame, m_StageResources.frameShared.constantBuffer, nvrhi::BufferRange(0, shader_cb::kFrameSize)),
-            nvrhi::BindingSetItem::Sampler(traditional_reg::Tree::kSampler_Main, m_StageResources.sceneTreeStage.sampler),
+            nvrhi::BindingSetItem::Sampler(traditional_reg::Tree::kSampler_Main, m_Shared->barkSampler()),
             nvrhi::BindingSetItem::Sampler(traditional_reg::Tree::kSampler_Shadow, m_StageResources.shadowStage.comparisonSampler),
-            nvrhi::BindingSetItem::Texture_SRV(traditional_reg::Tree::kTex_Diffuse, m_StageResources.sceneTreeStage.textureSets[i].diffuse),
-            nvrhi::BindingSetItem::Texture_SRV(traditional_reg::Tree::kTex_NormalMap, m_StageResources.sceneTreeStage.textureSets[i].normalMap),
+            nvrhi::BindingSetItem::Texture_SRV(traditional_reg::Tree::kTex_Diffuse, barkTextures[i].diffuse),
+            nvrhi::BindingSetItem::Texture_SRV(traditional_reg::Tree::kTex_NormalMap, barkTextures[i].normalMap),
             nvrhi::BindingSetItem::Texture_SRV(traditional_reg::Tree::kTex_ShadowMap, m_StageResources.shadowStage.depthTexture),
         };
 
@@ -192,12 +193,13 @@ bool TraditionalRenderPass::Init() {
 }
 
 // ===========================================================================
-// Animate - drives the hot-reload cycle
+// Animate
 // ===========================================================================
+// The dirty cycle is driven by RenderOrchestrator so SharedGPUAssets re-bakes
+// the impostor atlas before per-pass binding-set rebuilds run.
 
-void TraditionalRenderPass::Animate(float seconds) {
+void TraditionalRenderPass::Animate(float /*seconds*/) {
     GetDeviceManager()->SetInformativeWindowTitle(g_WindowTitle);
-    frame::RunDirtyCycle(m_Registry, *this);
 }
 
 // ===========================================================================
@@ -803,53 +805,18 @@ bool TraditionalRenderPass::_InitTreePass(nvrhi::ICommandList* initCL, engine::C
     );
     if (!m_StageResources.sceneTreeStage.instanceBuffer) return false;
 
-    // Textures
-    const auto& barkTextureSets = m_Registry.getBarkTextureSets();
-    engine::TextureCache textureCache(GetDevice(), std::make_shared<vfs::NativeFileSystem>(), nullptr);
-    m_StageResources.sceneTreeStage.textureSets.resize(barkTextureSets.size());
+    // Bark textures + sampler come from SharedGPUAssets. Build per-bark binding sets.
+    const auto& barkTextures = m_Shared->barkTextures();
+    m_StageResources.sceneTreeStage.bindingSets.resize(barkTextures.size());
 
-    for (size_t i = 0; i < barkTextureSets.size(); i++) {
-        std::filesystem::path texDir = g_ProjectDirectory / "media" / barkTextureSets[i] / "textures";
-        std::filesystem::path diffPath, normPath;
-
-        for (const auto& entry : std::filesystem::directory_iterator(texDir)) {
-            std::string filename = entry.path().filename().string();
-            if (filename.find("_diff_") != std::string::npos && entry.path().extension() == ".jpg")
-                diffPath = entry.path();
-            else if (filename.find("_nor_dx_") != std::string::npos && entry.path().extension() == ".jpg")
-                normPath = entry.path();
-        }
-
-        auto diffLoaded = textureCache.LoadTextureFromFile(diffPath, true,  &commonPasses, initCL);
-        auto normLoaded = textureCache.LoadTextureFromFile(normPath, false, &commonPasses, initCL);
-
-        m_StageResources.sceneTreeStage.textureSets[i].diffuse   = diffLoaded->texture;
-        m_StageResources.sceneTreeStage.textureSets[i].normalMap = normLoaded->texture;
-
-        if (!m_StageResources.sceneTreeStage.textureSets[i].diffuse || !m_StageResources.sceneTreeStage.textureSets[i].normalMap)
-            return false;
-    }
-
-    // Sampler
-    m_StageResources.sceneTreeStage.sampler = GetDevice()->createSampler(
-        nvrhi::SamplerDesc()
-            .setAllAddressModes(nvrhi::SamplerAddressMode::Wrap)
-            .setAllFilters(true)
-            .setMaxAnisotropy(8.f)
-    );
-    if (!m_StageResources.sceneTreeStage.sampler) return false;
-
-    // Binding layout and sets
-    m_StageResources.sceneTreeStage.bindingSets.resize(m_StageResources.sceneTreeStage.textureSets.size());
-
-    for (size_t i = 0; i < m_StageResources.sceneTreeStage.textureSets.size(); i++) {
+    for (size_t i = 0; i < barkTextures.size(); i++) {
         nvrhi::BindingSetDesc bsd;
         bsd.bindings = {
             nvrhi::BindingSetItem::ConstantBuffer(traditional_reg::Tree::kCB_Frame, m_StageResources.frameShared.constantBuffer, nvrhi::BufferRange(0, shader_cb::kFrameSize)),
-            nvrhi::BindingSetItem::Sampler(traditional_reg::Tree::kSampler_Main, m_StageResources.sceneTreeStage.sampler),
+            nvrhi::BindingSetItem::Sampler(traditional_reg::Tree::kSampler_Main, m_Shared->barkSampler()),
             nvrhi::BindingSetItem::Sampler(traditional_reg::Tree::kSampler_Shadow, m_StageResources.shadowStage.comparisonSampler),
-            nvrhi::BindingSetItem::Texture_SRV(traditional_reg::Tree::kTex_Diffuse, m_StageResources.sceneTreeStage.textureSets[i].diffuse),
-            nvrhi::BindingSetItem::Texture_SRV(traditional_reg::Tree::kTex_NormalMap, m_StageResources.sceneTreeStage.textureSets[i].normalMap),
+            nvrhi::BindingSetItem::Texture_SRV(traditional_reg::Tree::kTex_Diffuse, barkTextures[i].diffuse),
+            nvrhi::BindingSetItem::Texture_SRV(traditional_reg::Tree::kTex_NormalMap, barkTextures[i].normalMap),
             nvrhi::BindingSetItem::Texture_SRV(traditional_reg::Tree::kTex_ShadowMap, m_StageResources.shadowStage.depthTexture),
         };
 

@@ -8,6 +8,7 @@
 
 #include "UIData.hpp"
 #include "SceneRegistry.hpp"
+#include "SharedGPUAssets.hpp"
 #include "ViewHandler.hpp"
 #include "TraditionalRenderPass.hpp"
 #include "ComputeRenderPass.hpp"
@@ -28,11 +29,16 @@ public:
         : IRenderPass{dm}
         , m_Registry{registry}
         , m_UI{ui}
+        , m_Shared{dm->GetDevice(), registry, ui}
         , m_Traditional{dm, registry, ui, m_ViewHandler}
         , m_Compute{dm, registry, ui, m_ViewHandler}
         , m_MeshShader{dm, registry, ui, m_ViewHandler}
         , m_UIPass{dm, &registry, ui, &m_ViewHandler}
-    {}
+    {
+        m_Traditional.SetSharedAssets(&m_Shared);
+        m_Compute.SetSharedAssets(&m_Shared);
+        m_MeshShader.SetSharedAssets(&m_Shared);
+    }
 
     // Must be called before Init().
     void SetShaderFactory(std::shared_ptr<engine::ShaderFactory> sf);
@@ -58,6 +64,7 @@ private:
     UIData&           m_UI;
 
     ViewHandler             m_ViewHandler;
+    SharedGPUAssets         m_Shared;
     TraditionalRenderPass   m_Traditional;
     ComputeRenderPass       m_Compute;
     MeshShaderRenderPass    m_MeshShader;

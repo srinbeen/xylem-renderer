@@ -45,6 +45,16 @@ struct UIData {
     float    meshletMegaBufferMB  = 0.0f;
     uint32_t totalMeshletCount    = 0;
 
+    // SDSM debug readback (populated when hizActiveThisFrame and SDSM ran).
+    bool     sdsmDebugValid       = false;
+    float    sdsmNearDepthVal     = 0.f;
+    float    sdsmFarDepthVal      = 0.f;
+    float    sdsmTightNear        = 0.f;
+    float    sdsmTightFar         = 0.f;
+    float    sdsmCascadeSplits[4] = { 0.f, 0.f, 0.f, 0.f };
+    float    sdsmCascade0MinLS[3] = { 0.f, 0.f, 0.f };
+    float    sdsmCascade0MaxLS[3] = { 0.f, 0.f, 0.f };
+
     void*    shadowMapTexture = nullptr;  // nvrhi::ITexture*, set by active render pass
     std::vector<void*> shadowCascadeTextures;  // per-cascade nvrhi::ITexture* for debug display
     // Hi-Z: one nvrhi::ITexture* per mip level (single-mip scratch textures), set by ComputeCullRenderPass

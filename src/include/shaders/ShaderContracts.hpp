@@ -51,6 +51,11 @@ struct SDSMCascadeBuildOutput {
     dm::float4   cascadeSplits;
     dm::float4   shadowCasterMinLS[Render::c_NumCascades];
     dm::float4   shadowCasterMaxLS[Render::c_NumCascades];
+
+    // Diagnostic fields (debug-only, surfaced to UI via readback ring).
+    // .x = nearDepthVal (raw Hi-Z top-mip nearest), .y = farDepthVal (raw farthest)
+    // .z = tightNear (post safety-expand + clamp), .w = tightFar
+    dm::float4   debugDepthExtents;
 };
 
 inline constexpr size_t kFrameSize = Render::c_ConstantBufferSize;

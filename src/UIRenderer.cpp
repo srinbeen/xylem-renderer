@@ -80,6 +80,33 @@ void UIRenderer::buildUI() {
         ImGui::TextDisabled(m_ui.hizActiveThisFrame ? "(active)" : "(bypassed)");
         ImGui::SliderFloat("PSSM Lambda", &m_ui.pssmLambda, 0.f, 1.f, "%.2f");
         ImGui::SliderFloat("Impostor Alpha Clip", &m_ui.impostorAlphaClip, 0.01f, 0.95f, "%.2f");
+
+        if (ImGui::TreeNode("SDSM Debug")) {
+            if (!m_ui.sdsmDebugValid) {
+                ImGui::TextDisabled("(no SDSM readback yet)");
+            } else {
+                ImGui::Text("nearDepthVal: %.6f", m_ui.sdsmNearDepthVal);
+                ImGui::Text("farDepthVal:  %.6f", m_ui.sdsmFarDepthVal);
+                ImGui::Text("tightNear:    %.4f", m_ui.sdsmTightNear);
+                ImGui::Text("tightFar:     %.4f", m_ui.sdsmTightFar);
+                ImGui::Separator();
+                ImGui::Text("splits: %.3f  %.3f  %.3f  %.3f",
+                    m_ui.sdsmCascadeSplits[0], m_ui.sdsmCascadeSplits[1],
+                    m_ui.sdsmCascadeSplits[2], m_ui.sdsmCascadeSplits[3]);
+                ImGui::Separator();
+                ImGui::Text("Cascade 0 LS bbox:");
+                ImGui::Text("  min: %+.4f %+.4f %+.4f",
+                    m_ui.sdsmCascade0MinLS[0], m_ui.sdsmCascade0MinLS[1], m_ui.sdsmCascade0MinLS[2]);
+                ImGui::Text("  max: %+.4f %+.4f %+.4f",
+                    m_ui.sdsmCascade0MaxLS[0], m_ui.sdsmCascade0MaxLS[1], m_ui.sdsmCascade0MaxLS[2]);
+                const float extX = m_ui.sdsmCascade0MaxLS[0] - m_ui.sdsmCascade0MinLS[0];
+                const float extY = m_ui.sdsmCascade0MaxLS[1] - m_ui.sdsmCascade0MinLS[1];
+                const float extZ = m_ui.sdsmCascade0MaxLS[2] - m_ui.sdsmCascade0MinLS[2];
+                ImGui::Text("  ext: %.4f %.4f %.4f  (texelSize=%.6f)",
+                    extX, extY, extZ, extX / 2048.f);
+            }
+            ImGui::TreePop();
+        }
     }
 
     ImGui::Spacing();

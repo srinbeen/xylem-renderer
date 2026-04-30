@@ -14,6 +14,7 @@
 #include <unordered_map>
 
 #include "SceneRegistry.hpp"
+#include "SharedGPUAssets.hpp"
 #include "Render.hpp"
 #include "UIData.hpp"
 #include "ViewHandler.hpp"
@@ -30,15 +31,17 @@ public:
     static constexpr uint32_t k_QueuedFrames  = 3;
     static constexpr uint32_t k_ShadowRes     = 2048;
     static constexpr float    k_CapacitySlack = 1.5f;
-    static constexpr uint32_t k_ImpostorAzimuthViews   = XYLEM_IMPOSTOR_AZIMUTH_VIEWS;
-    static constexpr uint32_t k_ImpostorElevationViews = XYLEM_IMPOSTOR_ELEVATION_VIEWS;
-    static constexpr uint32_t k_ImpostorViewCount      = XYLEM_IMPOSTOR_VIEW_COUNT;
-    static constexpr uint32_t k_ImpostorBakeResolution = 256;
+    // Hemi-octahedral view counts mirror SharedGPUAssets — kept here for the
+    // per-pass impostor slot/visibility buffer sizing math.
+    static constexpr uint32_t k_ImpostorAzimuthViews   = SharedGPUAssets::k_ImpostorAzimuthViews;
+    static constexpr uint32_t k_ImpostorElevationViews = SharedGPUAssets::k_ImpostorElevationViews;
+    static constexpr uint32_t k_ImpostorViewCount      = SharedGPUAssets::k_ImpostorViewCount;
 
     ComputeRenderPass(app::DeviceManager* dm, SceneRegistry& registry, UIData& ui, ViewHandler& vh)
         : IRenderPass{dm}, m_Registry{registry}, m_UI{ui}, m_ViewHandler{vh} {}
 
     void SetShaderFactory(std::shared_ptr<engine::ShaderFactory> sf) { m_ShaderFactory = std::move(sf); }
+    void SetSharedAssets(SharedGPUAssets* shared) { m_Shared = shared; }
 
     ~ComputeRenderPass();
     bool Init();
@@ -51,11 +54,6 @@ public:
     void onRegionsDirty(const std::vector<size_t>& dirtyRegionIndices);
 
 private:
-    struct TextureSet {
-        nvrhi::TextureHandle diffuse;
-        nvrhi::TextureHandle normalMap;
-    };
-
     struct GPUTreeAsset {
         std::vector<Scene::TreeLODData> lods;
         uint32_t                        textureSetIdx;
@@ -104,41 +102,26 @@ private:
         nvrhi::BufferHandle              regionVisibleBuffer;      // SRV uint32[numRegions], CPU-written each frame
     };
 
-    // Tree draw pass - uses visibility indirection via structured buffers
+    // Tree draw pass — bark textures + sampler come from SharedGPUAssets.
     struct TreePassResources {
         nvrhi::ShaderHandle                    vertexShader;
         nvrhi::ShaderHandle                    pixelShader;
         nvrhi::InputLayoutHandle               inputLayout;
-        std::vector<TextureSet>                textureSets;
-        nvrhi::SamplerHandle                   sampler;
         nvrhi::BindingLayoutHandle             bindingLayout;
         std::vector<nvrhi::BindingSetHandle>   bindingSets;
         nvrhi::GraphicsPipelineHandle          pipeline;
     };
 
+    // Impostor *render* side. The atlas, asset-dims buffer, debug atlas sheets,
+    // and bake pipeline all live in SharedGPUAssets.
     struct ImpostorPassResources {
         nvrhi::ShaderHandle                    vertexShader;
         nvrhi::ShaderHandle                    pixelShader;
-        nvrhi::ShaderHandle                    bakeVertexShader;
-        nvrhi::ShaderHandle                    bakePixelShader;
-        nvrhi::InputLayoutHandle               bakeInputLayout;
         nvrhi::BindingLayoutHandle             bindingLayout;
-        nvrhi::BindingLayoutHandle             bakeBindingLayout;
         nvrhi::SamplerHandle                   sampler;
         nvrhi::SamplerHandle                   depthSampler;
         std::vector<nvrhi::BindingSetHandle>   bindingSets;
-        std::vector<nvrhi::BindingSetHandle>   bakeBindingSets;
-        nvrhi::BufferHandle                    bakeConstantBuffer;
-        nvrhi::BufferHandle                    assetDimsBuffer;     // SRV float4[numAssets], bake-space bbox halfExtents (xyz) + pad
-        nvrhi::TextureHandle                   albedoAlphaTexture;
-        nvrhi::TextureHandle                   normalTexture;
-        nvrhi::TextureHandle                   depthTexture;
-        // Per-selected-asset atlas sheets for ImGui inspection.
-        nvrhi::TextureHandle                   debugAlbedoAtlasTexture;
-        nvrhi::TextureHandle                   debugNormalAtlasTexture;
-        nvrhi::TextureHandle                   debugDepthAtlasTexture;
         nvrhi::GraphicsPipelineHandle          pipeline;
-        nvrhi::GraphicsPipelineHandle          bakePipeline;
     };
 
     struct ShadowPassResources {
@@ -246,8 +229,14 @@ private:
     uint32_t                                           m_ReadbackImpostorEntries = 0;
     uint32_t                                           m_ReadbackShadowEntries = 0;
 
+    // Readback ring for SDSM debug (mirrors cascadeDataBuffer; one slot per queued frame)
+    nvrhi::BufferHandle                                m_SDSMReadbackBuffers[k_QueuedFrames];
+    uint32_t                                           m_SDSMReadbackFrameIndex = 0;
+    bool                                               m_SDSMReadbackPending[k_QueuedFrames] = { false, false, false };
+
     UIData&                                            m_UI;
     SceneRegistry&                                     m_Registry;
+    SharedGPUAssets*                                   m_Shared = nullptr;
 
     // GPU-side asset tracking
     std::vector<GPUTreeAsset>                          m_GPUAssets;
@@ -303,7 +292,6 @@ private:
     void _BuildSlotLayout();
     void _UploadCullBuffers(nvrhi::ICommandList* commandList);
     void _RebuildCullBindings();
-    bool _BakeImpostors(nvrhi::ICommandList* commandList);
 
     // -----------------------------------------------------------------------
     // Render helpers

@@ -233,9 +233,12 @@ void UIRenderer::_buildAssetsSection() {
 
             if (!state.open) {
                 if (ImGui::Button("Edit")) {
-                    state.open       = true;
-                    state.pendingGen = static_cast<int>(asset->lsystemInstance.gen);
-                    state.params     = asset->genParams;
+                    state.open         = true;
+                    state.pendingGen   = static_cast<int>(asset->lsystemInstance.gen);
+                    state.params       = asset->genParams;
+                    state.colonization = asset->colonization;
+                    state.leaf         = asset->leaf;
+                    state.hasLeaves    = asset->hasLeaves;
                 }
             } else {
                 float branchAngleDeg = dm::degrees(state.params.branchAngle);
@@ -251,6 +254,50 @@ void UIRenderer::_buildAssetsSection() {
                 state.params.branchAngle = dm::radians(branchAngleDeg);
                 state.params.seed        = static_cast<uint32_t>(seed);
 
+                // ---- Space Colonization (canopy branchlets) ----------------------
+                if (ImGui::TreeNode("Space Colonization")) {
+                    int   attrCount = static_cast<int>(state.colonization.attractorCount);
+                    int   maxIters  = static_cast<int>(state.colonization.maxIterations);
+                    int   scSeed    = static_cast<int>(state.colonization.seed);
+
+                    ImGui::SliderInt  ("Attractors (0 = off)", &attrCount,                              0,    2048);
+                    ImGui::SliderFloat("Influence Distance",   &state.colonization.influenceDistance,   0.5f, 16.f);
+                    ImGui::SliderFloat("Kill Distance",        &state.colonization.killDistance,        0.1f, 4.f);
+                    ImGui::SliderFloat("Segment Length",       &state.colonization.segmentLength,       0.05f, 2.f);
+                    ImGui::SliderInt  ("Max Iterations",       &maxIters,                               1,    256);
+                    ImGui::SliderFloat("Crown Radius Factor",  &state.colonization.crownRadiusFactor,   0.1f, 2.f);
+                    ImGui::SliderFloat("Crown Y Offset Factor",&state.colonization.crownYOffsetFactor,  0.f,  2.f);
+                    ImGui::SliderFloat("Branchlet Radius",     &state.colonization.branchletRadius,     0.005f, 0.5f);
+                    ImGui::SliderFloat("Branchlet Taper",      &state.colonization.branchletTaper,      0.5f, 1.f);
+                    ImGui::InputInt   ("SC Seed (0=auto)",     &scSeed);
+
+                    state.colonization.attractorCount = static_cast<uint32_t>(std::max(0, attrCount));
+                    state.colonization.maxIterations  = static_cast<uint32_t>(std::max(1, maxIters));
+                    state.colonization.seed           = static_cast<uint32_t>(std::max(0, scSeed));
+
+                    ImGui::TreePop();
+                }
+
+                // ---- Foliage (leaves) --------------------------------------------
+                if (ImGui::TreeNode("Foliage")) {
+                    ImGui::Checkbox("Enable Leaves", &state.hasLeaves);
+
+                    int leavesPerTip = static_cast<int>(state.leaf.perTip);
+
+                    ImGui::ColorEdit3 ("Leaf Color",    &state.leaf.color.x);
+                    ImGui::SliderFloat("Leaf Size",     &state.leaf.size,        0.05f, 2.0f);
+                    ImGui::SliderInt  ("Leaves / Tip",  &leavesPerTip,           0,     16);
+
+                    ImGui::SliderFloat("LOD0 Mult",     &state.leaf.lodMultipliers[0], 0.f, 1.f);
+                    ImGui::SliderFloat("LOD1 Mult",     &state.leaf.lodMultipliers[1], 0.f, 1.f);
+                    ImGui::SliderFloat("LOD2 Mult",     &state.leaf.lodMultipliers[2], 0.f, 1.f);
+                    ImGui::SliderFloat("LOD3 Mult",     &state.leaf.lodMultipliers[3], 0.f, 1.f);
+
+                    state.leaf.perTip = static_cast<uint32_t>(std::max(0, leavesPerTip));
+
+                    ImGui::TreePop();
+                }
+
                 if (ImGui::Button("Apply")) {
                     state.open = false;
 
@@ -259,7 +306,8 @@ void UIRenderer::_buildAssetsSection() {
                         mutableAsset->lsystemInstance.gen = static_cast<uint32_t>(state.pendingGen);
                     }
 
-                    m_Registry->modifyAsset(id, state.params);
+                    m_Registry->modifyAssetExtended(id, state.params, state.colonization,
+                                                    state.leaf, state.hasLeaves);
                 }
                 ImGui::SameLine();
                 if (ImGui::Button("Cancel"))

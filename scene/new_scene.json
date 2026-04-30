@@ -117,7 +117,24 @@
       "stepRatio": 0.92,
       "stepLength": 0.8,
       "seed": 6767,
-      "barkTexture": "bark_willow_02_1k"
+      "barkTexture": "bark_willow_02_1k",
+      "colonization": {
+        "attractorCount": 256,
+        "influenceDistance": 4.0,
+        "killDistance": 0.6,
+        "segmentLength": 0.35,
+        "maxIterations": 64,
+        "crownRadiusFactor": 0.5,
+        "crownYOffsetFactor": 1.0,
+        "branchletRadius": 0.05,
+        "branchletTaper": 0.95
+      },
+      "leaf": {
+        "color":          [0.20, 0.55, 0.18],
+        "size":           0.35,
+        "perTip":         2,
+        "lodMultipliers": [1.0, 0.5, 0.25, 0.0]
+      }
     },
     {
       "name": "PineTall",

@@ -2,6 +2,7 @@
 #define XYLEM_SCENE_REGISTRY_H
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <map>
 #include <memory>
@@ -13,9 +14,20 @@
 
 #include "Procgen.hpp"
 #include "Scene.hpp"
+#include "SpaceColonizer.hpp"
 #include "Terrain.hpp"
 
 namespace Xylem {
+
+// Per-asset leaf rendering parameters. Leaf geometry (cross-billboards) is emitted
+// at every space-colonization terminal, scaled per-LOD by `lodMultipliers`.
+struct LeafParams {
+    dm::float3            color          = dm::float3(0.20f, 0.55f, 0.18f);
+    float                 size           = 0.25f;
+    uint32_t              perTip         = 1;          // 1 leaf per terminal by default — bumping
+                                                       // produces clumping at SC-dense regions.
+    std::array<float, 4>  lodMultipliers = {1.0f, 0.5f, 0.25f, 0.0f};
+};
 
 // CPU-only asset definition — no GPU handles.
 struct TreeAssetDef {
@@ -27,6 +39,9 @@ struct TreeAssetDef {
     std::vector<Scene::TreeLODDef>    lods;
     std::string                       barkTexture;
     uint32_t                          textureSetIdx = 0;
+    ProcGen::SCParams                 colonization;          // disabled when attractorCount == 0
+    LeafParams                        leaf;
+    bool                              hasLeaves = true;      // master switch for leaf emission
     bool                              dirty   = true;
     bool                              visible = true;  // render-time visibility toggle
 };
@@ -105,6 +120,13 @@ public:
                       const std::string& barkTexture = "bark_willow_02_1k");
 
     void modifyAsset(size_t id, const ProcGen::TreeGenerator::Params& params);
+    // Full extended modification — sets gen + colonization + leaf params at once and marks
+    // the asset dirty. Used by the UI's Foliage / Space Colonization editors.
+    void modifyAssetExtended(size_t                                id,
+                             const ProcGen::TreeGenerator::Params& genParams,
+                             const ProcGen::SCParams&              colonization,
+                             const LeafParams&                     leaf,
+                             bool                                  hasLeaves);
     void setAssetVisible(size_t id, bool visible);
     void removeAsset(size_t id);
 

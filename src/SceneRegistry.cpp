@@ -121,6 +121,25 @@ void SceneRegistry::modifyAsset(size_t id, const ProcGen::TreeGenerator::Params&
     }
 }
 
+void SceneRegistry::modifyAssetExtended(size_t                                id,
+                                        const ProcGen::TreeGenerator::Params& genParams,
+                                        const ProcGen::SCParams&              colonization,
+                                        const LeafParams&                     leaf,
+                                        bool                                  hasLeaves) {
+    auto* asset = findAsset(id);
+    if (!asset) return;
+    asset->genParams    = genParams;
+    asset->colonization = colonization;
+    asset->leaf         = leaf;
+    asset->hasLeaves    = hasLeaves;
+    asset->dirty        = true;
+
+    for (auto& region : m_Regions) {
+        if (std::find(region.assetIds.begin(), region.assetIds.end(), id) != region.assetIds.end())
+            region.dirty = true;
+    }
+}
+
 void SceneRegistry::removeAsset(size_t id) {
     auto it = m_AssetIdToIndex.find(id);
     if (it == m_AssetIdToIndex.end()) return;
@@ -241,12 +260,19 @@ void SceneRegistry::_rebuildAsset(TreeAssetDef& asset) {
     if (lsIt == m_LSystems.end()) return;
 
     lsIt->second->reset();
+    // Per-asset seed drives both ring/branch jitter (in TreeGenerator) and stochastic rule
+    // selection (in LSystem). Sharing the field keeps the JSON simple: bumping `seed` on an
+    // asset re-rolls everything coherently.
+    lsIt->second->setSeed(asset.genParams.seed);
     lsIt->second->generate(asset.lsystemInstance.gen);
     asset.lsystemString = lsIt->second->getCurrentString();
 
-    // Generate CPU vertex/index data for each LOD.
+    // Generate CPU vertex/index data for each LOD. SC graph is built once on LOD-0's tips
+    // (positions are LOD-independent — only ring tessellation varies per LOD) then reused.
     asset.lods.resize(m_LodSegments.size());
     auto savedSegments = asset.genParams.radialSegments;
+
+    ProcGen::SpaceColonizer sc;
 
     for (size_t j = 0; j < m_LodSegments.size(); ++j) {
         asset.genParams.radialSegments = m_LodSegments[j];
@@ -254,6 +280,35 @@ void SceneRegistry::_rebuildAsset(TreeAssetDef& asset) {
 
         ProcGen::Buffers lod;
         m_TreeGenerator->generateVertexAndIndexBuffers(asset.lsystemString, lod);
+
+        if (j == 0) {
+            // Build SC graph from LOD-0 tips. SC seed defaults to a salted form of the asset
+            // seed so each asset gets a unique colonization without requiring the user to set
+            // a separate seed; an explicit colonization.seed > 0 overrides.
+            ProcGen::SCParams scParams = asset.colonization;
+            if (scParams.seed == 0) scParams.seed = asset.genParams.seed ^ 0xC010D11Bu;
+            sc.setParams(scParams);
+            sc.grow(lod.branchTipPositions, lod.branchTipDirs, lod.bbox,
+                    lod.branchTipRights, lod.branchTipRadii, lod.branchTipBranchLengths);
+        }
+
+        if (!sc.nodes().empty()) {
+            m_TreeGenerator->emitColonizationCylinders(sc.nodes(), lod, m_LodSegments[j]);
+
+            // Leaves: one cross-billboard cluster per terminal SC node, scaled by the
+            // per-asset LOD multiplier. LOD3's default multiplier is 0 → distant trees lose
+            // leaves entirely. countPerTip is rounded; sub-1 values still yield 0 verts.
+            if (asset.hasLeaves && j < asset.leaf.lodMultipliers.size()) {
+                const float    mult        = asset.leaf.lodMultipliers[j];
+                const uint32_t countPerTip = static_cast<uint32_t>(std::round(asset.leaf.perTip * mult));
+                if (countPerTip > 0) {
+                    const uint32_t leafSeed = (asset.genParams.seed == 0 ? 1u : asset.genParams.seed) ^ 0x1EAF7E5Du;
+                    m_TreeGenerator->emitLeafCrosses(sc.nodes(), sc.terminals(),
+                                                     countPerTip, asset.leaf.size, asset.leaf.color,
+                                                     leafSeed, lod);
+                }
+            }
+        }
 
         asset.lods[j].positions      = std::move(lod.positions);
         asset.lods[j].normals        = std::move(lod.normals);

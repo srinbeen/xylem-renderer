@@ -426,9 +426,12 @@ void TraditionalRenderPass::_RenderShadowPass() {
         pso.bindingLayouts = { m_StageResources.shadowStage.bindingLayout };
         pso.primType       = nvrhi::PrimitiveType::TriangleList;
         pso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
-        pso.renderState.rasterState.setCullFront();
+        // cull=none so flat leaves cast shadows regardless of orientation. Bumped slope-bias
+        // a touch since we no longer skip front faces in the shadow pass — keeps trunks
+        // from self-shadowing into Peter-Pan.
+        pso.renderState.rasterState.setCullNone();
         pso.renderState.rasterState.depthBias            = 2;
-        pso.renderState.rasterState.slopeScaledDepthBias = 2.0f;
+        pso.renderState.rasterState.slopeScaledDepthBias = 2.5f;
         m_StageResources.shadowStage.treePipeline = GetDevice()->createGraphicsPipeline(
             pso, m_StageResources.shadowStage.framebuffers[0]->getFramebufferInfo());
     }
@@ -595,6 +598,9 @@ void TraditionalRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
         psoDesc.inputLayout  = m_StageResources.sceneTreeStage.inputLayout;
         psoDesc.bindingLayouts = { m_StageResources.sceneTreeStage.bindingLayout };
         psoDesc.primType     = nvrhi::PrimitiveType::TriangleList;
+        // cull=none so leaf cross-billboards (and trunk back-faces, slight cost) are visible
+        // from both sides. Single PSO for trunk + leaf — splitting would double draw count.
+        psoDesc.renderState.rasterState.setCullNone();
     #if XYLEM_USE_REVERSE_Z
         psoDesc.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Greater);
     #else

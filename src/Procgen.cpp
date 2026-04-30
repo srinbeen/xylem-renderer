@@ -1,5 +1,7 @@
 #include "include/Procgen.hpp"
+#include "include/SpaceColonizer.hpp"
 
+#include <cmath>
 #include <stack>
 #include <stdexcept>
 
@@ -13,16 +15,51 @@ constexpr dm::float3 kRollAxis          = kGrowthForwardAxis;
 }
 
 void LSystem::generate(uint32_t iterations) {
+    // Per-symbol counter feeds the production-selection hash. Reset each generate() call
+    // so a given (seed, iteration count) always yields the same string.
+    uint32_t streamCounter = 0;
+
     lstring_t next;
-    for (uint32_t i = 0; i < iterations; i++) {
+    for (uint32_t iter = 0; iter < iterations; iter++) {
         next.reserve(m_current.size() * m_growthFactor);
         next.clear();
         for (const auto& op : m_current) {
             auto it = m_rules.find(op);
-            if (it != m_rules.cend())
-                next.insert(next.end(), it->second.begin(), it->second.end());
-            else
+            if (it == m_rules.cend()) {
                 next.push_back(op);
+                continue;
+            }
+
+            const auto& prods = it->second;
+            if (prods.empty()) {
+                next.push_back(op);
+                continue;
+            }
+
+            // Single production: append directly, skip hashing.
+            if (prods.size() == 1) {
+                const auto& rhs = prods.front().rhsBin;
+                next.insert(next.end(), rhs.begin(), rhs.end());
+                continue;
+            }
+
+            // Multiple productions: pick by weight. Seed=0 forces deterministic first-production
+            // so legacy scenes load unchanged.
+            const WeightedProduction* picked = &prods.front();
+            if (m_seed != 0) {
+                float totalWeight = 0.f;
+                for (const auto& p : prods) totalWeight += p.weight;
+                if (totalWeight > 0.f) {
+                    const uint32_t saltedSeed = m_seed ^ (iter * 0x9e3779b9u);
+                    const float    r          = Xylem::hashToFloat(streamCounter++, saltedSeed) * totalWeight;
+                    float          accum      = 0.f;
+                    for (const auto& p : prods) {
+                        accum += p.weight;
+                        if (r < accum) { picked = &p; break; }
+                    }
+                }
+            }
+            next.insert(next.end(), picked->rhsBin.begin(), picked->rhsBin.end());
         }
         m_current = std::move(next);
     }
@@ -35,9 +72,27 @@ void TreeGenerator::generateVertexAndIndexBuffers(const lstring_t& lSystemString
     buffers.bitangents.clear();
     buffers.uvs.clear();
     buffers.indices.clear();
+    buffers.branchTipPositions.clear();
+    buffers.branchTipDirs.clear();
+    buffers.branchTipRights.clear();
+    buffers.branchTipRadii.clear();
+    buffers.branchTipBranchLengths.clear();
     buffers.bbox = dm::box3::empty();
     m_branchCounter = 0;
     m_ringCounter   = 0;
+
+    auto recordTipIfNeeded = [&](const TurtleState& s) {
+        if (!s.lastDrewSegment) return;
+        buffers.branchTipPositions.push_back(s.pos);
+        buffers.branchTipDirs.push_back(dm::applyQuat(s.orientation, kGrowthForwardAxis));
+        // Pass the L-system ring's actual right basis through to SC. createRing() at the
+        // tip uses applyQuat(orientation, unit_i) for `right`, so vertex angles around the
+        // ring are 0..2π measured from this axis. SC root nodes inherit it directly and
+        // children parallel-transport it, eliminating roll discontinuities at the join.
+        buffers.branchTipRights.push_back(dm::applyQuat(s.orientation, unit_i));
+        buffers.branchTipRadii.push_back(s.radius);
+        buffers.branchTipBranchLengths.push_back(s.branchLength);
+    };
 
     std::stack<TurtleState> stateStack;
     TurtleState state;
@@ -52,6 +107,7 @@ void TreeGenerator::generateVertexAndIndexBuffers(const lstring_t& lSystemString
             state.radius       *= params.taperRatio  * (1.f + 0.03f * branchRand());
             state.stepLength   *= params.stepRatio   * (1.f + 0.03f * branchRand());
             state.baseRingIndex = createRing(state, buffers);
+            state.lastDrewSegment = true;
             break;
         case X:
             break;
@@ -71,15 +127,22 @@ void TreeGenerator::generateVertexAndIndexBuffers(const lstring_t& lSystemString
             stateStack.push(state);
             state.radius     *= params.taperRatio  * (1.f + 0.03f * branchRand());
             state.stepLength *= params.stepRatio   * (1.f + 0.03f * branchRand());
+            state.lastDrewSegment = false;
             break;
         case S_POP:
             if (stateStack.empty())
                 throw std::runtime_error("L-System stack underflow on ']'");
+            // The state about to be popped represents a closed [..F..] subtree; record its
+            // endpoint as a branch tip if it actually emitted at least one segment.
+            recordTipIfNeeded(state);
             state = stateStack.top();
             stateStack.pop();
             break;
         }
     }
+
+    // Trailing trunk tip (the turtle's final state, if it ended on F).
+    recordTipIfNeeded(state);
 }
 
 uint32_t TreeGenerator::createRing(const TurtleState& state, Buffers& buffers) {
@@ -141,4 +204,160 @@ uint32_t TreeGenerator::createRing(const TurtleState& state, Buffers& buffers) {
     buffers.bbox.m_maxs = dm::max(buffers.bbox.m_maxs, state.pos + r3);
 
     return nextRingIndex;
+}
+
+void TreeGenerator::emitColonizationCylinders(const std::vector<SCNode>& nodes,
+                                              Buffers&                   buffers,
+                                              uint32_t                   radialSegments)
+{
+    if (nodes.empty()) return;
+
+    const uint32_t segs = radialSegments;
+
+    // One ring per node; child rings are quad-connected to their parent's ring.
+    std::vector<uint32_t> nodeBaseRingIdx(nodes.size(), 0);
+
+    for (size_t i = 0; i < nodes.size(); ++i) {
+        const auto& n = nodes[i];
+
+        // Use the parallel-transported basis SpaceColonizer set on every node. This keeps
+        // ring vertex angles continuous along each chain (no roll discontinuity) AND aligns
+        // SC root rings with the L-system tip rings they sit on top of (no twist in the
+        // connecting quads). Re-orthogonalize/normalize defensively in case of float drift.
+        dm::float3 forward = n.dir;
+        const float fLen = dm::length(forward);
+        forward = (fLen > 1e-6f) ? forward / fLen : unit_j;
+
+        dm::float3 right = n.right - forward * dm::dot(n.right, forward);
+        const float rLen = dm::length(right);
+        right = (rLen > 1e-6f) ? right / rLen
+                               : ((std::abs(forward.y) < 0.9f) ? dm::normalize(dm::cross(forward, unit_j))
+                                                               : dm::normalize(dm::cross(forward, unit_i)));
+        const dm::float3 up = dm::cross(forward, right);
+
+        const uint32_t newRingFirstVert = static_cast<uint32_t>(buffers.positions.size());
+
+        for (uint32_t s = 0; s <= segs; ++s) {
+            const float percentage = dm::clamp(static_cast<float>(s) / static_cast<float>(segs), 0.f, 1.f);
+            const float angle      = 2.f * dm::PI_f * percentage;
+
+            const dm::float3 normal = dm::normalize(std::cos(angle) * right + std::sin(angle) * up);
+            const dm::float3 pos    = n.pos + normal * n.radius;
+
+            const dm::float3 bitangent = forward;
+            const dm::float3 tangent   = dm::cross(bitangent, normal);
+
+            buffers.positions.push_back(pos);
+            buffers.normals.push_back(normal);
+            buffers.tangents.push_back(tangent);
+            buffers.bitangents.push_back(bitangent);
+            // uv invariant: x ∈ [0,1], y ≥ 0 (so the future leaf sentinel `uv.x < 0` is unambiguous).
+            // uv.y carries arc-length from the L-system tip so bark texture wraps continue
+            // smoothly across the L-system → branchlet join instead of restarting at 0.
+            buffers.uvs.push_back(dm::float2(percentage, n.branchLength));
+        }
+        nodeBaseRingIdx[i] = newRingFirstVert;
+
+        // Connect this ring to the parent ring with quads (matches createRing's winding).
+        if (n.parent >= 0) {
+            const uint32_t parentRing = nodeBaseRingIdx[n.parent];
+            for (uint32_t s = 0; s < segs; ++s) {
+                buffers.indices.insert(buffers.indices.end(), {
+                    parentRing       + ((s + 1) % (segs + 1)),
+                    newRingFirstVert + ((s + 1) % (segs + 1)),
+                    parentRing       + s,
+                    parentRing       + s,
+                    newRingFirstVert + ((s + 1) % (segs + 1)),
+                    newRingFirstVert + s,
+                });
+            }
+        }
+
+        const dm::float3 r3(n.radius);
+        buffers.bbox.m_mins = dm::min(buffers.bbox.m_mins, n.pos - r3);
+        buffers.bbox.m_maxs = dm::max(buffers.bbox.m_maxs, n.pos + r3);
+    }
+}
+
+void TreeGenerator::emitLeafCrosses(const std::vector<SCNode>&   nodes,
+                                    const std::vector<uint32_t>& terminals,
+                                    uint32_t                     countPerTip,
+                                    float                        size,
+                                    const dm::float3&            color,
+                                    uint32_t                     seed,
+                                    Buffers&                     buffers)
+{
+    if (countPerTip == 0 || size <= 0.f || terminals.empty()) return;
+
+    const float halfSize = size * 0.5f;
+
+    for (size_t t = 0; t < terminals.size(); ++t) {
+        const uint32_t nodeIdx = terminals[t];
+        if (nodeIdx >= nodes.size()) continue;
+        const auto& n = nodes[nodeIdx];
+
+        // Same orthonormal basis as branchlet rings for visual consistency.
+        dm::float3 forward = n.dir;
+        const float fLen = dm::length(forward);
+        forward = (fLen > 1e-6f) ? forward / fLen : unit_j;
+
+        dm::float3 right = n.right - forward * dm::dot(n.right, forward);
+        const float rLen = dm::length(right);
+        right = (rLen > 1e-6f) ? right / rLen
+                               : ((std::abs(forward.y) < 0.9f) ? dm::normalize(dm::cross(forward, unit_j))
+                                                               : dm::normalize(dm::cross(forward, unit_i)));
+        const dm::float3 up = dm::cross(forward, right);
+
+        for (uint32_t k = 0; k < countPerTip; ++k) {
+            // Hash-based position jitter for clumping when countPerTip > 1.
+            // First leaf in a cluster sits exactly at node.pos so single-leaf clusters look
+            // intentional rather than offset.
+            dm::float3 center = n.pos;
+            if (k > 0) {
+                const uint32_t streamIdx = static_cast<uint32_t>(t) * 1024u + k;
+                const float jx = (Xylem::hashToFloat(streamIdx * 3u + 0u, seed) - 0.5f) * size;
+                const float jy = (Xylem::hashToFloat(streamIdx * 3u + 1u, seed) - 0.5f) * size;
+                const float jz = (Xylem::hashToFloat(streamIdx * 3u + 2u, seed) - 0.5f) * size;
+                center = n.pos + right * jx + up * jy + forward * jz;
+            }
+
+            const uint32_t baseVert = static_cast<uint32_t>(buffers.positions.size());
+
+            // Quad 1 plane: (forward, right), normal = up.
+            //   verts 0..3 corner order: (-f,-r), (+f,-r), (+f,+r), (-f,+r)
+            // Quad 2 plane: (forward, up), normal = right.
+            //   verts 4..7 corner order: (-f,-u), (+f,-u), (+f,+u), (-f,+u)
+            auto pushVert = [&](const dm::float3& pos, const dm::float3& nrm) {
+                buffers.positions.push_back(pos);
+                buffers.normals.push_back(nrm);
+                // Tangent slot doubles as leaf color — see header comment on emitLeafCrosses.
+                buffers.tangents.push_back(color);
+                buffers.bitangents.push_back(forward);
+                buffers.uvs.push_back(dm::float2(-1.f, -1.f));   // sentinel: PS branches on uv.x < 0
+                buffers.bbox.m_mins = dm::min(buffers.bbox.m_mins, pos);
+                buffers.bbox.m_maxs = dm::max(buffers.bbox.m_maxs, pos);
+            };
+
+            // Quad 1: (forward, right), normal = up
+            pushVert(center + forward * (-halfSize) + right * (-halfSize), up);
+            pushVert(center + forward * ( halfSize) + right * (-halfSize), up);
+            pushVert(center + forward * ( halfSize) + right * ( halfSize), up);
+            pushVert(center + forward * (-halfSize) + right * ( halfSize), up);
+
+            // Quad 2: (forward, up), normal = right
+            pushVert(center + forward * (-halfSize) + up * (-halfSize), right);
+            pushVert(center + forward * ( halfSize) + up * (-halfSize), right);
+            pushVert(center + forward * ( halfSize) + up * ( halfSize), right);
+            pushVert(center + forward * (-halfSize) + up * ( halfSize), right);
+
+            // Two triangles per quad. Once cull=none lands in Stage 3c both windings light up;
+            // until then only one side is visible — fine for verifying geometry placement.
+            buffers.indices.insert(buffers.indices.end(), {
+                baseVert + 0, baseVert + 1, baseVert + 2,
+                baseVert + 0, baseVert + 2, baseVert + 3,
+                baseVert + 4, baseVert + 5, baseVert + 6,
+                baseVert + 4, baseVert + 6, baseVert + 7,
+            });
+        }
+    }
 }

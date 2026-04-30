@@ -393,6 +393,20 @@ void MeshShaderRenderPass::_RebuildMeshletMegabuffers(nvrhi::ICommandList* /*cl*
                 desc.bounds         = dm::float4(b.center[0],   b.center[1],   b.center[2],   b.radius);
                 desc.coneApex       = dm::float4(b.cone_apex[0],b.cone_apex[1],b.cone_apex[2], 0.f);
                 desc.coneAxisCutoff = dm::float4(b.cone_axis[0],b.cone_axis[1],b.cone_axis[2], b.cone_cutoff);
+
+                // Disable AS cone culling for any meshlet that contains leaf vertices.
+                // Leaf cross-billboards have triangles facing four different directions —
+                // meshopt usually returns cone_cutoff = 1 (disabled) for such divergent
+                // clusters, but a mixed trunk + leaf meshlet could get a misleading cone
+                // that culls the trunk part incorrectly. Forcing cutoff = 1 is cheap and
+                // bulletproof. Detection is via the uv.x < 0 sentinel set in emitLeafCrosses.
+                for (uint32_t v = 0; v < m.vertex_count; ++v) {
+                    const uint32_t localIdx = mlVerts[m.vertex_offset + v];
+                    if (localIdx < lod.uvs.size() && lod.uvs[localIdx].x < 0.f) {
+                        desc.coneAxisCutoff.w = 1.f;
+                        break;
+                    }
+                }
                 meshletDescs.push_back(desc);
 
                 meshletVerts.insert(meshletVerts.end(),
@@ -1015,7 +1029,9 @@ void MeshShaderRenderPass::_CreateMainPipelineIfNeeded(nvrhi::IFramebuffer* fram
 #else
     rs.depthStencilState.depthFunc = nvrhi::ComparisonFunc::Less;
 #endif
-    rs.rasterState.cullMode = nvrhi::RasterCullMode::Back;
+    // cull=none so leaf cross-billboards render from both sides — single PSO for trunk +
+    // leaf meshlets keeps the indirect dispatch path uniform.
+    rs.rasterState.cullMode = nvrhi::RasterCullMode::None;
 
     m_StageResources.sceneDraw.pipeline = GetDevice()->createMeshletPipeline(psoDesc, framebuffer->getFramebufferInfo());
 }
@@ -1036,9 +1052,11 @@ void MeshShaderRenderPass::_CreateShadowPipelineIfNeeded() {
     // Light-space shadow maps use the standard D3D depth range/projection built by
     // ViewHandler::computeCascades, independent of the main camera's reverse-Z mode.
     rs.depthStencilState.depthFunc = nvrhi::ComparisonFunc::Less;
-    rs.rasterState.cullMode = nvrhi::RasterCullMode::Front;
+    // cull=none so flat leaves cast shadows regardless of orientation; bumped slope-bias
+    // a touch since front faces no longer get rejected.
+    rs.rasterState.cullMode = nvrhi::RasterCullMode::None;
     rs.rasterState.depthBias = 2;
-    rs.rasterState.slopeScaledDepthBias = 2.f;
+    rs.rasterState.slopeScaledDepthBias = 2.5f;
 
     m_StageResources.shadow.pipeline = GetDevice()->createMeshletPipeline(
         psoDesc, m_StageResources.shadow.framebuffers[0]->getFramebufferInfo());
@@ -1949,7 +1967,9 @@ void MeshShaderRenderPass::_CreateDepthPrepassPipelineIfNeeded() {
 #else
     rs.depthStencilState.depthFunc = nvrhi::ComparisonFunc::LessOrEqual;
 #endif
-    rs.rasterState.cullMode = nvrhi::RasterCullMode::Back;
+    // Leaves participate in Hi-Z occlusion via the depth prepass — both faces of cross-
+    // billboards must reach the depth target so trees behind them get correctly occluded.
+    rs.rasterState.cullMode = nvrhi::RasterCullMode::None;
 
     m_StageResources.depthPrepass.pipeline = GetDevice()->createMeshletPipeline(
         psoDesc, m_StageResources.depthPrepass.framebuffer->getFramebufferInfo());

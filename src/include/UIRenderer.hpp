@@ -38,6 +38,9 @@ private:
         bool                           open       = false;
         int                            pendingGen = 3;
         ProcGen::TreeGenerator::Params params;
+        ProcGen::SCParams              colonization;
+        LeafParams                     leaf;
+        bool                           hasLeaves  = true;
     };
 
     struct AddAssetState {

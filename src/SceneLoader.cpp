@@ -75,11 +75,51 @@ bool SceneLoader::Load(const std::filesystem::path& path, SceneRegistry& registr
         lsNode["name"]  >> name;
         lsNode["axiom"] >> axiom;
 
-        std::unordered_map<char, std::string> rules;
-        for (const auto& key : lsNode["rules"].getMemberNames())
-            if (!key.empty()) rules[key[0]] = lsNode["rules"][key].asString();
+        // Rule values are either a plain string (deterministic) or an array of
+        //   { "weight": <float>, "rhs": "<string>" }
+        // objects (stochastic). We classify per-rule so a single L-system can mix both.
+        std::unordered_map<char, std::string>                                   detRules;
+        std::unordered_map<char, std::vector<std::pair<float, std::string>>>    weightedRules;
+        bool anyWeighted = false;
 
-        registry.addLSystem(name, std::make_unique<LSystem>(axiom, rules));
+        const auto& rulesNode = lsNode["rules"];
+        for (const auto& key : rulesNode.getMemberNames()) {
+            if (key.empty()) continue;
+            const auto& v = rulesNode[key];
+            if (v.isArray()) {
+                std::vector<std::pair<float, std::string>> productions;
+                productions.reserve(v.size());
+                for (const auto& prod : v) {
+                    float       w   = 1.f;
+                    std::string rhs;
+                    prod["weight"] >> w;
+                    prod["rhs"]    >> rhs;
+                    productions.emplace_back(w, std::move(rhs));
+                }
+                weightedRules[key[0]] = std::move(productions);
+                anyWeighted = true;
+            } else {
+                detRules[key[0]] = v.asString();
+            }
+        }
+
+        std::unique_ptr<LSystem> ls;
+        if (anyWeighted) {
+            // Lift any deterministic rules into weight=1 single-production entries so the
+            // weighted constructor sees a complete rule set.
+            for (const auto& [c, s] : detRules)
+                weightedRules[c].push_back({ 1.f, s });
+            ls = std::make_unique<LSystem>(axiom, weightedRules);
+        } else {
+            ls = std::make_unique<LSystem>(axiom, detRules);
+        }
+
+        // Optional per-lsystem seed for stochastic rule selection. 0 = legacy deterministic.
+        uint32_t seed = 0;
+        if (lsNode.isMember("seed")) lsNode["seed"] >> seed;
+        ls->setSeed(seed);
+
+        registry.addLSystem(name, std::move(ls));
     }
     if (registry.getLSystems().empty()) return false;
 
@@ -126,6 +166,54 @@ bool SceneLoader::Load(const std::filesystem::path& path, SceneRegistry& registr
         LSystemInstance lsInstance { lsName, gen };
         size_t stableId = registry.addAsset(assetName, lsInstance, params, barkTexture);
         assetNameToId[assetName] = stableId;
+
+        // Optional colonization block — absent means SC stays off (attractorCount=0 default).
+        if (aNode.isMember("colonization")) {
+            const auto&        cNode = aNode["colonization"];
+            ProcGen::SCParams  scp;
+            cNode["attractorCount"]     >> scp.attractorCount;
+            cNode["influenceDistance"]  >> scp.influenceDistance;
+            cNode["killDistance"]       >> scp.killDistance;
+            cNode["segmentLength"]      >> scp.segmentLength;
+            cNode["maxIterations"]      >> scp.maxIterations;
+            cNode["crownRadiusFactor"]  >> scp.crownRadiusFactor;
+            cNode["crownYOffsetFactor"] >> scp.crownYOffsetFactor;
+            cNode["branchletRadius"]    >> scp.branchletRadius;
+            cNode["branchletTaper"]     >> scp.branchletTaper;
+            cNode["seed"]               >> scp.seed;
+
+            if (auto* a = registry.findAsset(stableId)) a->colonization = scp;
+        }
+
+        // Optional leaf block — fields default from LeafParams when absent.
+        if (aNode.isMember("leaf")) {
+            const auto& lNode = aNode["leaf"];
+            LeafParams  lp;
+            // Default values come from LeafParams's struct defaults; only overwrite what's present.
+            if (auto* a = registry.findAsset(stableId)) lp = a->leaf;
+
+            if (lNode.isMember("color") && lNode["color"].isArray() && lNode["color"].size() == 3) {
+                lp.color.x = lNode["color"][0].asFloat();
+                lp.color.y = lNode["color"][1].asFloat();
+                lp.color.z = lNode["color"][2].asFloat();
+            }
+            lNode["size"]    >> lp.size;
+            lNode["perTip"]  >> lp.perTip;
+            if (lNode.isMember("lodMultipliers") && lNode["lodMultipliers"].isArray()) {
+                const auto& arr = lNode["lodMultipliers"];
+                for (Json::ArrayIndex i = 0; i < arr.size() && i < lp.lodMultipliers.size(); ++i)
+                    lp.lodMultipliers[i] = arr[i].asFloat();
+            }
+
+            if (auto* a = registry.findAsset(stableId)) a->leaf = lp;
+        }
+
+        // Optional master switch — defaults to true (TreeAssetDef::hasLeaves = true).
+        if (aNode.isMember("hasLeaves")) {
+            bool hasLeaves = true;
+            aNode["hasLeaves"] >> hasLeaves;
+            if (auto* a = registry.findAsset(stableId)) a->hasLeaves = hasLeaves;
+        }
     }
 
     // -------------------------------------------------------------------------

@@ -750,7 +750,9 @@ void ComputeRenderPass::_RenderDepthPrepass() {
     #else
         pso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
     #endif
-        pso.renderState.rasterState.setCullBack();
+        // Leaves participate in Hi-Z occlusion — both faces of cross-billboards must reach
+        // the depth target for shape-correct occlusion of trees behind them.
+        pso.renderState.rasterState.setCullNone();
         m_StageResources.depthPrepass.treePipeline = GetDevice()->createGraphicsPipeline(
             pso, m_StageResources.depthPrepass.framebuffer->getFramebufferInfo());
     }
@@ -1507,9 +1509,11 @@ void ComputeRenderPass::_RenderShadowPass() {
         pso.bindingLayouts = { m_StageResources.shadow.bindingLayout };
         pso.primType       = nvrhi::PrimitiveType::TriangleList;
         pso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
-        pso.renderState.rasterState.setCullFront();
+        // cull=none so flat leaves cast shadows from both sides; bumped slope-bias since
+        // we no longer reject front faces in the shadow pass.
+        pso.renderState.rasterState.setCullNone();
         pso.renderState.rasterState.depthBias            = 2;
-        pso.renderState.rasterState.slopeScaledDepthBias = 2.0f;
+        pso.renderState.rasterState.slopeScaledDepthBias = 2.5f;
         m_StageResources.shadow.treePipeline = GetDevice()->createGraphicsPipeline(
             pso, m_StageResources.shadow.framebuffers[0]->getFramebufferInfo());
     }
@@ -1629,6 +1633,9 @@ void ComputeRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
         psoDesc.inputLayout  = m_StageResources.sceneTree.inputLayout;
         psoDesc.bindingLayouts = { m_StageResources.sceneTree.bindingLayout };
         psoDesc.primType     = nvrhi::PrimitiveType::TriangleList;
+        // cull=none so leaf cross-billboards are visible from both sides — single PSO for
+        // trunk + leaf to avoid splitting the indirect draw list.
+        psoDesc.renderState.rasterState.setCullNone();
     #if XYLEM_USE_REVERSE_Z
         psoDesc.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Greater);
     #else

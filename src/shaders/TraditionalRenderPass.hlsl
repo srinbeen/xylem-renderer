@@ -56,8 +56,20 @@ void main_vs(
 	o_worldPos		= worldPos.xyz;
 	o_viewZ			= mul(worldPos, viewMatrix).z;
 	o_normal    	= normalize(mul(i_normal, normalMat));
-	o_tangent   	= normalize(mul(i_tangent, normalMat));
-	o_bitangent 	= normalize(mul(i_bitangent, normalMat));
+
+	// Leaf vertices (uv.x < 0) carry leaf color in the TANGENT slot — skip the rotation +
+	// normalize so the RGB values reach the PS intact. Trunk verts take the standard path
+	// (tangent transformed for normal mapping).
+	if (i_uv.x < 0.0)
+	{
+		o_tangent   = i_tangent;
+		o_bitangent = i_bitangent;
+	}
+	else
+	{
+		o_tangent   = normalize(mul(i_tangent, normalMat));
+		o_bitangent = normalize(mul(i_bitangent, normalMat));
+	}
 	o_uv 			= i_uv;
 }
 
@@ -117,25 +129,40 @@ void main_ps(
 	out float4 o_color : SV_Target0
 )
 {
-	float3 T = normalize(i_tangent);
-	float3 B = normalize(i_bitangent);
-	float3 N = normalize(i_normal);
-	float3x3 TBN = float3x3(T, B, N);
-
-	// [0-1] to [-1 to 1]
-	float3 tangentNormal = normalize(t_NormalMap.Sample(s_Sampler, i_uv).rgb * 2.0 - 1.0);
-	float3 worldNormal = normalize(mul(tangentNormal, TBN));
-
-	float3 lightDir = -normalize(sunLightDir);
-	float diffuse = max(dot(worldNormal, lightDir), 0);
-
-	// Cascade selection by view-space depth
+	// Cascade selection (shared between trunk + leaf paths)
 	uint cascadeIdx = 3;
 	if      (i_viewZ < cascadeSplits.x) cascadeIdx = 0;
 	else if (i_viewZ < cascadeSplits.y) cascadeIdx = 1;
 	else if (i_viewZ < cascadeSplits.z) cascadeIdx = 2;
 
+	float3 lightDir = -normalize(sunLightDir);
 	float notInShadow = SampleShadowCascade(i_worldPos, cascadeIdx);
+
+	// Leaves are tagged with uv = (-1, -1) by the CPU emitter. They take a simple
+	// double-sided lambert path (abs(N·L) — both sides lit since cull=none) and read
+	// their color from the TANGENT slot, where the per-asset leaf color was packed.
+	if (i_uv.x < 0.0)
+	{
+		float3 leafColor = i_tangent;   // tangent stream carries leaf color for leaf verts
+		float3 N = normalize(i_normal);
+		float diffuse = abs(dot(N, lightDir));
+
+		float ambient  = 0.20;
+		float lighting = ambient + (1.0 - ambient) * diffuse * notInShadow;
+		o_color = float4(lighting * leafColor, 1);
+		return;
+	}
+
+	// Trunk / branchlet path: tangent-space normal mapping
+	float3 T = normalize(i_tangent);
+	float3 B = normalize(i_bitangent);
+	float3 N = normalize(i_normal);
+	float3x3 TBN = float3x3(T, B, N);
+
+	float3 tangentNormal = normalize(t_NormalMap.Sample(s_Sampler, i_uv).rgb * 2.0 - 1.0);
+	float3 worldNormal = normalize(mul(tangentNormal, TBN));
+
+	float diffuse = max(dot(worldNormal, lightDir), 0);
 
 	float ambient  = 0.15;
 	float lighting = ambient + (1.0 - ambient) * diffuse * notInShadow;

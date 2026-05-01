@@ -355,7 +355,7 @@ void SceneRegistry::_rebuildRegion(RegionDef& region) {
         size_t assetId = region.assetIds[i % region.assetIds.size()];
         const auto* asset = findAsset(assetId);
         float radius = asset && !asset->lods.empty()
-            ? dm::length(asset->lods[0].bbox.diagonal()) * 0.5f : 1.f;
+            ? maxRadius : 1.f;
 
         placements[i] = { {posX, posZ}, radius, assetId, rotY };
     }

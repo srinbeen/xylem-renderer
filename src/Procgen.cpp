@@ -95,7 +95,7 @@ void TreeGenerator::generateVertexAndIndexBuffers(const lstring_t& lSystemString
     };
 
     std::stack<TurtleState> stateStack;
-    TurtleState state;
+    TurtleState state(params);
 
     state.baseRingIndex = createRing(state, buffers);
 
@@ -104,8 +104,8 @@ void TreeGenerator::generateVertexAndIndexBuffers(const lstring_t& lSystemString
         case F:
             state.branchLength += state.stepLength;
             state.pos          += dm::applyQuat(state.orientation, kGrowthForwardAxis) * state.stepLength;
-            state.radius       *= params.taperRatio  * (1.f + 0.03f * branchRand());
-            state.stepLength   *= params.stepRatio   * (1.f + 0.03f * branchRand());
+            state.radius       *= std::sqrtf(params.taperRatio)  * (1.f + 0.03f * branchRand());
+            state.stepLength   *= std::sqrtf(params.stepRatio)   * (1.f + 0.03f * branchRand());
             state.baseRingIndex = createRing(state, buffers);
             state.lastDrewSegment = true;
             break;
@@ -309,46 +309,68 @@ void TreeGenerator::emitLeafCrosses(const std::vector<SCNode>&   nodes,
         const dm::float3 up = dm::cross(forward, right);
 
         for (uint32_t k = 0; k < countPerTip; ++k) {
-            // Hash-based position jitter for clumping when countPerTip > 1.
-            // First leaf in a cluster sits exactly at node.pos so single-leaf clusters look
-            // intentional rather than offset.
+            const uint32_t streamIdx = static_cast<uint32_t>(t) * 1024u + k;
+
+            // Step 1 — random roll around forward: rotates the (right, up) axes in the
+            // plane perpendicular to the twig without changing forward itself.
+            const float phi    = Xylem::hashToFloat(streamIdx, seed ^ 0xD0D0D0Du) * 2.f * dm::PI_f;
+            const float cosPhi = std::cos(phi);
+            const float sinPhi = std::sin(phi);
+            const dm::float3 rolledRight = right * cosPhi + up * sinPhi;
+            const dm::float3 rolledUp    = up    * cosPhi - right * sinPhi;
+
+            // Step 2 — random tilt from forward toward rolledUp: the spine of the cross-
+            // billboard (the shared height axis of both quads) lies at angle theta between
+            // forward and rolledUp. theta=0 → spine along forward (shard); theta=π/2 →
+            // spine = rolledUp (perpendicular to twig). Full [0, π/2] range gives variety.
+            const float theta   = Xylem::hashToFloat(streamIdx, seed ^ 0xB1A5FEEDu) * dm::PI_f * 0.5f;
+            const dm::float3 spine = forward * std::cos(theta) + rolledUp * std::sin(theta);
+            // spine is already unit-length: forward⊥rolledUp, both unit, cos²+sin²=1.
+
+            // rolledRight is perpendicular to both forward and rolledUp by construction, so
+            // it is automatically ⊥ spine — no Gram-Schmidt needed.
+            // q2 completes the orthonormal frame (spine, rolledRight, q2).
+            const dm::float3 q2 = dm::cross(spine, rolledRight);
+
+            // Position jitter in branch-frame coordinates so extra leaves cluster naturally
+            // around the twig rather than scattering in world space.
             dm::float3 center = n.pos;
             if (k > 0) {
-                const uint32_t streamIdx = static_cast<uint32_t>(t) * 1024u + k;
                 const float jx = (Xylem::hashToFloat(streamIdx * 3u + 0u, seed) - 0.5f) * size;
                 const float jy = (Xylem::hashToFloat(streamIdx * 3u + 1u, seed) - 0.5f) * size;
                 const float jz = (Xylem::hashToFloat(streamIdx * 3u + 2u, seed) - 0.5f) * size;
-                center = n.pos + right * jx + up * jy + forward * jz;
+                center = n.pos + rolledRight * jx + spine * jy + q2 * jz;
             }
+
+            // Per-leaf scale variation [0.5, 1.5] × base size.
+            const float scaleHash = Xylem::hashToFloat(streamIdx, seed ^ 0xF01FA11u);
+            const float leafHalf  = halfSize * (0.5f + scaleHash);
 
             const uint32_t baseVert = static_cast<uint32_t>(buffers.positions.size());
 
-            // Quad 1 plane: (forward, right), normal = up.
-            //   verts 0..3 corner order: (-f,-r), (+f,-r), (+f,+r), (-f,+r)
-            // Quad 2 plane: (forward, up), normal = right.
-            //   verts 4..7 corner order: (-f,-u), (+f,-u), (+f,+u), (-f,+u)
             auto pushVert = [&](const dm::float3& pos, const dm::float3& nrm) {
                 buffers.positions.push_back(pos);
                 buffers.normals.push_back(nrm);
                 // Tangent slot doubles as leaf color — see header comment on emitLeafCrosses.
                 buffers.tangents.push_back(color);
-                buffers.bitangents.push_back(forward);
+                buffers.bitangents.push_back(spine);
                 buffers.uvs.push_back(dm::float2(-1.f, -1.f));   // sentinel: PS branches on uv.x < 0
                 buffers.bbox.m_mins = dm::min(buffers.bbox.m_mins, pos);
                 buffers.bbox.m_maxs = dm::max(buffers.bbox.m_maxs, pos);
             };
 
-            // Quad 1: (forward, right), normal = up
-            pushVert(center + forward * (-halfSize) + right * (-halfSize), up);
-            pushVert(center + forward * ( halfSize) + right * (-halfSize), up);
-            pushVert(center + forward * ( halfSize) + right * ( halfSize), up);
-            pushVert(center + forward * (-halfSize) + right * ( halfSize), up);
+            // Cross-billboard: two quads sharing `spine` as their height axis.
+            // Quad 1: (rolledRight, spine) plane, normal = q2
+            pushVert(center + rolledRight * (-leafHalf) + spine * (-leafHalf), q2);
+            pushVert(center + rolledRight * ( leafHalf) + spine * (-leafHalf), q2);
+            pushVert(center + rolledRight * ( leafHalf) + spine * ( leafHalf), q2);
+            pushVert(center + rolledRight * (-leafHalf) + spine * ( leafHalf), q2);
 
-            // Quad 2: (forward, up), normal = right
-            pushVert(center + forward * (-halfSize) + up * (-halfSize), right);
-            pushVert(center + forward * ( halfSize) + up * (-halfSize), right);
-            pushVert(center + forward * ( halfSize) + up * ( halfSize), right);
-            pushVert(center + forward * (-halfSize) + up * ( halfSize), right);
+            // Quad 2: (q2, spine) plane, normal = rolledRight
+            pushVert(center + q2 * (-leafHalf) + spine * (-leafHalf), rolledRight);
+            pushVert(center + q2 * ( leafHalf) + spine * (-leafHalf), rolledRight);
+            pushVert(center + q2 * ( leafHalf) + spine * ( leafHalf), rolledRight);
+            pushVert(center + q2 * (-leafHalf) + spine * ( leafHalf), rolledRight);
 
             // Two triangles per quad. Once cull=none lands in Stage 3c both windings light up;
             // until then only one side is visible — fine for verifying geometry placement.

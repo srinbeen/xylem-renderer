@@ -33,7 +33,7 @@
       "name": "Willow",
       "axiom": "X",
       "rules": {
-        "X": "F[->X][+<X][^-X]FX",
+        "X": "F[->X][+<X][^-X][&>X]FX",
         "F": "FF"
       }
     },
@@ -56,7 +56,7 @@
       "name": "Birch",
       "axiom": "X",
       "rules": {
-        "X": "F[-<&X][+>^X]FX",
+        "X": "F[-<&X][+>^X][&>X]FX",
         "F": "FF"
       }
     },
@@ -72,7 +72,7 @@
       "name": "Cypress",
       "axiom": "X",
       "rules": {
-        "X": "F[+>^X][->&X]FX",
+        "X": "F[+>^X][->&X][>+X][<-X]FX",
         "F": "FF"
       }
     },
@@ -80,7 +80,7 @@
       "name": "Fern",
       "axiom": "X",
       "rules": {
-        "X": "F[->&X][+<^X]X",
+        "X": "FF[->&X][+<^X][&+X][^-X]X",
         "F": "FF"
       }
     }
@@ -91,22 +91,56 @@
       "lsystem": "Oak",
       "generation": 4,
       "branchAngle": 25.0,
-      "taperRatio": 0.85,
+      "taperRatio": 0.90,
       "stepRatio": 0.90,
       "stepLength": 1.2,
       "seed": 67,
-      "barkTexture": "japanese_hackberry_bark_1k"
+      "barkTexture": "japanese_hackberry_bark_1k",
+      "colonization": {
+        "attractorCount": 320,
+        "influenceDistance": 5.0,
+        "killDistance": 0.8,
+        "segmentLength": 0.45,
+        "maxIterations": 64,
+        "crownRadiusFactor": 0.60,
+        "crownYOffsetFactor": 0.95,
+        "branchletRadius": 0.07,
+        "branchletTaper": 0.93
+      },
+      "leaf": {
+        "color":          [0.22, 0.50, 0.18],
+        "size":           0.42,
+        "perTip":         2,
+        "lodMultipliers": [1.0, 0.5, 0.25, 0.0]
+      }
     },
     {
       "name": "OakAged",
       "lsystem": "Oak",
       "generation": 4,
       "branchAngle": 28.0,
-      "taperRatio": 0.82,
+      "taperRatio": 0.90,
       "stepRatio": 0.88,
       "stepLength": 1.4,
       "seed": 123,
-      "barkTexture": "japanese_hackberry_bark_1k"
+      "barkTexture": "japanese_hackberry_bark_1k",
+      "colonization": {
+        "attractorCount": 320,
+        "influenceDistance": 5.0,
+        "killDistance": 0.8,
+        "segmentLength": 0.45,
+        "maxIterations": 64,
+        "crownRadiusFactor": 0.60,
+        "crownYOffsetFactor": 0.95,
+        "branchletRadius": 0.07,
+        "branchletTaper": 0.93
+      },
+      "leaf": {
+        "color":          [0.22, 0.50, 0.18],
+        "size":           0.42,
+        "perTip":         2,
+        "lodMultipliers": [1.0, 0.5, 0.25, 0.0]
+      }
     },
     {
       "name": "OakSapling",
@@ -131,7 +165,7 @@
       },
       "leaf": {
         "color":          [0.20, 0.55, 0.18],
-        "size":           0.35,
+        "size":           0.38,
         "perTip":         2,
         "lodMultipliers": [1.0, 0.5, 0.25, 0.0]
       }
@@ -145,18 +179,52 @@
       "stepRatio": 0.88,
       "stepLength": 1.0,
       "seed": 676767,
-      "barkTexture": "japanese_hackberry_bark_1k"
+      "barkTexture": "japanese_hackberry_bark_1k",
+      "colonization": {
+        "attractorCount": 320,
+        "influenceDistance": 4.0,
+        "killDistance": 0.7,
+        "segmentLength": 0.40,
+        "maxIterations": 56,
+        "crownRadiusFactor": 0.30,
+        "crownYOffsetFactor": 0.55,
+        "branchletRadius": 0.05,
+        "branchletTaper": 0.94
+      },
+      "leaf": {
+        "color":          [0.16, 0.40, 0.20],
+        "size":           0.14,
+        "perTip":         3,
+        "lodMultipliers": [1.0, 0.5, 0.25, 0.0]
+      }
     },
     {
       "name": "PineSmall",
       "lsystem": "Pine",
       "generation": 3,
       "branchAngle": 17.5,
-      "taperRatio": 0.75,
+      "taperRatio": 0.86,
       "stepRatio": 0.92,
       "stepLength": 0.7,
       "seed": 6969,
-      "barkTexture": "japanese_hackberry_bark_1k"
+      "barkTexture": "japanese_hackberry_bark_1k",
+      "colonization": {
+        "attractorCount": 200,
+        "influenceDistance": 4.0,
+        "killDistance": 0.7,
+        "segmentLength": 0.28,
+        "maxIterations": 48,
+        "crownRadiusFactor": 0.32,
+        "crownYOffsetFactor": 0.60,
+        "branchletRadius": 0.05,
+        "branchletTaper": 0.94
+      },
+      "leaf": {
+        "color":          [0.16, 0.40, 0.20],
+        "size":           0.12,
+        "perTip":         3,
+        "lodMultipliers": [1.0, 0.5, 0.25, 0.0]
+      }
     },
     {
       "name": "PineSlender",
@@ -167,7 +235,24 @@
       "stepRatio": 0.90,
       "stepLength": 0.9,
       "seed": 8080,
-      "barkTexture": "japanese_hackberry_bark_1k"
+      "barkTexture": "japanese_hackberry_bark_1k",
+      "colonization": {
+        "attractorCount": 320,
+        "influenceDistance": 4.0,
+        "killDistance": 0.7,
+        "segmentLength": 0.40,
+        "maxIterations": 56,
+        "crownRadiusFactor": 0.30,
+        "crownYOffsetFactor": 0.55,
+        "branchletRadius": 0.05,
+        "branchletTaper": 0.94
+      },
+      "leaf": {
+        "color":          [0.16, 0.40, 0.20],
+        "size":           0.14,
+        "perTip":         3,
+        "lodMultipliers": [1.0, 0.5, 0.25, 0.0]
+      }
     },
     {
       "name": "SpruceDense",
@@ -178,18 +263,52 @@
       "stepRatio": 0.86,
       "stepLength": 0.9,
       "seed": 1234,
-      "barkTexture": "japanese_hackberry_bark_1k"
+      "barkTexture": "japanese_hackberry_bark_1k",
+      "colonization": {
+        "attractorCount": 360,
+        "influenceDistance": 3.5,
+        "killDistance": 0.6,
+        "segmentLength": 0.32,
+        "maxIterations": 56,
+        "crownRadiusFactor": 0.28,
+        "crownYOffsetFactor": 0.50,
+        "branchletRadius": 0.05,
+        "branchletTaper": 0.94
+      },
+      "leaf": {
+        "color":          [0.13, 0.36, 0.22],
+        "size":           0.13,
+        "perTip":         3,
+        "lodMultipliers": [1.0, 0.5, 0.25, 0.0]
+      }
     },
     {
       "name": "SpruceYoung",
       "lsystem": "Spruce",
       "generation": 3,
       "branchAngle": 18.0,
-      "taperRatio": 0.80,
+      "taperRatio": 0.86,
       "stepRatio": 0.90,
       "stepLength": 0.7,
       "seed": 5678,
-      "barkTexture": "japanese_hackberry_bark_1k"
+      "barkTexture": "japanese_hackberry_bark_1k",
+      "colonization": {
+        "attractorCount": 220,
+        "influenceDistance": 3.5,
+        "killDistance": 0.6,
+        "segmentLength": 0.25,
+        "maxIterations": 48,
+        "crownRadiusFactor": 0.30,
+        "crownYOffsetFactor": 0.55,
+        "branchletRadius": 0.05,
+        "branchletTaper": 0.94
+      },
+      "leaf": {
+        "color":          [0.13, 0.36, 0.22],
+        "size":           0.11,
+        "perTip":         3,
+        "lodMultipliers": [1.0, 0.5, 0.25, 0.0]
+      }
     },
     {
       "name": "BirchTall",
@@ -200,7 +319,24 @@
       "stepRatio": 0.93,
       "stepLength": 1.1,
       "seed": 2345,
-      "barkTexture": "bark_willow_02_1k"
+      "barkTexture": "bark_willow_02_1k",
+      "colonization": {
+        "attractorCount": 240,
+        "influenceDistance": 5.0,
+        "killDistance": 0.8,
+        "segmentLength": 0.40,
+        "maxIterations": 56,
+        "crownRadiusFactor": 0.40,
+        "crownYOffsetFactor": 0.85,
+        "branchletRadius": 0.05,
+        "branchletTaper": 0.95
+      },
+      "leaf": {
+        "color":          [0.40, 0.62, 0.22],
+        "size":           0.26,
+        "perTip":         2,
+        "lodMultipliers": [1.0, 0.5, 0.25, 0.0]
+      }
     },
     {
       "name": "BirchYoung",
@@ -211,7 +347,24 @@
       "stepRatio": 0.91,
       "stepLength": 0.8,
       "seed": 9012,
-      "barkTexture": "bark_willow_02_1k"
+      "barkTexture": "bark_willow_02_1k",
+      "colonization": {
+        "attractorCount": 160,
+        "influenceDistance": 5.0,
+        "killDistance": 0.8,
+        "segmentLength": 0.30,
+        "maxIterations": 48,
+        "crownRadiusFactor": 0.42,
+        "crownYOffsetFactor": 0.85,
+        "branchletRadius": 0.05,
+        "branchletTaper": 0.95
+      },
+      "leaf": {
+        "color":          [0.40, 0.62, 0.22],
+        "size":           0.22,
+        "perTip":         2,
+        "lodMultipliers": [1.0, 0.5, 0.25, 0.0]
+      }
     },
     {
       "name": "MapleWide",
@@ -222,7 +375,24 @@
       "stepRatio": 0.88,
       "stepLength": 1.0,
       "seed": 3456,
-      "barkTexture": "japanese_hackberry_bark_1k"
+      "barkTexture": "japanese_hackberry_bark_1k",
+      "colonization": {
+        "attractorCount": 320,
+        "influenceDistance": 5.5,
+        "killDistance": 0.9,
+        "segmentLength": 0.50,
+        "maxIterations": 64,
+        "crownRadiusFactor": 0.65,
+        "crownYOffsetFactor": 0.95,
+        "branchletRadius": 0.07,
+        "branchletTaper": 0.93
+      },
+      "leaf": {
+        "color":          [0.28, 0.58, 0.18],
+        "size":           0.48,
+        "perTip":         2,
+        "lodMultipliers": [1.0, 0.5, 0.25, 0.0]
+      }
     },
     {
       "name": "MapleYoung",
@@ -233,7 +403,24 @@
       "stepRatio": 0.90,
       "stepLength": 0.8,
       "seed": 7890,
-      "barkTexture": "bark_willow_02_1k"
+      "barkTexture": "bark_willow_02_1k",
+      "colonization": {
+        "attractorCount": 200,
+        "influenceDistance": 5.5,
+        "killDistance": 0.9,
+        "segmentLength": 0.35,
+        "maxIterations": 56,
+        "crownRadiusFactor": 0.60,
+        "crownYOffsetFactor": 0.92,
+        "branchletRadius": 0.07,
+        "branchletTaper": 0.93
+      },
+      "leaf": {
+        "color":          [0.28, 0.58, 0.18],
+        "size":           0.40,
+        "perTip":         2,
+        "lodMultipliers": [1.0, 0.5, 0.25, 0.0]
+      }
     },
     {
       "name": "CypressColumn",
@@ -244,7 +431,24 @@
       "stepRatio": 0.91,
       "stepLength": 1.1,
       "seed": 4321,
-      "barkTexture": "japanese_hackberry_bark_1k"
+      "barkTexture": "japanese_hackberry_bark_1k",
+      "colonization": {
+        "attractorCount": 75,
+        "influenceDistance": 7,
+        "killDistance": 0.6,
+        "segmentLength": 0.15,
+        "maxIterations": 64,
+        "crownRadiusFactor": 0.33,
+        "crownYOffsetFactor": 0.75,
+        "branchletRadius": 0.075,
+        "branchletTaper": 0.95
+      },
+      "leaf": {
+        "color":          [0.20, 0.45, 0.25],
+        "size":           0.16,
+        "perTip":         3,
+        "lodMultipliers": [1.0, 0.5, 0.25, 0.0]
+      }
     },
     {
       "name": "CypressSmall",
@@ -255,62 +459,164 @@
       "stepRatio": 0.93,
       "stepLength": 0.8,
       "seed": 8765,
-      "barkTexture": "japanese_hackberry_bark_1k"
+      "barkTexture": "japanese_hackberry_bark_1k",
+      "colonization": {
+        "attractorCount": 180,
+        "influenceDistance": 3.5,
+        "killDistance": 0.6,
+        "segmentLength": 0.25,
+        "maxIterations": 48,
+        "crownRadiusFactor": 0.67,
+        "crownYOffsetFactor": 0.85,
+        "branchletRadius": 0.04,
+        "branchletTaper": 0.95
+      },
+      "leaf": {
+        "color":          [0.20, 0.45, 0.25],
+        "size":           0.13,
+        "perTip":         3,
+        "lodMultipliers": [1.0, 0.5, 0.25, 0.0]
+      }
     },
     {
       "name": "WillowLarge",
       "lsystem": "Willow",
       "generation": 3,
       "branchAngle": 37.5,
-      "taperRatio": 0.80,
+      "taperRatio": 0.87,
       "stepRatio": 0.91,
       "stepLength": 1.1,
       "seed": 69,
-      "barkTexture": "bark_willow_1k"
+      "barkTexture": "bark_willow_1k",
+      "colonization": {
+        "attractorCount": 280,
+        "influenceDistance": 6.0,
+        "killDistance": 0.9,
+        "segmentLength": 0.45,
+        "maxIterations": 64,
+        "crownRadiusFactor": 0.65,
+        "crownYOffsetFactor": 1.00,
+        "branchletRadius": 0.05,
+        "branchletTaper": 0.96
+      },
+      "leaf": {
+        "color":          [0.45, 0.60, 0.28],
+        "size":           0.30,
+        "perTip":         2,
+        "lodMultipliers": [1.0, 0.5, 0.25, 0.0]
+      }
     },
     {
       "name": "WillowSmall",
       "lsystem": "Willow",
       "generation": 3,
       "branchAngle": 33.0,
-      "taperRatio": 0.78,
+      "taperRatio": 0.86,
       "stepRatio": 0.89,
       "stepLength": 0.8,
       "seed": 420,
-      "barkTexture": "bark_willow_1k"
+      "barkTexture": "bark_willow_1k",
+      "colonization": {
+        "attractorCount": 180,
+        "influenceDistance": 6.0,
+        "killDistance": 0.9,
+        "segmentLength": 0.32,
+        "maxIterations": 48,
+        "crownRadiusFactor": 0.60,
+        "crownYOffsetFactor": 0.95,
+        "branchletRadius": 0.05,
+        "branchletTaper": 0.96
+      },
+      "leaf": {
+        "color":          [0.45, 0.60, 0.28],
+        "size":           0.24,
+        "perTip":         2,
+        "lodMultipliers": [1.0, 0.5, 0.25, 0.0]
+      }
     },
     {
       "name": "ShrubDense",
       "lsystem": "Shrub",
       "generation": 3,
       "branchAngle": 33.3,
-      "taperRatio": 0.75,
+      "taperRatio": 0.87,
       "stepRatio": 0.88,
       "stepLength": 0.5,
       "seed": 6769,
-      "barkTexture": "bark_willow_02_1k"
+      "barkTexture": "bark_willow_02_1k",
+      "colonization": {
+        "attractorCount": 120,
+        "influenceDistance": 3.0,
+        "killDistance": 0.5,
+        "segmentLength": 0.22,
+        "maxIterations": 40,
+        "crownRadiusFactor": 0.70,
+        "crownYOffsetFactor": 0.60,
+        "branchletRadius": 0.04,
+        "branchletTaper": 0.93
+      },
+      "leaf": {
+        "color":          [0.25, 0.50, 0.18],
+        "size":           0.22,
+        "perTip":         2,
+        "lodMultipliers": [1.0, 0.5, 0.25, 0.0]
+      }
     },
     {
       "name": "ShrubSparse",
       "lsystem": "Shrub",
       "generation": 2,
       "branchAngle": 28.0,
-      "taperRatio": 0.72,
+      "taperRatio": 0.86,
       "stepRatio": 0.85,
       "stepLength": 0.6,
       "seed": 1111,
-      "barkTexture": "bark_willow_02_1k"
+      "barkTexture": "bark_willow_02_1k",
+      "colonization": {
+        "attractorCount": 80,
+        "influenceDistance": 3.0,
+        "killDistance": 0.5,
+        "segmentLength": 0.20,
+        "maxIterations": 32,
+        "crownRadiusFactor": 0.65,
+        "crownYOffsetFactor": 0.60,
+        "branchletRadius": 0.04,
+        "branchletTaper": 0.93
+      },
+      "leaf": {
+        "color":          [0.25, 0.50, 0.18],
+        "size":           0.20,
+        "perTip":         2,
+        "lodMultipliers": [1.0, 0.5, 0.25, 0.0]
+      }
     },
     {
       "name": "FernPatch",
       "lsystem": "Fern",
       "generation": 3,
       "branchAngle": 45.0,
-      "taperRatio": 0.70,
+      "taperRatio": 0.88,
       "stepRatio": 0.80,
       "stepLength": 0.4,
       "seed": 2222,
-      "barkTexture": "bark_willow_02_1k"
+      "barkTexture": "bark_willow_02_1k",
+      "colonization": {
+        "attractorCount": 96,
+        "influenceDistance": 2.5,
+        "killDistance": 0.4,
+        "segmentLength": 0.18,
+        "maxIterations": 32,
+        "crownRadiusFactor": 0.75,
+        "crownYOffsetFactor": 0.55,
+        "branchletRadius": 0.03,
+        "branchletTaper": 0.92
+      },
+      "leaf": {
+        "color":          [0.20, 0.55, 0.18],
+        "size":           0.30,
+        "perTip":         3,
+        "lodMultipliers": [1.0, 0.5, 0.25, 0.0]
+      }
     }
   ],
   "terrain": {

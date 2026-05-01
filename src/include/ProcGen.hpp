@@ -13,20 +13,6 @@
 
 namespace Xylem::ProcGen {
 
-    struct TurtleState {
-        dm::float3  pos;
-        dm::quat    orientation;
-        float       radius;
-        float       stepLength;
-        uint32_t    baseRingIndex;
-        float       branchLength;
-        // True if this state has emitted at least one F since its last [ push or root.
-        // Used to detect branch tips for space-colonization seeding.
-        bool        lastDrewSegment;
-
-        TurtleState() : pos{0.f}, orientation{}, radius{0.75f}, stepLength{1.0f}, baseRingIndex{0}, branchLength{0.f}, lastDrewSegment{false} {}
-    };
-
     struct Buffers {
         std::vector<dm::float3> positions;
         std::vector<dm::float3> normals;
@@ -241,12 +227,28 @@ namespace Xylem::ProcGen {
     public:
         struct Params {
             uint32_t radialSegments = 8;
-            float    stepLength     = 1.f;
+            float    baseLength     = 1.f;
+            float    baseRadius     = 1.0f;
             float    branchAngle    = 25.f;
             float    taperRatio     = 0.9f;
             float    stepRatio      = 0.95f;
             uint32_t seed           = 0;  // 0 = no randomization
         };
+
+        struct TurtleState {
+        dm::float3  pos;
+        dm::quat    orientation;
+        float       radius;
+        float       stepLength;
+        uint32_t    baseRingIndex;
+        float       branchLength;
+        // True if this state has emitted at least one F since its last [ push or root.
+        // Used to detect branch tips for space-colonization seeding.
+        bool        lastDrewSegment;
+
+        TurtleState() : pos{0.f}, orientation{}, radius{1.0f}, stepLength{1.0f}, baseRingIndex{0}, branchLength{0.f}, lastDrewSegment{false} {}
+        TurtleState(const Params& p) : pos{0.f}, orientation{}, radius{p.baseRadius}, stepLength{p.baseLength}, baseRingIndex{0}, branchLength{0.f}, lastDrewSegment{false} {}
+    };
 
     private:
         Params   params;

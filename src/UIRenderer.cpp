@@ -224,8 +224,9 @@ void UIRenderer::_buildAssetsSection() {
         if (headerOpen) {
             ImGui::TextDisabled("L-System: %s  gen=%u",
                 asset->lsystemInstance.name.c_str(), asset->lsystemInstance.gen);
-            ImGui::TextDisabled("step=%.2f  angle=%.1f deg  taper=%.2f  stepR=%.2f  seed=%u",
-                asset->genParams.stepLength,
+            ImGui::TextDisabled("step=%.2f radius=%.2f  angle=%.1f deg  taper=%.2f  stepR=%.2f  seed=%u",
+                asset->genParams.baseLength,
+                asset->genParams.baseRadius,
                 dm::degrees(asset->genParams.branchAngle),
                 asset->genParams.taperRatio,
                 asset->genParams.stepRatio,
@@ -245,7 +246,8 @@ void UIRenderer::_buildAssetsSection() {
                 int   seed           = static_cast<int>(state.params.seed);
 
                 ImGui::SliderInt("Generation",   &state.pendingGen,         1,    8);
-                ImGui::SliderFloat("Step Length",  &state.params.stepLength, 0.1f, 5.0f);
+                ImGui::SliderFloat("Base Length",  &state.params.baseLength, 0.1f, 5.0f);
+                ImGui::SliderFloat("Base Radius",  &state.params.baseRadius, 0.1f, 5.0f);
                 ImGui::SliderFloat("Branch Angle", &branchAngleDeg,          5.0f, 90.f);
                 ImGui::SliderFloat("Taper Ratio",  &state.params.taperRatio, 0.5f, 1.0f);
                 ImGui::SliderFloat("Step Ratio",   &state.params.stepRatio,  0.5f, 1.0f);
@@ -352,7 +354,7 @@ void UIRenderer::_buildAssetsSection() {
         int   addSeed           = static_cast<int>(m_AddAsset.params.seed);
 
         ImGui::SliderInt("Generation##add",     &m_AddAsset.gen,                  1,    8);
-        ImGui::SliderFloat("Step Length##add",  &m_AddAsset.params.stepLength,    0.1f, 5.0f);
+        ImGui::SliderFloat("Step Length##add",  &m_AddAsset.params.baseLength,    0.1f, 5.0f);
         ImGui::SliderFloat("Branch Angle##add", &addBranchAngleDeg,               5.0f, 90.f);
         ImGui::SliderFloat("Taper Ratio##add",  &m_AddAsset.params.taperRatio,    0.5f, 1.0f);
         ImGui::SliderFloat("Step Ratio##add",   &m_AddAsset.params.stepRatio,     0.5f, 1.0f);

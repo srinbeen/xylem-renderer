@@ -145,14 +145,16 @@ bool SceneLoader::Load(const std::filesystem::path& path, SceneRegistry& registr
 
         TreeGenerator::Params params;
         params.radialSegments = 16;
-        params.stepLength     = 1.0f;
+        params.baseLength     = 1.0f;
+        params.baseRadius     = 1.0f;
         params.branchAngle    = 25.0f;
         params.taperRatio     = 0.9f;
         params.stepRatio      = 0.95f;
         params.seed           = 0;
 
         aNode["radialSegments"] >> params.radialSegments;
-        aNode["stepLength"]     >> params.stepLength;
+        aNode["baseLength"]     >> params.baseLength;
+        aNode["baseRadius"]     >> params.baseRadius;
         aNode["branchAngle"]    >> params.branchAngle;
         aNode["taperRatio"]     >> params.taperRatio;
         aNode["stepRatio"]      >> params.stepRatio;

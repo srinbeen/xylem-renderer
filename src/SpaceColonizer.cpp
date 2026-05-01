@@ -85,13 +85,13 @@ void SpaceColonizer::grow(const std::vector<dm::float3>& tipPositions,
         return;
 
     // ---- Crown volume: sphere centered above the L-system bbox.
-    const dm::float3 bboxMin    = lsystemBbox.m_mins;
-    const dm::float3 bboxMax    = lsystemBbox.m_maxs;
-    const dm::float3 bboxCenter = 0.5f * (bboxMin + bboxMax);
-    const float      treeHeight = std::max(0.01f, bboxMax.y - bboxMin.y);
-    const dm::float3 crownCenter(bboxCenter.x,
-                                 bboxMin.y + m_p.crownYOffsetFactor * treeHeight,
-                                 bboxCenter.z);
+    const dm::float3 bboxCenter = lsystemBbox.center();
+    const float      treeHeight = lsystemBbox.diagonal().y;
+    const dm::float3 crownCenter(
+        bboxCenter.x,
+        lsystemBbox.m_mins.y + m_p.crownYOffsetFactor * treeHeight,
+        bboxCenter.z
+    );
     const float      crownRadius = m_p.crownRadiusFactor * treeHeight;
 
     // ---- Place attractors uniformly inside the crown sphere.
@@ -105,10 +105,6 @@ void SpaceColonizer::grow(const std::vector<dm::float3>& tipPositions,
         attractorAlive.push_back(1);
     }
 
-    // ---- Seed nodes from L-system tips. Inherit pos, forward, right, radius, branchLength
-    // so the join with the L-system is seamless (no thickness step, no UV restart, no twist
-    // in the connecting quads).
-    //
     // Spatially dedup the tips first: L-system grammars (especially stochastic ones with
     // 3-4 generations) produce many tips packed close together, which would all become
     // independent SC roots. Roots that fail to grow remain terminal AT their seed position,
@@ -207,7 +203,7 @@ void SpaceColonizer::grow(const std::vector<dm::float3>& tipPositions,
             child.right        = parallelTransportRight(m_nodes[n].dir, m_nodes[n].right, growDir);
             child.parent       = static_cast<int32_t>(n);
             child.terminal     = false;
-            child.radius       = m_nodes[n].radius * m_p.branchletTaper;
+            child.radius       = m_nodes[n].radius * std::sqrt(m_p.branchletTaper);
             child.branchLength = m_nodes[n].branchLength + m_p.segmentLength;
 
             m_nodes.push_back(child);

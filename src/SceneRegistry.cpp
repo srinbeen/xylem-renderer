@@ -251,8 +251,22 @@ void SceneRegistry::rebuildDirtyAssets() {
 }
 
 void SceneRegistry::rebuildDirtyRegions() {
-    for (auto& region : m_Regions)
-        if (region.dirty) _rebuildRegion(region);
+    bool anyRebuilt = false;
+    for (auto& region : m_Regions) {
+        if (region.dirty) {
+            _rebuildRegion(region);
+            anyRebuilt = true;
+        }
+    }
+    if (anyRebuilt) _recomputeSceneBounds();
+}
+
+void SceneRegistry::_recomputeSceneBounds() {
+    m_SceneBounds = dm::box3::empty();
+    for (const auto& region : m_Regions)
+        m_SceneBounds |= region.cullBox;
+    if (m_Terrain)
+        m_SceneBounds |= m_Terrain->getBbox();
 }
 
 void SceneRegistry::_rebuildAsset(TreeAssetDef& asset) {
@@ -540,6 +554,7 @@ void SceneRegistry::setCameraInit(const CameraInit& cameraInit) {
 
 void SceneRegistry::setTerrain(std::unique_ptr<Scene::Terrain> terrain) {
     m_Terrain = std::move(terrain);
+    _recomputeSceneBounds();
 }
 
 void SceneRegistry::setTreeGenerator(std::unique_ptr<ProcGen::TreeGenerator> gen) {
@@ -577,4 +592,5 @@ void SceneRegistry::clear() {
     m_CameraInit  = CameraInit{};
     m_NextAssetId = 0;
     m_AssetIdToIndex.clear();
+    m_SceneBounds = dm::box3::empty();
 }

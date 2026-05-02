@@ -20,7 +20,6 @@
 #include "Meshlet.hpp"
 #include "macros.h"
 #include "shaders/ShaderContracts.hpp"
-#include "frame/FrameContracts.hpp"
 #include "frame/FrameStages.hpp"
 
 namespace Xylem {
@@ -159,7 +158,7 @@ private:
     struct ShadowPassResources {
         nvrhi::TextureHandle                                              depthTexture;   // Texture2DArray, 4 cascades
         std::array<nvrhi::FramebufferHandle, Render::c_NumCascades>       framebuffers;
-        std::array<nvrhi::TextureHandle,     Render::c_NumCascades>       debugTextures;
+        nvrhi::TextureHandle                                              debugSelectedCascadeTexture; // single slice, for UI display
 
         nvrhi::ShaderHandle              amplificationShader;  // shadow_as
         nvrhi::ShaderHandle              meshShader;           // shadow_ms
@@ -251,7 +250,6 @@ private:
     };
 
     StageOwnedResources                               m_StageResources;
-    frame::StageOutputs                               m_StageOutputs;
 
     nvrhi::CommandListHandle                          m_CommandList;
     ViewHandler&                                      m_ViewHandler;

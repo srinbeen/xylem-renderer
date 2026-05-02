@@ -822,8 +822,7 @@ void UIRenderer::_buildDebugShadowTopDownSection() {
 void UIRenderer::_buildShadowMapSection() {
     if (!m_ui.showShadowMap) return;
 
-    int numCascades = static_cast<int>(m_ui.shadowCascadeTextures.size());
-    if (numCascades == 0) return;
+    constexpr int numCascades = static_cast<int>(Render::c_NumCascades);
 
     ImGui::SetNextWindowSize(ImVec2(520, 560), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin("Shadow Map Cascades", &m_ui.showShadowMap)) {
@@ -831,23 +830,22 @@ void UIRenderer::_buildShadowMapSection() {
         return;
     }
 
-    static int selectedCascade = 0;
-    if (selectedCascade >= numCascades) selectedCascade = 0;
+    if (m_ui.selectedCascade >= numCascades) m_ui.selectedCascade = 0;
+    if (m_ui.selectedCascade < 0)             m_ui.selectedCascade = 0;
 
     ImGui::Text("Cascade:");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(180.f);
-    ImGui::SliderInt("##cascade", &selectedCascade, 0, numCascades - 1);
+    ImGui::SliderInt("##cascade", &m_ui.selectedCascade, 0, numCascades - 1);
     ImGui::SameLine();
     ImGui::TextDisabled("(%d cascades)", numCascades);
 
     ImGui::Separator();
 
-    void* tex = m_ui.shadowCascadeTextures[selectedCascade];
-    if (tex) {
+    if (m_ui.selectedCascadeTexture) {
         ImVec2 avail = ImGui::GetContentRegionAvail();
         float size  = std::max(std::min(avail.x, avail.y), 64.f);
-        ImGui::Image(ImTextureRef(tex), ImVec2(size, size));
+        ImGui::Image(ImTextureRef(m_ui.selectedCascadeTexture), ImVec2(size, size));
     }
 
     ImGui::End();

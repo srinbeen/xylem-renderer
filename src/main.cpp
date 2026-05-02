@@ -51,6 +51,7 @@ int main(int __argc, const char** __argv)
     #endif
 
     deviceParams.depthBufferFormat = nvrhi::Format::D32;
+    // deviceParams.swapChainSampleCount = 4;
 
     if (!deviceManager->CreateWindowDeviceAndSwapChain(deviceParams, g_WindowTitle)) {
         log::fatal("Cannot initialize a graphics device with the requested parameters");
@@ -61,11 +62,6 @@ int main(int __argc, const char** __argv)
     if (!deviceManager->GetDevice()->queryFeatureSupport(nvrhi::Feature::Meshlets)) {
         log::fatal("Device does not support mesh shaders (Feature::Meshlets). Requires DX12 + SM 6.5 capable GPU.");
         return 1;
-    }
-
-    {
-        auto* d3d12Device = static_cast<ID3D12Device*>(
-            deviceManager->GetDevice()->getNativeObject(nvrhi::ObjectTypes::D3D12_Device));
     }
 
     {

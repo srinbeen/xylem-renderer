@@ -57,7 +57,10 @@ struct UIData {
     float    sdsmCascade0MaxLS[3] = { 0.f, 0.f, 0.f };
 
     void*    shadowMapTexture = nullptr;  // nvrhi::ITexture*, set by active render pass
-    std::vector<void*> shadowCascadeTextures;  // per-cascade nvrhi::ITexture* for debug display
+    // Single per-pass scratch texture into which the active pass copies the
+    // currently-selected cascade slice. UIRenderer drives selectedCascade via the slider.
+    int      selectedCascade        = 0;
+    void*    selectedCascadeTexture = nullptr;
     // Hi-Z: one nvrhi::ITexture* per mip level (single-mip scratch textures), set by ComputeCullRenderPass
     // Each entry is a separate R32_FLOAT texture containing exactly one mip, copied each frame.
     std::vector<void*> hizMipTextures;

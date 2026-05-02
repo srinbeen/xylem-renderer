@@ -19,7 +19,6 @@
 #include "Render.hpp"
 #include "UIData.hpp"
 #include "ViewHandler.hpp"
-#include "frame/FrameContracts.hpp"
 #include "frame/FrameStages.hpp"
 
 namespace Xylem {
@@ -83,7 +82,7 @@ private:
     struct ShadowPassResources {
         nvrhi::TextureHandle                   depthTexture;
         nvrhi::FramebufferHandle               framebuffers[Render::c_NumCascades];
-        nvrhi::TextureHandle                   cascadeDebugTextures[Render::c_NumCascades];
+        nvrhi::TextureHandle                   debugSelectedCascadeTexture;
         nvrhi::ShaderHandle                    treeVS;
         nvrhi::ShaderHandle                    terrainVS;
         nvrhi::InputLayoutHandle               terrainInputLayout;
@@ -128,7 +127,6 @@ private:
     };
 
     StageOwnedResources                                m_StageResources;
-    frame::StageOutputs                                m_StageOutputs;
 
     nvrhi::CommandListHandle                           m_CommandList;
     ViewHandler&                                       m_ViewHandler;
@@ -162,10 +160,11 @@ private:
     std::array<CascadeShadowData, Render::c_NumCascades> m_CascadeShadowData;
 
     bool _InitShared();
-    bool _InitTreePass(nvrhi::ICommandList* initCL, engine::CommonRenderPasses& commonPasses);
+    bool _InitTreePass();
     bool _InitShadowPass();
     bool _InitTerrainPass(nvrhi::ICommandList* initCL);
     bool _InitSkyPass();
+    bool _InitDebug();
     // bool _InitTimerQueries();
 
     void _UploadAllAssets(nvrhi::IDevice* device, nvrhi::ICommandList* commandList);

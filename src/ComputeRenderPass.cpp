@@ -1113,21 +1113,28 @@ void ComputeRenderPass::onRegionsDirty(const std::vector<size_t>& /*dirtyRegionI
 // ===========================================================================
 
 void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
-    frame::SetShadowDebugOutputs(
-        m_StageOutputs,
-        m_StageResources.shadow.depthTexture.Get(),
-        m_StageResources.shadow.debugTextures);
-    frame::SetHiZDebugOutputs(m_StageOutputs, m_StageResources.hiz.debugMipTextures);
-    frame::PublishStageOutputsToUI(m_StageOutputs, m_UI);
+    m_UI.shadowMapTexture       = m_StageResources.shadow.depthTexture.Get();
+    m_UI.selectedCascadeTexture = m_StageResources.shadow.debugSelectedCascadeTexture.Get();
+    m_UI.hizMipTextures.resize(m_StageResources.hiz.debugMipTextures.size());
+    for (size_t i = 0; i < m_StageResources.hiz.debugMipTextures.size(); i++)
+        m_UI.hizMipTextures[i] = m_StageResources.hiz.debugMipTextures[i].Get();
 
     app::HiResTimer cpuTimer;
     cpuTimer.Start();
 
-    frame::FrameContext frameContext = frame::BuildFrameContext(
-        m_Registry,
-        m_ViewHandler,
-        framebuffer,
-        !m_StageResources.sceneTree.pipeline);
+    const auto& fbInfo = framebuffer->getFramebufferInfo();
+    {
+        if (!m_StageResources.sceneTree.pipeline) {
+            frame::UpdateProjectionAndViewport(m_ViewHandler, fbInfo);
+        }
+
+        m_ViewHandler.view.SetViewMatrix(m_ViewHandler.camera.GetWorldToViewMatrix());
+        m_ViewHandler.view.UpdateCache();
+    }
+
+    const uint32_t fbW = fbInfo.width;
+    const uint32_t fbH = fbInfo.height;
+    const float aspectRatio = m_ViewHandler.view.GetAspectRatio();
 
     m_CommandList->open();
     // m_CommandList->beginTimerQuery(m_GpuTimers[m_NextTimerIdx]);
@@ -1145,9 +1152,9 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     const dm::float3& camPos = m_ViewHandler.camera.GetPosition();
     const dm::float3& camDir = m_ViewHandler.camera.GetDir();
     frame::ComputeCascades(
-        frameContext,
         m_ViewHandler,
         m_Registry,
+        aspectRatio,
         k_ShadowRes,
         m_UI.pssmLambda);
 
@@ -1184,8 +1191,8 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     bool hizActive = downwardness < m_UI.hizBypassAngle;
     m_UI.hizActiveThisFrame = hizActive;
 
-    constants.hizDimensions = dm::float2(static_cast<float>(frameContext.frameWidth),
-                                         static_cast<float>(frameContext.frameHeight));
+    constants.hizDimensions = dm::float2(static_cast<float>(fbW),
+                                         static_cast<float>(fbH));
     constants.maxHiZMip     = static_cast<float>(m_StageResources.hiz.numMips - 1);
     constants.hizEnabled    = hizActive ? 1u : 0u;
     constants.impostorAlphaClip = m_UI.impostorAlphaClip;
@@ -1193,7 +1200,7 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_CommandList->writeBuffer(m_StageResources.frameShared.constantBuffer, &constants, shader_cb::kCullFrameSize);
 
     // --- Ensure Hi-Z resources at current resolution ---
-    _EnsureHiZResources(frameContext.frameWidth, frameContext.frameHeight);
+    _EnsureHiZResources(fbW, fbH);
 
     // --- Depth prepass + Hi-Z build (skip entirely when bypassed) ---
     if (hizActive) {
@@ -1214,7 +1221,7 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         float regionNear, regionFar;
         _ComputeRegionEnvelope(m_ViewHandler.view.GetViewFrustum(), camPos, camDir,
                                regionNear, regionFar);
-        _RunSDSMBuildCascades(frameContext.sceneBounds, frameContext.aspectRatio, dm::radians(60.f),
+        _RunSDSMBuildCascades(m_Registry.getSceneBounds(), aspectRatio, dm::radians(60.f),
                               regionNear, regionFar);
         m_CommandList->endMarker();
     }
@@ -1612,13 +1619,13 @@ void ComputeRenderPass::_RenderShadowPass() {
         }
     }
 
-    // Copy per-cascade slices into debug textures for UI display
+    // Copy the currently-selected cascade slice into the single debug texture for UI display.
     if (m_UI.showShadowMap) {
-        for (uint32_t c = 0; c < Render::c_NumCascades; c++) {
-            m_CommandList->copyTexture(
-                m_StageResources.shadow.debugTextures[c], nvrhi::TextureSlice(),
-                m_StageResources.shadow.depthTexture, nvrhi::TextureSlice().setArraySlice(c));
-        }
+        uint32_t cascade = std::clamp(m_UI.selectedCascade, 0,
+                                      static_cast<int>(Render::c_NumCascades) - 1);
+        m_CommandList->copyTexture(
+            m_StageResources.shadow.debugSelectedCascadeTexture, nvrhi::TextureSlice(),
+            m_StageResources.shadow.depthTexture, nvrhi::TextureSlice().setArraySlice(cascade));
     }
 }
 
@@ -1981,16 +1988,18 @@ bool ComputeRenderPass::_InitShadowPass() {
                     .setTexture(m_StageResources.shadow.depthTexture)
                     .setArraySlice(c)));
         if (!m_StageResources.shadow.framebuffers[c]) return false;
-
-        m_StageResources.shadow.debugTextures[c] = GetDevice()->createTexture(
-            nvrhi::TextureDesc()
-                .setWidth(k_ShadowRes).setHeight(k_ShadowRes)
-                .setFormat(nvrhi::Format::R32_FLOAT)
-                .setInitialState(nvrhi::ResourceStates::ShaderResource)
-                .setKeepInitialState(true)
-                .setDebugName("ShadowCascadeDebug_" + std::to_string(c))
-        );
     }
+
+    // Single scratch texture for the currently-selected cascade slice (UI debug view).
+    m_StageResources.shadow.debugSelectedCascadeTexture = GetDevice()->createTexture(
+        nvrhi::TextureDesc()
+            .setWidth(k_ShadowRes).setHeight(k_ShadowRes)
+            .setFormat(nvrhi::Format::R32_FLOAT)
+            .setInitialState(nvrhi::ResourceStates::ShaderResource)
+            .setKeepInitialState(true)
+            .setDebugName("DebugSelectedCascade")
+    );
+    if (!m_StageResources.shadow.debugSelectedCascadeTexture) return false;
 
     m_StageResources.shadow.treeVS = m_ShaderFactory->CreateShader(
         "app/shadow_compute.hlsl", "tree_vs", nullptr, nvrhi::ShaderType::Vertex);

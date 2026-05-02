@@ -99,6 +99,10 @@ public:
     dm::float3                                                      getSunDirection() const { return m_SunDirection; }
     const CameraInit&                                               getCameraInit() const { return m_CameraInit; }
 
+    // Union of all region cullBoxes plus the terrain bbox. Refreshed lazily
+    // inside rebuildDirtyRegions() and setTerrain(); avoids per-frame recompute.
+    const dm::box3& getSceneBounds() const { return m_SceneBounds; }
+
     uint32_t totalInstanceCount() const;
 
     // Lookup asset by stable ID (returns nullptr if not found).
@@ -186,6 +190,8 @@ private:
     dm::float3                                               m_SunDirection = dm::float3(0.f, -1.f, 0.f);
     CameraInit                                               m_CameraInit;
 
+    dm::box3                                                 m_SceneBounds = dm::box3::empty();
+
     size_t m_NextAssetId = 0;
 
     // Internal ID-to-index map for fast lookup.
@@ -194,6 +200,7 @@ private:
     void _rebuildAsset(TreeAssetDef& asset);
     void _rebuildRegion(RegionDef& region);
     void _refreshAssetIdMap();
+    void _recomputeSceneBounds();
 };
 
 } // namespace Xylem

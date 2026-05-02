@@ -19,7 +19,6 @@
 #include "UIData.hpp"
 #include "ViewHandler.hpp"
 #include "macros.h"
-#include "frame/FrameContracts.hpp"
 #include "frame/FrameStages.hpp"
 
 namespace Xylem {
@@ -128,7 +127,7 @@ private:
     struct ShadowPassResources {
         nvrhi::TextureHandle                                              depthTexture;      // Tex2DArray, 4 cascades
         std::array<nvrhi::FramebufferHandle, Render::c_NumCascades>       framebuffers;      // one per cascade slice
-        std::array<nvrhi::TextureHandle, Render::c_NumCascades>           debugTextures;     // single-slice, for UI display
+        nvrhi::TextureHandle                                              debugSelectedCascadeTexture; // single slice, for UI display
         nvrhi::ShaderHandle                    treeVS;
         nvrhi::ShaderHandle                    terrainVS;
         nvrhi::InputLayoutHandle               treeInputLayout;
@@ -217,7 +216,6 @@ private:
     };
 
     StageOwnedResources                                m_StageResources;
-    frame::StageOutputs                                m_StageOutputs;
 
     nvrhi::CommandListHandle                           m_CommandList;
     ViewHandler&                                       m_ViewHandler;

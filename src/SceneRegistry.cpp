@@ -520,3 +520,22 @@ void SceneRegistry::_refreshAssetIdMap() {
     for (size_t i = 0; i < m_Assets.size(); ++i)
         m_AssetIdToIndex[m_Assets[i].id] = i;
 }
+
+// ===========================================================================
+// Clear
+// ===========================================================================
+
+void SceneRegistry::clear() {
+    m_LSystems.clear();
+    m_Assets.clear();
+    m_Regions.clear();
+    m_Terrain.reset();
+    m_TreeGenerator.reset();
+    m_BarkTextureSets.clear();
+    m_LodSegments.clear();
+    m_LodDistances.clear();
+    m_SunDirection = dm::float3(0.f, -1.f, 0.f);
+    m_CameraInit  = CameraInit{};
+    m_NextAssetId = 0;
+    m_AssetIdToIndex.clear();
+}

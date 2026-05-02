@@ -5,6 +5,7 @@
 #include <fstream>
 
 #include <donut/core/json.h>
+#include <donut/core/log.h>
 
 using namespace Xylem;
 using namespace Xylem::Scene;
@@ -299,6 +300,228 @@ bool SceneLoader::Load(const std::filesystem::path& path, SceneRegistry& registr
     registry.rebuildDirtyAssets();
     registry.rebuildDirtyRegions();
     registry.clearDirtyFlags();
+
+    return true;
+}
+
+// static
+bool SceneLoader::Save(const std::filesystem::path& path, const SceneRegistry& registry) {
+    Json::Value root(Json::objectValue);
+
+    // -------------------------------------------------------------------------
+    // Sun
+    // -------------------------------------------------------------------------
+    {
+        Json::Value sunNode(Json::objectValue);
+        Json::Value dirArr(Json::arrayValue);
+        const dm::float3 sun = registry.getSunDirection();
+        dirArr.append(sun.x); dirArr.append(sun.y); dirArr.append(sun.z);
+        sunNode["direction"] = dirArr;
+        root["sun"] = sunNode;
+    }
+
+    // -------------------------------------------------------------------------
+    // Camera (init values, not the live ViewHandler camera)
+    // -------------------------------------------------------------------------
+    {
+        const auto& ci = registry.getCameraInit();
+        Json::Value cam(Json::objectValue);
+        Json::Value pos(Json::arrayValue);
+        pos.append(ci.pos.x); pos.append(ci.pos.y); pos.append(ci.pos.z);
+        Json::Value dir(Json::arrayValue);
+        dir.append(ci.cameraDir.x); dir.append(ci.cameraDir.y); dir.append(ci.cameraDir.z);
+        cam["position"]  = pos;
+        cam["direction"] = dir;
+        cam["moveSpeed"] = ci.moveSpeed;
+        root["camera"] = cam;
+    }
+
+    // -------------------------------------------------------------------------
+    // LODs
+    // -------------------------------------------------------------------------
+    {
+        Json::Value lods(Json::objectValue);
+        Json::Value segs(Json::arrayValue);
+        for (uint32_t s : registry.getLodSegments()) segs.append(s);
+        Json::Value dists(Json::arrayValue);
+        for (float d : registry.getLodDistances()) dists.append(d);
+        lods["radialSegments"] = segs;
+        lods["distances"]      = dists;
+        root["lods"] = lods;
+    }
+
+    // -------------------------------------------------------------------------
+    // L-Systems
+    // -------------------------------------------------------------------------
+    {
+        Json::Value lsArr(Json::arrayValue);
+        for (const auto& [name, lsPtr] : registry.getLSystems()) {
+            Json::Value ls(Json::objectValue);
+            ls["name"]  = name;
+            ls["axiom"] = lsPtr->getAxiomStr();
+
+            Json::Value rules(Json::objectValue);
+            if (lsPtr->isStochastic()) {
+                // Weighted form: { "X": [{"weight": w, "rhs": "..."}], ... }
+                for (const auto& [ch, productions] : lsPtr->getWeightedRulesStr()) {
+                    Json::Value arr(Json::arrayValue);
+                    for (const auto& [w, rhs] : productions) {
+                        Json::Value prod(Json::objectValue);
+                        prod["weight"] = w;
+                        prod["rhs"]    = rhs;
+                        arr.append(prod);
+                    }
+                    rules[std::string(1, ch)] = arr;
+                }
+            } else {
+                // Deterministic form: { "X": "F[+X]F", ... }
+                for (const auto& [ch, rhs] : lsPtr->getRulesStr())
+                    rules[std::string(1, ch)] = rhs;
+            }
+            ls["rules"] = rules;
+
+            if (lsPtr->getSeed() != 0)
+                ls["seed"] = lsPtr->getSeed();
+
+            lsArr.append(ls);
+        }
+        root["lsystems"] = lsArr;
+    }
+
+    // -------------------------------------------------------------------------
+    // Assets
+    // -------------------------------------------------------------------------
+    {
+        Json::Value assetsArr(Json::arrayValue);
+        for (const auto& asset : registry.getAssets()) {
+            Json::Value a(Json::objectValue);
+            a["name"]           = asset.name;
+            a["lsystem"]        = asset.lsystemInstance.name;
+            a["generation"]     = asset.lsystemInstance.gen;
+            a["radialSegments"] = asset.genParams.radialSegments;
+            a["baseLength"]     = asset.genParams.baseLength;
+            a["baseRadius"]     = asset.genParams.baseRadius;
+            a["branchAngle"]    = dm::degrees(asset.genParams.branchAngle); // mirror loader
+            a["taperRatio"]     = asset.genParams.taperRatio;
+            a["stepRatio"]      = asset.genParams.stepRatio;
+            a["seed"]           = asset.genParams.seed;
+            a["barkTexture"]    = asset.barkTexture;
+
+            // Optional colonization block — only when on.
+            if (asset.colonization.attractorCount > 0) {
+                const auto& sc = asset.colonization;
+                Json::Value c(Json::objectValue);
+                c["attractorCount"]     = sc.attractorCount;
+                c["influenceDistance"]  = sc.influenceDistance;
+                c["killDistance"]       = sc.killDistance;
+                c["segmentLength"]      = sc.segmentLength;
+                c["maxIterations"]      = sc.maxIterations;
+                c["crownRadiusFactor"]  = sc.crownRadiusFactor;
+                c["crownYOffsetFactor"] = sc.crownYOffsetFactor;
+                c["branchletRadius"]    = sc.branchletRadius;
+                c["branchletTaper"]     = sc.branchletTaper;
+                c["seed"]               = sc.seed;
+                a["colonization"] = c;
+            }
+
+            // Leaf block — always emitted (cheap, round-trip stable).
+            {
+                const auto& lp = asset.leaf;
+                Json::Value leaf(Json::objectValue);
+                Json::Value color(Json::arrayValue);
+                color.append(lp.color.x); color.append(lp.color.y); color.append(lp.color.z);
+                leaf["color"]  = color;
+                leaf["size"]   = lp.size;
+                leaf["perTip"] = lp.perTip;
+                Json::Value mults(Json::arrayValue);
+                for (float m : lp.lodMultipliers) mults.append(m);
+                leaf["lodMultipliers"] = mults;
+                a["leaf"] = leaf;
+            }
+
+            // hasLeaves — only when false (default true).
+            if (!asset.hasLeaves)
+                a["hasLeaves"] = false;
+
+            assetsArr.append(a);
+        }
+        root["assets"] = assetsArr;
+    }
+
+    // -------------------------------------------------------------------------
+    // Terrain
+    // -------------------------------------------------------------------------
+    {
+        if (const auto* terrain = registry.getTerrain()) {
+            const auto& cfg = terrain->getConfig();
+            Json::Value t(Json::objectValue);
+            t["seed"]        = cfg.seed;
+            t["octaves"]     = cfg.octaves;
+            t["frequency"]   = cfg.frequency;
+            t["amplitude"]   = cfg.amplitude;
+            t["lacunarity"]  = cfg.lacunarity;
+            t["persistence"] = cfg.persistence;
+            t["gridSpacing"] = cfg.gridSpacing;
+            // worldMin/Max are derived from region bounds at load time, so don't save them.
+            root["terrain"] = t;
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Regions
+    // -------------------------------------------------------------------------
+    {
+        Json::Value regionsArr(Json::arrayValue);
+        for (const auto& region : registry.getRegions()) {
+            Json::Value r(Json::objectValue);
+            r["name"]       = region.name;
+            r["density"]    = region.density;
+            r["boundsMinX"] = region.bounds.m_mins.x;
+            r["boundsMinY"] = region.bounds.m_mins.y;
+            r["boundsMaxX"] = region.bounds.m_maxs.x;
+            r["boundsMaxY"] = region.bounds.m_maxs.y;
+
+            Json::Value assetsRef(Json::arrayValue);
+            for (size_t aid : region.assetIds) {
+                if (const auto* a = registry.findAsset(aid))
+                    assetsRef.append(a->name);
+            }
+            r["assets"] = assetsRef;
+
+            regionsArr.append(r);
+        }
+        root["regions"] = regionsArr;
+    }
+
+    // -------------------------------------------------------------------------
+    // Atomic write: <path>.tmp -> rename to <path>
+    // -------------------------------------------------------------------------
+    std::filesystem::path tmpPath = path;
+    tmpPath += ".tmp";
+
+    {
+        std::ofstream out(tmpPath, std::ios::binary | std::ios::trunc);
+        if (!out) {
+            donut::log::error("SceneLoader::Save: failed to open %s for writing",
+                              tmpPath.string().c_str());
+            return false;
+        }
+
+        Json::StreamWriterBuilder writerBuilder;
+        writerBuilder["indentation"] = "  ";
+        writerBuilder["precision"]   = 6;
+        std::unique_ptr<Json::StreamWriter> writer(writerBuilder.newStreamWriter());
+        writer->write(root, &out);
+        out << '\n';
+    }
+
+    std::error_code ec;
+    std::filesystem::rename(tmpPath, path, ec);
+    if (ec) {
+        donut::log::error("SceneLoader::Save: rename failed: %s", ec.message().c_str());
+        std::filesystem::remove(tmpPath, ec); // best-effort cleanup; ignore second error
+        return false;
+    }
 
     return true;
 }

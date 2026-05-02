@@ -111,6 +111,10 @@ public:
     // -------------------------------------------------------------------
     // Mutation — auto-sets dirty flags
     // -------------------------------------------------------------------
+    // Wipes the registry to a default-constructed state. Used by the in-session
+    // scene reload flow so a fresh SceneLoader::Load can populate from scratch.
+    void clear();
+
     void addLSystem(const std::string& name, std::unique_ptr<ProcGen::LSystem> ls);
 
     // Returns the stable ID assigned to the new asset.

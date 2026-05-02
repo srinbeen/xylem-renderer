@@ -1,4 +1,5 @@
 #include "include/RenderOrchestrator.hpp"
+#include "include/SceneLoader.hpp"
 #include "include/frame/FrameLifecycle.hpp"
 #include <donut/core/log.h>
 #include <imgui.h>
@@ -66,6 +67,46 @@ frame::IFrameStagedPass* RenderOrchestrator::_activeStagedPass()
     }
 }
 
+void RenderOrchestrator::_loadSceneIfRequested()
+{
+    if (!m_UI.requestedSceneLoad) return;
+    m_UI.requestedSceneLoad = false;
+
+    std::filesystem::path path = m_UI.requestedScenePath;
+
+    // Validate before destroying the live scene.
+    Json::Value root = SceneLoader::ParseFile(path);
+    if (root.isNull() || !root.isMember("lsystems") || root["lsystems"].empty()) {
+        m_UI.sceneLoadStatus        = "Load failed: " + path.string();
+        m_UI.sceneLoadStatusIsError = true;
+        return;
+    }
+
+    // GPU sync — same pattern as pipeline switch.
+    GetDeviceManager()->GetDevice()->waitForIdle();
+
+    m_Registry.clear();
+    if (!SceneLoader::Load(path, m_Registry)) {
+        m_UI.sceneLoadStatus        = "Load failed (post-validate): " + path.string();
+        m_UI.sceneLoadStatusIsError = true;
+        return;
+    }
+
+    // Camera reset — mirror RenderOrchestrator::Init.
+    const auto& ci = m_Registry.getCameraInit();
+    m_ViewHandler.camera.LookTo(ci.pos, ci.cameraDir);
+    m_ViewHandler.camera.SetMoveSpeed(ci.moveSpeed);
+
+    // Rebuild GPU resources on the active pass. Inactive passes will rebuild
+    // lazily on the next pipeline switch (already wired).
+    if (auto* staged = _activeStagedPass()) {
+        staged->LoadResources();
+    }
+
+    m_UI.sceneLoadStatus        = "Loaded " + path.string();
+    m_UI.sceneLoadStatusIsError = false;
+}
+
 void RenderOrchestrator::_switchPipelineIfNeeded()
 {
     if (m_UI.requestedPipeline == m_UI.activePipeline) return;
@@ -74,14 +115,19 @@ void RenderOrchestrator::_switchPipelineIfNeeded()
 
     m_UI.activePipeline = m_UI.requestedPipeline;
 
-    // Mark everything dirty so the incoming pass re-syncs its GPU buffers.
-    m_Registry.markAllDirty();
+    // The incoming pipeline's GPU state may be stale from registry edits made
+    // while it was inactive (only the active pipeline gets dirty notifications).
+    // Force a full rebuild from the current registry.
+    if (auto* staged = _activeStagedPass()) {
+        staged->LoadResources();
+    }
 }
 
 // --- IRenderPass interface ---
 
 void RenderOrchestrator::Animate(float seconds)
 {
+    _loadSceneIfRequested();
     _switchPipelineIfNeeded();
     m_ViewHandler.camera.Animate(seconds);
 

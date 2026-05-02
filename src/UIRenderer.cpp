@@ -1,6 +1,7 @@
 #include "include/UIRenderer.hpp"
 
 #include <donut/core/math/math.h>
+#include <filesystem>
 #include <sstream>
 #include <string>
 #include <algorithm>
@@ -22,6 +23,8 @@ void UIRenderer::buildUI() {
     ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(500, 400), ImGuiCond_FirstUseEver);
     ImGui::Begin("Xylem", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+
+    _buildSceneFileSection();
 
     // =====================================================================
     // PERFORMANCE METRICS
@@ -119,6 +122,52 @@ void UIRenderer::buildUI() {
     _buildShadowMapSection();
     _buildHiZSection();
     _buildImpostorAtlasSection();
+}
+
+
+void UIRenderer::_buildSceneFileSection() {
+    if (!ImGui::CollapsingHeader("Scene File", ImGuiTreeNodeFlags_DefaultOpen))
+        return;
+
+    ImGui::InputText("Path", &m_ScenePath);
+
+    if (ImGui::Button("Save")) {
+        if (m_ScenePath.empty()) {
+            m_ui.sceneLoadStatus        = "Save failed: path is empty";
+            m_ui.sceneLoadStatusIsError = true;
+        } else {
+            std::filesystem::path p(m_ScenePath);
+            if (SceneLoader::Save(p, *m_Registry)) {
+                m_ui.sceneLoadStatus        = "Saved " + p.string();
+                m_ui.sceneLoadStatusIsError = false;
+            } else {
+                m_ui.sceneLoadStatus        = "Save failed: " + p.string();
+                m_ui.sceneLoadStatusIsError = true;
+            }
+        }
+    }
+
+    ImGui::SameLine();
+
+    if (ImGui::Button("Load")) {
+        if (m_ScenePath.empty()) {
+            m_ui.sceneLoadStatus        = "Load failed: path is empty";
+            m_ui.sceneLoadStatusIsError = true;
+        } else {
+            // Defer the actual load to RenderOrchestrator — it owns the GPU sync,
+            // registry replace, and camera reset.
+            m_ui.requestedSceneLoad = true;
+            m_ui.requestedScenePath = m_ScenePath;
+            // Don't pre-write a status; the orchestrator writes it after the load.
+        }
+    }
+
+    if (!m_ui.sceneLoadStatus.empty()) {
+        ImVec4 col = m_ui.sceneLoadStatusIsError
+            ? ImVec4(1.0f, 0.4f, 0.4f, 1.0f)   // red
+            : ImVec4(0.7f, 0.7f, 0.7f, 1.0f);  // gray
+        ImGui::TextColored(col, "Status: %s", m_ui.sceneLoadStatus.c_str());
+    }
 }
 
 

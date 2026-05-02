@@ -144,48 +144,67 @@ void TraditionalRenderPass::_RebuildBindingSets() {
 // ===========================================================================
 
 bool TraditionalRenderPass::Init() {
-    // CommonRenderPasses must be constructed before opening initCL - its constructor
+    // CommonRenderPasses must be constructed before scene resources — its constructor
     // opens its own temporary command list to upload placeholder textures.
     engine::CommonRenderPasses commonPasses(GetDevice(), m_ShaderFactory);
 
-    { // uses a temp CL to free upload buffer memory back to the OS
-        nvrhi::CommandListHandle initCL = GetDevice()->createCommandList();
-        initCL->open();
+    // Scene-independent one-shot resources: CBs, samplers, shaders, input layouts.
+    // _InitShadowPass creates the shadow depth texture/framebuffers/samplers/layout.
+    // _InitTreePass creates shaders and input layout only (instance buffer + binding
+    // sets are scene-dependent and deferred to LoadResources).
+    if (!_InitShared())                                return false;
+    if (!_InitShadowPass())                            return false;
+    if (!_InitTreePass(nullptr, commonPasses))         return false;
+    if (!_InitSkyPass())                               return false;
 
-        // Upload GPU buffers from registry CPU data
-        _UploadAllAssets(GetDevice(), initCL);
-
-        if (!_InitShared())                                return false;
-        if (!_InitShadowPass())                            return false;
-        if (!_InitTreePass(initCL, commonPasses))          return false;
-        if (!_InitTerrainPass(initCL))                     return false;
-        if (!_InitSkyPass())                               return false;
-
-        initCL->close();
-        GetDevice()->executeCommandList(initCL);
-    }
-
-    // Persistent render command list for per-frame drawing
+    // Persistent render command list for per-frame drawing.
     m_CommandList = GetDevice()->createCommandList();
 
     // _InitTimerQueries();
 
+    return LoadResources();
+}
+
+bool TraditionalRenderPass::LoadResources() {
+    nvrhi::CommandListHandle initCL = GetDevice()->createCommandList();
+    initCL->open();
+
+    // Upload per-asset/LOD vertex and index buffers from registry CPU data.
+    _UploadAllAssets(GetDevice(), initCL);
+
+    // _InitTerrainPass uploads terrain VB/IB from m_Registry.getTerrain(); the
+    // terrain mesh is part of the scene, so this belongs in LoadResources.
+    if (!_InitTerrainPass(initCL)) {
+        initCL->close();
+        return false;
+    }
+
+    initCL->close();
+    GetDevice()->executeCommandList(initCL);
+
+    // Rebuild scene-sized GPU instance buffers and binding sets.
+    _RebuildInstanceBuffers();
+    _RebuildBindingSets();
+
     uint32_t totalInstances = m_Registry.totalInstanceCount();
     m_UI.totalInstanceCount = totalInstances;
 
+    m_VisibleInstanceReferences.clear();
     m_VisibleInstanceReferences.reserve(totalInstances);
 
     size_t numAssets = m_GPUAssets.size();
     size_t numLods   = m_Registry.getLodSegments().size();
 
-    m_InstanceCounts.resize(numAssets, std::vector<uint32_t>(numLods, 0));
+    m_InstanceCounts.assign(numAssets, std::vector<uint32_t>(numLods, 0));
     m_InstanceOffsets.assign(numAssets, std::vector<uint32_t>(numLods, 0));
 
-    m_VisibleInstanceBuffer.resize(std::max<uint32_t>(1, totalInstances));
+    m_VisibleInstanceBuffer.assign(std::max<uint32_t>(1, totalInstances), {});
+    m_DrawCmds.clear();
     m_DrawCmds.reserve(numAssets * numLods);
 
     for (auto& csd : m_CascadeShadowData) {
-        csd.instanceBuffer.resize(std::max<uint32_t>(1, totalInstances));
+        csd.instanceBuffer.assign(std::max<uint32_t>(1, totalInstances), {});
+        csd.drawCmds.clear();
         csd.drawCmds.reserve(numAssets);
     }
 
@@ -799,44 +818,9 @@ bool TraditionalRenderPass::_InitTreePass(nvrhi::ICommandList* initCL, engine::C
     m_StageResources.sceneTreeStage.inputLayout = GetDevice()->createInputLayout(attributes, uint32_t(std::size(attributes)), m_StageResources.sceneTreeStage.vertexShader);
     if (!m_StageResources.sceneTreeStage.inputLayout) return false;
 
-    // Instance buffer
-    uint32_t totalInstances = std::max<uint32_t>(1, m_Registry.totalInstanceCount());
-    m_StageResources.sceneTreeStage.instanceBuffer = GetDevice()->createBuffer(
-        nvrhi::BufferDesc()
-            .setByteSize(totalInstances * sizeof(Render::InstanceBufferEntry))
-            .setStructStride(sizeof(Render::InstanceBufferEntry))
-            .setDebugName("TreeInstanceBuffer")
-            .setIsVertexBuffer(true)
-            .enableAutomaticStateTracking(nvrhi::ResourceStates::CopyDest)
-    );
-    if (!m_StageResources.sceneTreeStage.instanceBuffer) return false;
-
-    // Bark textures + sampler come from SharedGPUAssets. Build per-bark binding sets.
-    const auto& barkTextures = m_Shared->barkTextures();
-    m_StageResources.sceneTreeStage.bindingSets.resize(barkTextures.size());
-
-    for (size_t i = 0; i < barkTextures.size(); i++) {
-        nvrhi::BindingSetDesc bsd;
-        bsd.bindings = {
-            nvrhi::BindingSetItem::ConstantBuffer(traditional_reg::Tree::kCB_Frame, m_StageResources.frameShared.constantBuffer, nvrhi::BufferRange(0, shader_cb::kFrameSize)),
-            nvrhi::BindingSetItem::Sampler(traditional_reg::Tree::kSampler_Main, m_Shared->barkSampler()),
-            nvrhi::BindingSetItem::Sampler(traditional_reg::Tree::kSampler_Shadow, m_StageResources.shadowStage.comparisonSampler),
-            nvrhi::BindingSetItem::Texture_SRV(traditional_reg::Tree::kTex_Diffuse, barkTextures[i].diffuse),
-            nvrhi::BindingSetItem::Texture_SRV(traditional_reg::Tree::kTex_NormalMap, barkTextures[i].normalMap),
-            nvrhi::BindingSetItem::Texture_SRV(traditional_reg::Tree::kTex_ShadowMap, m_StageResources.shadowStage.depthTexture),
-        };
-
-        if (i == 0) {
-            if (!nvrhi::utils::CreateBindingSetAndLayout(GetDevice(), nvrhi::ShaderType::All, 0,
-                    bsd, m_StageResources.sceneTreeStage.bindingLayout, m_StageResources.sceneTreeStage.bindingSets[0]))
-                return false;
-        } else {
-            m_StageResources.sceneTreeStage.bindingSets[i] = GetDevice()->createBindingSet(bsd, m_StageResources.sceneTreeStage.bindingLayout);
-            if (!m_StageResources.sceneTreeStage.bindingSets[i]) return false;
-        }
-    }
-
-    return !!m_StageResources.sceneTreeStage.bindingLayout;
+    // Instance buffer and binding sets are scene-dependent — created in LoadResources()
+    // via _RebuildInstanceBuffers() and _RebuildBindingSets().
+    return true;
 }
 
 // bool TraditionalRenderPass::_InitTimerQueries() {
@@ -930,16 +914,7 @@ bool TraditionalRenderPass::_InitShadowPass() {
     );
     if (!m_StageResources.shadowStage.comparisonSampler) return false;
 
-    uint32_t totalInstances = std::max<uint32_t>(1, m_Registry.totalInstanceCount());
-    m_StageResources.shadowStage.instanceBuffer = GetDevice()->createBuffer(
-        nvrhi::BufferDesc()
-            .setByteSize(totalInstances * sizeof(Render::InstanceBufferEntry))
-            .setStructStride(sizeof(Render::InstanceBufferEntry))
-            .setDebugName("ShadowInstanceBuffer")
-            .setIsVertexBuffer(true)
-            .enableAutomaticStateTracking(nvrhi::ResourceStates::CopyDest)
-    );
-    if (!m_StageResources.shadowStage.instanceBuffer) return false;
+    // Instance buffer is scene-dependent — created in LoadResources() via _RebuildInstanceBuffers().
 
     nvrhi::BindingSetDesc bsd;
     bsd.bindings = {

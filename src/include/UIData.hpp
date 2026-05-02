@@ -2,6 +2,7 @@
 #define XYLEM_UI_DATA_H
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace Xylem {
@@ -71,6 +72,16 @@ struct UIData {
     void*    impostorAlbedoAtlasTexture = nullptr;
     void*    impostorNormalAtlasTexture = nullptr;
     void*    impostorDepthAtlasTexture = nullptr;
+
+    // --- Scene Save / Load ---
+    // UIRenderer writes; RenderOrchestrator reads + clears.
+    bool        requestedSceneLoad     = false;
+    std::string requestedScenePath;
+    // Status surface for the Scene File UI section. Empty = no message displayed.
+    // Save writes this directly from UIRenderer; Load writes it from the orchestrator
+    // after _loadSceneIfRequested completes.
+    std::string sceneLoadStatus;
+    bool        sceneLoadStatusIsError = false;
 };
 
 } // namespace Xylem

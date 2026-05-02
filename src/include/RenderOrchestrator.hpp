@@ -76,6 +76,7 @@ private:
     frame::IFrameStagedPass* _activeStagedPass();
 
     void _switchPipelineIfNeeded();
+    void _loadSceneIfRequested();
 };
 
 } // namespace Xylem

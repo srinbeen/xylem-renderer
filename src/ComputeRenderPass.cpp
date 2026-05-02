@@ -980,40 +980,44 @@ ComputeRenderPass::~ComputeRenderPass() {
 // ===========================================================================
 
 bool ComputeRenderPass::Init() {
+    // CommonRenderPasses must be constructed before scene resources.
     engine::CommonRenderPasses commonPasses(GetDevice(), m_ShaderFactory);
 
-    {
-        nvrhi::CommandListHandle initCL = GetDevice()->createCommandList();
-        initCL->open();
-
-        _UploadAllAssets(initCL);
-
-        if (!_InitShared())                                return false;
-        if (!_InitShadowPass())                            return false;
-        if (!_InitTreePass(initCL, commonPasses))          return false;
-        if (!_InitImpostorPass())                          return false;
-        if (!_InitTerrainPass(initCL))                     return false;
-        if (!_InitSkyPass())                               return false;
-        if (!_InitHiZShaders())                            return false;
-        if (!_InitSDSMPass())                              return false;
-
-        _BuildRegionWindows();
-        _BuildSlotLayout();
-
-        if (!_InitCullPass(initCL))                        return false;
-
-        _UploadCullBuffers(initCL);
-        _RebuildCullBindings();
-
-        initCL->close();
-        GetDevice()->executeCommandList(initCL);
-    }
+    // Scene-independent one-shot resources: CBs, shaders, samplers, pipelines,
+    // binding layouts. None of these touch m_Registry.
+    if (!_InitShared())                                return false;
+    if (!_InitShadowPass())                            return false;
+    if (!_InitTreePass(nullptr, commonPasses))         return false;
+    if (!_InitImpostorPass())                          return false;
+    if (!_InitSkyPass())                               return false;
+    if (!_InitHiZShaders())                            return false;
+    if (!_InitSDSMPass())                              return false;
+    if (!_InitCullPass(nullptr))                       return false;
 
     m_CommandList = GetDevice()->createCommandList();
     // _InitTimerQueries();
 
-    m_UI.totalInstanceCount = m_Registry.totalInstanceCount();
+    return LoadResources();
+}
 
+bool ComputeRenderPass::LoadResources() {
+    nvrhi::CommandListHandle initCL = GetDevice()->createCommandList();
+    initCL->open();
+
+    _UploadAllAssets(initCL);
+
+    if (!_InitTerrainPass(initCL))       { initCL->close(); return false; }
+
+    _BuildRegionWindows();
+    _BuildSlotLayout();
+
+    _UploadCullBuffers(initCL);
+    _RebuildCullBindings();
+
+    initCL->close();
+    GetDevice()->executeCommandList(initCL);
+
+    m_UI.totalInstanceCount = m_Registry.totalInstanceCount();
     return true;
 }
 

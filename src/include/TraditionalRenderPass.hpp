@@ -38,6 +38,7 @@ public:
     void SetSharedAssets(SharedGPUAssets* shared) { m_Shared = shared; }
 
     bool Init();
+    bool LoadResources() override;
     void Animate(float seconds) override;
     void BackBufferResizing() override {
         m_StageResources.sceneTreeStage.pipeline = nullptr;

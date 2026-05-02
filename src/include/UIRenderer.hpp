@@ -11,6 +11,9 @@
 #include "UIData.hpp"
 #include "SceneRegistry.hpp"
 #include "ViewHandler.hpp"
+#include "SceneLoader.hpp"
+#include <donut/app/ApplicationBase.h>
+#include "Globals.hpp"
 
 using namespace donut;
 
@@ -76,11 +79,15 @@ private:
     AddAssetState  m_AddAsset;
     AddRegionState m_AddRegion;
 
+    // Scene file path text field
+    std::string m_ScenePath;
+
 public:
     UIRenderer(app::DeviceManager* dm, SceneRegistry* registry, UIData& ui, ViewHandler* vh)
         : ImGui_Renderer(dm), m_Registry(registry), m_ui(ui), m_ViewHandler(vh)
     {
         ImGui::GetIO().IniFilename = nullptr;
+        m_ScenePath = g_SceneConfigDirectory.string();
     }
 
     void Init(std::shared_ptr<engine::ShaderFactory> sf) { ImGui_Renderer::Init(sf); }
@@ -91,6 +98,7 @@ protected:
     void buildUI();
 
 private:
+    void _buildSceneFileSection();
     void _buildLSystemsSection();
     void _buildAssetsSection();
     void _buildRegionsSection();

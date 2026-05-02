@@ -37,6 +37,8 @@ namespace compute_reg = Xylem::shader::reg::Compute;
 // ===========================================================================
 
 bool MeshShaderRenderPass::Init() {
+    // Scene-independent one-shot resources: CBs, shaders, samplers, pipelines,
+    // binding layouts, command signatures. None of these touch m_Registry.
     if (!_InitShared())         return false;
     if (!_InitDrawResources())  return false;
     if (!_InitCullResources())  return false;
@@ -47,30 +49,33 @@ bool MeshShaderRenderPass::Init() {
     if (!_InitSkyPass())        return false;
     if (!_InitImpostorPass())   return false;
 
-    {
-        auto initCL = GetDevice()->createCommandList();
-        initCL->open();
-
-        _RebuildMeshletMegabuffers(initCL);
-        _UploadMeshletMegabuffers(initCL);
-
-        if (!_InitTerrainPass(initCL))               { initCL->close(); return false; }
-
-        _BuildRegionWindows();
-        _BuildSlotLayout();
-        _UploadCullBuffers(initCL);
-
-        _RebuildCullBindingSet();
-        _RebuildDrawBindingSet();
-        _RebuildShadowBindingSet();
-        _RebuildDepthPrepassBindingSet();
-        _RebuildImpostorBindingSets();
-
-        initCL->close();
-        GetDevice()->executeCommandList(initCL);
-    }
-
     m_CommandList = GetDevice()->createCommandList();
+
+    return LoadResources();
+}
+
+bool MeshShaderRenderPass::LoadResources() {
+    auto initCL = GetDevice()->createCommandList();
+    initCL->open();
+
+    _RebuildMeshletMegabuffers(initCL);
+    _UploadMeshletMegabuffers(initCL);
+
+    if (!_InitTerrainPass(initCL))  { initCL->close(); return false; }
+
+    _BuildRegionWindows();
+    _BuildSlotLayout();
+    _UploadCullBuffers(initCL);
+
+    _RebuildCullBindingSet();
+    _RebuildDrawBindingSet();
+    _RebuildShadowBindingSet();
+    _RebuildDepthPrepassBindingSet();
+    _RebuildImpostorBindingSets();
+
+    initCL->close();
+    GetDevice()->executeCommandList(initCL);
+
     return true;
 }
 

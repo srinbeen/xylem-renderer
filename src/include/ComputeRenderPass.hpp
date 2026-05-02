@@ -45,6 +45,7 @@ public:
 
     ~ComputeRenderPass();
     bool Init();
+    bool LoadResources() override;
     void Animate(float seconds) override;
     void BackBufferResizing() override;
     void Render(nvrhi::IFramebuffer* framebuffer) override;

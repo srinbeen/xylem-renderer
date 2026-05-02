@@ -21,6 +21,10 @@ public:
     // Returns false if the scene is invalid (no L-systems, missing assets, etc.).
     static bool Load(const std::filesystem::path& path, SceneRegistry& registry);
 
+    // CPU-only scene save — writes the loader-shaped JSON subset to `path`.
+    // Returns false on any I/O error. Atomic: writes to <path>.tmp then renames.
+    static bool Save(const std::filesystem::path& path, const SceneRegistry& registry);
+
     static Json::Value ParseFile(const std::filesystem::path& path);
 };
 

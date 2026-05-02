@@ -32,8 +32,18 @@ void bake_vs(
 {
     o.pos       = mul(float4(i_pos, 1.0), mvp);
     o.normal    = normalize(i_normal);
-    o.tangent   = normalize(i_tangent);
-    o.bitangent = normalize(i_bitangent);
+    // Leaf vertices (uv.x < 0) pack the per-asset leaf color in TANGENT — pass through
+    // unnormalized so the RGB survives interpolation. Matches the runtime tree shaders.
+    if (i_uv.x < 0.0)
+    {
+        o.tangent   = i_tangent;
+        o.bitangent = i_bitangent;
+    }
+    else
+    {
+        o.tangent   = normalize(i_tangent);
+        o.bitangent = normalize(i_bitangent);
+    }
     o.uv        = i_uv;
 }
 
@@ -45,6 +55,20 @@ struct BakeOutput
 
 BakeOutput bake_ps(in V2P i)
 {
+    BakeOutput o;
+
+    // Leaf path: cross-billboards have no diffuse/normal texture — color is the
+    // per-asset leaf color packed into TANGENT, and the surface normal is the
+    // billboard's own face normal. Alpha = 1 (opaque), no clip.
+    if (i.uv.x < 0.0)
+    {
+        o.albedoAlpha = float4(i.tangent, 1.0);
+        float3 N = normalize(i.normal);
+        o.normal = float4(saturate(N * 0.5 + 0.5), 1.0);
+        return o;
+    }
+
+    // Trunk / branchlet path: tangent-space normal map sample.
     float3 T = normalize(i.tangent);
     float3 B = normalize(i.bitangent);
     float3 N = normalize(i.normal);
@@ -56,7 +80,6 @@ BakeOutput bake_ps(in V2P i)
     float4 diffuse = t_Diffuse.Sample(s_Sampler, i.uv);
     clip(diffuse.a - 0.25);
 
-    BakeOutput o;
     o.albedoAlpha = diffuse;
     o.normal = float4(saturate(objectNormal * 0.5 + 0.5), 1.0);
     return o;

@@ -32,6 +32,28 @@ inline float dist2(const dm::float3& a, const dm::float3& b) {
 
 } // namespace
 
+dm::affine3 SCParams::crownTransform() const {
+    const dm::float3 eulerRad(dm::radians(crownRotationDegrees.x),
+                              dm::radians(crownRotationDegrees.y),
+                              dm::radians(crownRotationDegrees.z));
+
+    // Row-vector shear: v'.x += shXY*v.y + shXZ*v.z, v'.y += shYZ*v.z. Off-diagonals live in
+    // column 0 (rows 1,2) and column 1 (row 2) so the multiplication v*S yields the formulas
+    // above; transposing this would shear in the wrong direction.
+    const dm::affine3 shearAffine(
+        dm::float3x3(1.f,          0.f,          0.f,
+                     crownShear.x, 1.f,          0.f,
+                     crownShear.y, crownShear.z, 1.f),
+        dm::float3(0.f));
+
+    // affine composition (a*b).transformPoint(v) = b.transformPoint(a.transformPoint(v)),
+    // so this list reads in apply-order: scale, then shear, then rotate, then translate.
+    return dm::scaling(crownScale)
+         * shearAffine
+         * dm::rotation(eulerRad)
+         * dm::translation(crownTranslation);
+}
+
 namespace {
 
 // Parallel-transport `parentRight` (a unit vector ⊥ parentDir) onto the plane ⊥ childDir.
@@ -84,24 +106,18 @@ void SpaceColonizer::grow(const std::vector<dm::float3>& tipPositions,
     if (tipPositions.empty() || m_p.attractorCount == 0 || m_p.maxIterations == 0)
         return;
 
-    // ---- Crown volume: sphere centered above the L-system bbox.
-    const dm::float3 bboxCenter = lsystemBbox.center();
-    const float      treeHeight = lsystemBbox.diagonal().y;
-    const dm::float3 crownCenter(
-        bboxCenter.x,
-        lsystemBbox.m_mins.y + m_p.crownYOffsetFactor * treeHeight,
-        bboxCenter.z
-    );
-    const float      crownRadius = m_p.crownRadiusFactor * treeHeight;
+    // ---- Crown volume: arbitrary affine of the unit ball (ellipsoid + rotation + shear +
+    // translation, all in tree-local space). lsystemBbox is intentionally unused — the user
+    // sets translation/scale to match their tree's height directly.
+    const dm::affine3 crownXf = m_p.crownTransform();
 
-    // ---- Place attractors uniformly inside the crown sphere.
     std::vector<dm::float3> attractors;
     std::vector<uint8_t>    attractorAlive;
     attractors.reserve(m_p.attractorCount);
     attractorAlive.reserve(m_p.attractorCount);
     for (uint32_t i = 0; i < m_p.attractorCount; ++i) {
         const dm::float3 unit = sampleUnitBall(i, m_p.seed ^ 0xA1F00DEu);
-        attractors.push_back(crownCenter + unit * crownRadius);
+        attractors.push_back(crownXf.transformPoint(unit));
         attractorAlive.push_back(1);
     }
 
@@ -146,7 +162,7 @@ void SpaceColonizer::grow(const std::vector<dm::float3>& tipPositions,
 
         n.parent       = -1;
         n.terminal     = false;
-        n.radius       = (i < tipRadii.size())         ? tipRadii[i]         : m_p.branchletRadius;
+        n.radius       = (i < tipRadii.size())         ? tipRadii[i]         : 0.05f;
         n.branchLength = (i < tipBranchLengths.size()) ? tipBranchLengths[i] : 0.f;
         m_nodes.push_back(n);
     }

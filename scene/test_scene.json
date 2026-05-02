@@ -9,10 +9,34 @@
       "colonization" : 
       {
         "attractorCount" : 320,
-        "branchletRadius" : 0.07,
         "branchletTaper" : 0.93,
-        "crownRadiusFactor" : 0.412,
-        "crownYOffsetFactor" : 0.95,
+        "crown" : 
+        {
+          "rotation" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale" : 
+          [
+            5.0,
+            5.0,
+            5.0
+          ],
+          "shear" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "translation" : 
+          [
+            0.0,
+            8.0,
+            0.0
+          ]
+        },
         "influenceDistance" : 5.0,
         "killDistance" : 0.8,
         "maxIterations" : 64,
@@ -47,21 +71,45 @@
     },
     {
       "barkTexture" : "japanese_hackberry_bark_1k",
-      "baseLength" : 1.0,
+      "baseLength" : 1.383,
       "baseRadius" : 1.0,
       "branchAngle" : 28.0,
       "colonization" : 
       {
-        "attractorCount" : 320,
-        "branchletRadius" : 0.07,
-        "branchletTaper" : 0.93,
-        "crownRadiusFactor" : 0.749,
-        "crownYOffsetFactor" : 0.95,
-        "influenceDistance" : 5.0,
-        "killDistance" : 0.8,
-        "maxIterations" : 64,
-        "seed" : 0,
-        "segmentLength" : 0.45
+        "attractorCount" : 128,
+        "branchletTaper" : 0.899,
+        "crown" : 
+        {
+          "rotation" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale" : 
+          [
+            5.0,
+            5.0,
+            5.0
+          ],
+          "shear" : 
+          [
+            0.36,
+            0.0,
+            0.0
+          ],
+          "translation" : 
+          [
+            0.0,
+            19.5,
+            0.0
+          ]
+        },
+        "influenceDistance" : 2.519,
+        "killDistance" : 0.1,
+        "maxIterations" : 131,
+        "seed" : 3,
+        "segmentLength" : 0.359
       },
       "generation" : 4,
       "leaf" : 
@@ -86,8 +134,8 @@
       "name" : "OakAged",
       "radialSegments" : 16,
       "seed" : 123,
-      "stepRatio" : 0.88,
-      "taperRatio" : 0.9
+      "stepRatio" : 0.927,
+      "taperRatio" : 0.877
     },
     {
       "barkTexture" : "bark_willow_02_1k",
@@ -96,15 +144,39 @@
       "branchAngle" : 35.0,
       "colonization" : 
       {
-        "attractorCount" : 256,
-        "branchletRadius" : 0.05,
-        "branchletTaper" : 0.95,
-        "crownRadiusFactor" : 0.5,
-        "crownYOffsetFactor" : 1.0,
-        "influenceDistance" : 4.0,
-        "killDistance" : 0.6,
+        "attractorCount" : 192,
+        "branchletTaper" : 0.901,
+        "crown" : 
+        {
+          "rotation" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale" : 
+          [
+            5.0,
+            5.0,
+            5.0
+          ],
+          "shear" : 
+          [
+            -0.7,
+            0.0,
+            -0.15
+          ],
+          "translation" : 
+          [
+            -2.7,
+            11.9,
+            1.4
+          ]
+        },
+        "influenceDistance" : 3.354,
+        "killDistance" : 0.519,
         "maxIterations" : 64,
-        "seed" : 0,
+        "seed" : 3,
         "segmentLength" : 0.35
       },
       "generation" : 3,
@@ -124,14 +196,14 @@
           0.0
         ],
         "perTip" : 2,
-        "size" : 0.38
+        "size" : 0.471
       },
       "lsystem" : "Oak",
       "name" : "OakSapling",
       "radialSegments" : 16,
       "seed" : 6767,
-      "stepRatio" : 0.92,
-      "taperRatio" : 0.88
+      "stepRatio" : 0.917,
+      "taperRatio" : 0.872
     },
     {
       "barkTexture" : "japanese_hackberry_bark_1k",
@@ -140,16 +212,40 @@
       "branchAngle" : 20.0,
       "colonization" : 
       {
-        "attractorCount" : 320,
-        "branchletRadius" : 0.05,
-        "branchletTaper" : 0.94,
-        "crownRadiusFactor" : 0.3,
-        "crownYOffsetFactor" : 0.55,
-        "influenceDistance" : 4.0,
-        "killDistance" : 0.7,
-        "maxIterations" : 56,
-        "seed" : 0,
-        "segmentLength" : 0.4
+        "attractorCount" : 651,
+        "branchletTaper" : 1.0,
+        "crown" : 
+        {
+          "rotation" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale" : 
+          [
+            5.0,
+            9.3,
+            5.0
+          ],
+          "shear" : 
+          [
+            0.18,
+            0.0,
+            0.23
+          ],
+          "translation" : 
+          [
+            1.1,
+            17.3,
+            0.0
+          ]
+        },
+        "influenceDistance" : 4.969,
+        "killDistance" : 0.274,
+        "maxIterations" : 86,
+        "seed" : 2,
+        "segmentLength" : 0.644
       },
       "generation" : 4,
       "leaf" : 
@@ -168,34 +264,59 @@
           0.0
         ],
         "perTip" : 3,
-        "size" : 0.14
+        "size" : 0.242
       },
       "lsystem" : "Pine",
       "name" : "PineTall",
       "radialSegments" : 16,
       "seed" : 676767,
       "stepRatio" : 0.88,
-      "taperRatio" : 0.9
+      "taperRatio" : 0.832
     },
     {
       "barkTexture" : "japanese_hackberry_bark_1k",
-      "baseLength" : 1.0,
-      "baseRadius" : 1.0,
-      "branchAngle" : 17.5,
+      "baseLength" : 1.306,
+      "baseRadius" : 0.719,
+      "branchAngle" : 33.437,
       "colonization" : 
       {
-        "attractorCount" : 200,
-        "branchletRadius" : 0.05,
-        "branchletTaper" : 0.94,
-        "crownRadiusFactor" : 0.32,
-        "crownYOffsetFactor" : 0.6,
-        "influenceDistance" : 4.0,
-        "killDistance" : 0.7,
-        "maxIterations" : 48,
-        "seed" : 0,
-        "segmentLength" : 0.28
+        "attractorCount" : 64,
+        "branchletTaper" : 0.975,
+        "crown" : 
+        {
+          "rotation" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale" : 
+          [
+            3.0,
+            3.85,
+            3.0
+          ],
+          "shear" : 
+          [
+            0.0,
+            -0.5,
+            -0.87
+          ],
+          "translation" : 
+          [
+            2.1,
+            8.75,
+            -1.0
+          ]
+        },
+        "influenceDistance" : 4.403,
+        "killDistance" : 0.336,
+        "maxIterations" : 85,
+        "seed" : 3452,
+        "segmentLength" : 0.097
       },
-      "generation" : 3,
+      "generation" : 2,
+      "hasLeaves" : false,
       "leaf" : 
       {
         "color" : 
@@ -212,14 +333,14 @@
           0.0
         ],
         "perTip" : 3,
-        "size" : 0.12
+        "size" : 0.405
       },
       "lsystem" : "Pine",
       "name" : "PineSmall",
       "radialSegments" : 16,
-      "seed" : 6969,
-      "stepRatio" : 0.92,
-      "taperRatio" : 0.86
+      "seed" : 456,
+      "stepRatio" : 0.91,
+      "taperRatio" : 0.615
     },
     {
       "barkTexture" : "japanese_hackberry_bark_1k",
@@ -229,10 +350,34 @@
       "colonization" : 
       {
         "attractorCount" : 320,
-        "branchletRadius" : 0.05,
         "branchletTaper" : 0.94,
-        "crownRadiusFactor" : 0.3,
-        "crownYOffsetFactor" : 0.55,
+        "crown" : 
+        {
+          "rotation" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale" : 
+          [
+            5.0,
+            5.0,
+            5.0
+          ],
+          "shear" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "translation" : 
+          [
+            0.0,
+            8.0,
+            0.0
+          ]
+        },
         "influenceDistance" : 4.0,
         "killDistance" : 0.7,
         "maxIterations" : 56,
@@ -273,10 +418,34 @@
       "colonization" : 
       {
         "attractorCount" : 360,
-        "branchletRadius" : 0.05,
         "branchletTaper" : 0.94,
-        "crownRadiusFactor" : 0.28,
-        "crownYOffsetFactor" : 0.5,
+        "crown" : 
+        {
+          "rotation" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale" : 
+          [
+            5.0,
+            5.0,
+            5.0
+          ],
+          "shear" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "translation" : 
+          [
+            0.0,
+            8.0,
+            0.0
+          ]
+        },
         "influenceDistance" : 3.5,
         "killDistance" : 0.6,
         "maxIterations" : 56,
@@ -317,10 +486,34 @@
       "colonization" : 
       {
         "attractorCount" : 220,
-        "branchletRadius" : 0.05,
         "branchletTaper" : 0.94,
-        "crownRadiusFactor" : 0.3,
-        "crownYOffsetFactor" : 0.55,
+        "crown" : 
+        {
+          "rotation" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale" : 
+          [
+            5.0,
+            5.0,
+            5.0
+          ],
+          "shear" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "translation" : 
+          [
+            0.0,
+            8.0,
+            0.0
+          ]
+        },
         "influenceDistance" : 3.5,
         "killDistance" : 0.6,
         "maxIterations" : 48,
@@ -361,10 +554,34 @@
       "colonization" : 
       {
         "attractorCount" : 240,
-        "branchletRadius" : 0.05,
         "branchletTaper" : 0.95,
-        "crownRadiusFactor" : 0.4,
-        "crownYOffsetFactor" : 0.85,
+        "crown" : 
+        {
+          "rotation" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale" : 
+          [
+            5.0,
+            5.0,
+            5.0
+          ],
+          "shear" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "translation" : 
+          [
+            0.0,
+            8.0,
+            0.0
+          ]
+        },
         "influenceDistance" : 5.0,
         "killDistance" : 0.8,
         "maxIterations" : 56,
@@ -405,10 +622,34 @@
       "colonization" : 
       {
         "attractorCount" : 160,
-        "branchletRadius" : 0.05,
         "branchletTaper" : 0.95,
-        "crownRadiusFactor" : 0.42,
-        "crownYOffsetFactor" : 0.85,
+        "crown" : 
+        {
+          "rotation" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale" : 
+          [
+            5.0,
+            5.0,
+            5.0
+          ],
+          "shear" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "translation" : 
+          [
+            0.0,
+            8.0,
+            0.0
+          ]
+        },
         "influenceDistance" : 5.0,
         "killDistance" : 0.8,
         "maxIterations" : 48,
@@ -449,10 +690,34 @@
       "colonization" : 
       {
         "attractorCount" : 320,
-        "branchletRadius" : 0.07,
         "branchletTaper" : 0.93,
-        "crownRadiusFactor" : 0.65,
-        "crownYOffsetFactor" : 0.95,
+        "crown" : 
+        {
+          "rotation" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale" : 
+          [
+            5.0,
+            5.0,
+            5.0
+          ],
+          "shear" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "translation" : 
+          [
+            0.0,
+            8.0,
+            0.0
+          ]
+        },
         "influenceDistance" : 5.5,
         "killDistance" : 0.9,
         "maxIterations" : 64,
@@ -493,10 +758,34 @@
       "colonization" : 
       {
         "attractorCount" : 200,
-        "branchletRadius" : 0.07,
         "branchletTaper" : 0.93,
-        "crownRadiusFactor" : 0.6,
-        "crownYOffsetFactor" : 0.92,
+        "crown" : 
+        {
+          "rotation" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale" : 
+          [
+            5.0,
+            5.0,
+            5.0
+          ],
+          "shear" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "translation" : 
+          [
+            0.0,
+            8.0,
+            0.0
+          ]
+        },
         "influenceDistance" : 5.5,
         "killDistance" : 0.9,
         "maxIterations" : 56,
@@ -537,10 +826,34 @@
       "colonization" : 
       {
         "attractorCount" : 75,
-        "branchletRadius" : 0.075,
         "branchletTaper" : 0.95,
-        "crownRadiusFactor" : 0.33,
-        "crownYOffsetFactor" : 0.75,
+        "crown" : 
+        {
+          "rotation" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale" : 
+          [
+            5.0,
+            5.0,
+            5.0
+          ],
+          "shear" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "translation" : 
+          [
+            0.0,
+            8.0,
+            0.0
+          ]
+        },
         "influenceDistance" : 7.0,
         "killDistance" : 0.6,
         "maxIterations" : 64,
@@ -580,11 +893,35 @@
       "branchAngle" : 10.0,
       "colonization" : 
       {
-        "attractorCount" : 320,
-        "branchletRadius" : 0.072,
+        "attractorCount" : 267,
         "branchletTaper" : 0.85,
-        "crownRadiusFactor" : 0.446,
-        "crownYOffsetFactor" : 0.906,
+        "crown" : 
+        {
+          "rotation" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale" : 
+          [
+            5.0,
+            5.0,
+            5.0
+          ],
+          "shear" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "translation" : 
+          [
+            0.0,
+            8.0,
+            0.0
+          ]
+        },
         "influenceDistance" : 6.958,
         "killDistance" : 0.25,
         "maxIterations" : 125,
@@ -625,10 +962,34 @@
       "colonization" : 
       {
         "attractorCount" : 280,
-        "branchletRadius" : 0.05,
         "branchletTaper" : 0.96,
-        "crownRadiusFactor" : 0.65,
-        "crownYOffsetFactor" : 1.0,
+        "crown" : 
+        {
+          "rotation" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale" : 
+          [
+            5.0,
+            5.0,
+            5.0
+          ],
+          "shear" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "translation" : 
+          [
+            0.0,
+            8.0,
+            0.0
+          ]
+        },
         "influenceDistance" : 6.0,
         "killDistance" : 0.9,
         "maxIterations" : 64,
@@ -669,10 +1030,34 @@
       "colonization" : 
       {
         "attractorCount" : 180,
-        "branchletRadius" : 0.05,
         "branchletTaper" : 0.96,
-        "crownRadiusFactor" : 0.6,
-        "crownYOffsetFactor" : 0.95,
+        "crown" : 
+        {
+          "rotation" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale" : 
+          [
+            5.0,
+            5.0,
+            5.0
+          ],
+          "shear" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "translation" : 
+          [
+            0.0,
+            8.0,
+            0.0
+          ]
+        },
         "influenceDistance" : 6.0,
         "killDistance" : 0.9,
         "maxIterations" : 48,
@@ -713,10 +1098,34 @@
       "colonization" : 
       {
         "attractorCount" : 120,
-        "branchletRadius" : 0.04,
         "branchletTaper" : 0.93,
-        "crownRadiusFactor" : 0.7,
-        "crownYOffsetFactor" : 0.6,
+        "crown" : 
+        {
+          "rotation" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale" : 
+          [
+            5.0,
+            5.0,
+            5.0
+          ],
+          "shear" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "translation" : 
+          [
+            0.0,
+            8.0,
+            0.0
+          ]
+        },
         "influenceDistance" : 3.0,
         "killDistance" : 0.5,
         "maxIterations" : 40,
@@ -757,10 +1166,34 @@
       "colonization" : 
       {
         "attractorCount" : 80,
-        "branchletRadius" : 0.04,
         "branchletTaper" : 0.93,
-        "crownRadiusFactor" : 0.65,
-        "crownYOffsetFactor" : 0.6,
+        "crown" : 
+        {
+          "rotation" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale" : 
+          [
+            5.0,
+            5.0,
+            5.0
+          ],
+          "shear" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "translation" : 
+          [
+            0.0,
+            8.0,
+            0.0
+          ]
+        },
         "influenceDistance" : 3.0,
         "killDistance" : 0.5,
         "maxIterations" : 32,
@@ -801,10 +1234,34 @@
       "colonization" : 
       {
         "attractorCount" : 96,
-        "branchletRadius" : 0.03,
         "branchletTaper" : 0.92,
-        "crownRadiusFactor" : 0.75,
-        "crownYOffsetFactor" : 0.55,
+        "crown" : 
+        {
+          "rotation" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale" : 
+          [
+            5.0,
+            5.0,
+            5.0
+          ],
+          "shear" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "translation" : 
+          [
+            0.0,
+            8.0,
+            0.0
+          ]
+        },
         "influenceDistance" : 2.5,
         "killDistance" : 0.4,
         "maxIterations" : 32,
@@ -919,7 +1376,7 @@
         "F" : "FF",
         "X" : "F&[[>X]-^<X]-F[^-FX]&+X"
       },
-      "seed" : 67
+      "seed" : 6767
     },
     {
       "axiom" : "X",
@@ -929,7 +1386,7 @@
         "F" : "FF",
         "X" : "F[+>X][-<X][&>X][^<X]FX"
       },
-      "seed" : 8080
+      "seed" : 456
     },
     {
       "axiom" : "F",

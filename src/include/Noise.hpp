@@ -82,6 +82,34 @@ inline float fbm2D(float x, float y, uint32_t seed = 0,
     return value / maxAmplitude; // normalize to roughly [-1, 1]
 }
 
+// 2D Worley/Voronoi F1: distance from (x, y) to the nearest jittered feature
+// point on the integer lattice. One feature point per unit cell, position
+// jittered into the cell by a hash of its integer coords. Returns roughly
+// [0, ~1.06] — ~0 at a feature point, larger near cell corners.
+inline float worleyF1_2D(float x, float y, uint32_t seed = 0) {
+    int ix = (int)std::floor(x);
+    int iy = (int)std::floor(y);
+    float fx = x - (float)ix;
+    float fy = y - (float)iy;
+
+    float minDistSq = 1e30f;
+    for (int oy = -1; oy <= 1; oy++) {
+        for (int ox = -1; ox <= 1; ox++) {
+            int      cx = ix + ox;
+            int      cy = iy + oy;
+            uint32_t cellHash =
+                static_cast<uint32_t>(cx) * 73856093u ^ static_cast<uint32_t>(cy) * 19349663u;
+            float jx = Xylem::hashToFloat(cellHash, seed);
+            float jy = Xylem::hashToFloat(cellHash, seed ^ 0xDEADBEEFu);
+            float dx = (float)ox + jx - fx;
+            float dy = (float)oy + jy - fy;
+            float dSq = dx * dx + dy * dy;
+            if (dSq < minDistSq) minDistSq = dSq;
+        }
+    }
+    return std::sqrt(minDistSq);
+}
+
 } // namespace Xylem::Noise
 
 #endif // XYLEM_NOISE_H

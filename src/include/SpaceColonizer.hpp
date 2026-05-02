@@ -17,11 +17,21 @@ namespace Xylem::ProcGen {
         float    killDistance       = 0.6f;
         float    segmentLength      = 0.4f;
         uint32_t maxIterations      = 64;
-        float    crownRadiusFactor  = 0.5f;   // multiple of L-system tree height
-        float    crownYOffsetFactor = 1.0f;   // sphere center placed at bbox.min.y + factor * height
-        float    branchletRadius    = 0.05f;  // radius of root SC nodes (seeded from L-system tips)
+
+        // Affine transform applied to a unit ball to produce the attractor cloud.
+        // Stored decomposed (composition order S → Shear → R → T) so the JSON and UI stay
+        // hand-editable; collapse to a dm::affine3 via crownTransform(). Coordinates are in
+        // tree-local space (y-up, origin at the L-system trunk base) and NOT scaled by the
+        // L-system bbox — the user picks values that match their tree's height directly.
+        dm::float3 crownTranslation     = dm::float3(0.f, 8.f, 0.f);
+        dm::float3 crownRotationDegrees = dm::float3(0.f, 0.f, 0.f);   // XYZ Euler
+        dm::float3 crownScale           = dm::float3(5.f, 5.f, 5.f);
+        dm::float3 crownShear           = dm::float3(0.f, 0.f, 0.f);   // (XY, XZ, YZ)
+
         float    branchletTaper     = 0.95f;  // child radius = parent radius * taper
         uint32_t seed               = 0;      // 0 = derive from asset seed
+
+        dm::affine3 crownTransform() const;
     };
 
     struct SCNode {

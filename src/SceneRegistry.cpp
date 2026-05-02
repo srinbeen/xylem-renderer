@@ -1,5 +1,6 @@
 #include "include/SceneRegistry.hpp"
 #include "include/hash.hpp"
+#include "include/Noise.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -344,20 +345,58 @@ void SceneRegistry::_rebuildRegion(RegionDef& region) {
         maxRadius = dm::max(maxRadius, r);
     }
 
-    // Phase A: initial random placement.
-    std::vector<TreePlacement> placements(region.instanceCount);
+    // Phase A: rejection-sampled placement against a Voronoi (Worley F1)
+    // density field. One feature point per cell of size kCellSize world units;
+    // density peaks at the feature point and falls off to 0 at kClusterRadius.
+    // Produces discrete tree islands with real clearings between them.
+    // Phases B/C still run on top, so trunks are guaranteed not to overlap.
+    constexpr float kCellSize       = 50.f;  // world units between cluster centers
+    constexpr float kClusterRadius  = 0.55f; // fraction of cell occupied (0..1, ~sqrt(2)/2 max)
+    constexpr float kDensityPower   = 1.5f;  // higher = harder cluster edges
 
-    for (uint32_t i = 0; i < region.instanceCount; i++) {
-        float posX = region.bounds.m_mins.x + hashToFloat(i * 2u,     seedPos) * range.x;
-        float posZ = region.bounds.m_mins.y + hashToFloat(i * 2u + 1, seedPos) * range.y;
-        float rotY = hashToFloat(i, seedRot) * dm::PI_f;
+    std::vector<TreePlacement> placements;
+    placements.reserve(region.instanceCount);
 
-        size_t assetId = region.assetIds[i % region.assetIds.size()];
-        const auto* asset = findAsset(assetId);
-        float radius = asset && !asset->lods.empty()
-            ? maxRadius : 1.f;
+    const uint32_t maxAttempts = region.instanceCount * 32u;
+    uint32_t       attempts    = 0;
 
-        placements[i] = { {posX, posZ}, radius, assetId, rotY };
+    while (placements.size() < region.instanceCount && attempts < maxAttempts) {
+        float u = hashToFloat(attempts * 3u + 0u, seedPos);
+        float v = hashToFloat(attempts * 3u + 1u, seedPos);
+        float r = hashToFloat(attempts * 3u + 2u, seedPos);
+
+        float posX = region.bounds.m_mins.x + u * range.x;
+        float posZ = region.bounds.m_mins.y + v * range.y;
+
+        float w = Noise::worleyF1_2D(posX / kCellSize, posZ / kCellSize, seedPos);
+        // Map distance-to-nearest-feature -> density (close = dense, far = empty).
+        float t       = std::clamp(1.f - (w / kClusterRadius), 0.f, 1.f);
+        float density = std::pow(t, kDensityPower);
+
+        if (r < density) {
+            uint32_t    i       = static_cast<uint32_t>(placements.size());
+            float       rotY    = hashToFloat(i, seedRot) * dm::PI_f;
+            size_t      assetId = region.assetIds[i % region.assetIds.size()];
+            const auto* asset   = findAsset(assetId);
+            float       radius  = asset && !asset->lods.empty() ? maxRadius : 1.f;
+
+            placements.push_back({ {posX, posZ}, radius, assetId, rotY });
+        }
+        attempts++;
+    }
+
+    // Fallback: if rejection thinned us out, top up uniformly. Downstream phases
+    // assume placements.size() == region.instanceCount.
+    while (placements.size() < region.instanceCount) {
+        uint32_t    i       = static_cast<uint32_t>(placements.size());
+        float       posX    = region.bounds.m_mins.x + hashToFloat(i * 2u,     seedPos) * range.x;
+        float       posZ    = region.bounds.m_mins.y + hashToFloat(i * 2u + 1, seedPos) * range.y;
+        float       rotY    = hashToFloat(i, seedRot) * dm::PI_f;
+        size_t      assetId = region.assetIds[i % region.assetIds.size()];
+        const auto* asset   = findAsset(assetId);
+        float       radius  = asset && !asset->lods.empty() ? maxRadius : 1.f;
+
+        placements.push_back({ {posX, posZ}, radius, assetId, rotY });
     }
 
     // Phase B: spatial grid.

@@ -316,9 +316,15 @@ void UIRenderer::_buildAssetsSection() {
                     ImGui::SliderFloat("Kill Distance",        &state.colonization.killDistance,        0.1f, 4.f);
                     ImGui::SliderFloat("Segment Length",       &state.colonization.segmentLength,       0.05f, 2.f);
                     ImGui::SliderInt  ("Max Iterations",       &maxIters,                               1,    256);
-                    ImGui::SliderFloat("Crown Radius Factor",  &state.colonization.crownRadiusFactor,   0.1f, 2.f);
-                    ImGui::SliderFloat("Crown Y Offset Factor",&state.colonization.crownYOffsetFactor,  0.f,  2.f);
-                    ImGui::SliderFloat("Branchlet Radius",     &state.colonization.branchletRadius,     0.005f, 0.5f);
+
+                    if (ImGui::TreeNode("Crown Transform")) {
+                        ImGui::DragFloat3("Translation",        &state.colonization.crownTranslation.x,     0.1f);
+                        ImGui::DragFloat3("Rotation (deg)",     &state.colonization.crownRotationDegrees.x, 0.5f);
+                        ImGui::DragFloat3("Scale",              &state.colonization.crownScale.x,           0.05f, 0.01f, 100.f);
+                        ImGui::DragFloat3("Shear (XY,XZ,YZ)",   &state.colonization.crownShear.x,           0.01f);
+                        ImGui::TreePop();
+                    }
+
                     ImGui::SliderFloat("Branchlet Taper",      &state.colonization.branchletTaper,      0.5f, 1.f);
                     ImGui::InputInt   ("SC Seed (0=auto)",     &scSeed);
 

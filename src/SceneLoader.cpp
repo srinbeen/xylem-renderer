@@ -179,11 +179,16 @@ bool SceneLoader::Load(const std::filesystem::path& path, SceneRegistry& registr
             cNode["killDistance"]       >> scp.killDistance;
             cNode["segmentLength"]      >> scp.segmentLength;
             cNode["maxIterations"]      >> scp.maxIterations;
-            cNode["crownRadiusFactor"]  >> scp.crownRadiusFactor;
-            cNode["crownYOffsetFactor"] >> scp.crownYOffsetFactor;
-            cNode["branchletRadius"]    >> scp.branchletRadius;
             cNode["branchletTaper"]     >> scp.branchletTaper;
             cNode["seed"]               >> scp.seed;
+
+            if (cNode.isMember("crown")) {
+                const auto& crownNode = cNode["crown"];
+                crownNode["translation"] >> scp.crownTranslation;
+                crownNode["rotation"]    >> scp.crownRotationDegrees;
+                crownNode["scale"]       >> scp.crownScale;
+                crownNode["shear"]       >> scp.crownShear;
+            }
 
             if (auto* a = registry.findAsset(stableId)) a->colonization = scp;
         }
@@ -416,11 +421,22 @@ bool SceneLoader::Save(const std::filesystem::path& path, const SceneRegistry& r
                 c["killDistance"]       = sc.killDistance;
                 c["segmentLength"]      = sc.segmentLength;
                 c["maxIterations"]      = sc.maxIterations;
-                c["crownRadiusFactor"]  = sc.crownRadiusFactor;
-                c["crownYOffsetFactor"] = sc.crownYOffsetFactor;
-                c["branchletRadius"]    = sc.branchletRadius;
                 c["branchletTaper"]     = sc.branchletTaper;
                 c["seed"]               = sc.seed;
+
+                {
+                    auto vec3ToArr = [](const dm::float3& v) {
+                        Json::Value arr(Json::arrayValue);
+                        arr.append(v.x); arr.append(v.y); arr.append(v.z);
+                        return arr;
+                    };
+                    Json::Value crown(Json::objectValue);
+                    crown["translation"] = vec3ToArr(sc.crownTranslation);
+                    crown["rotation"]    = vec3ToArr(sc.crownRotationDegrees);
+                    crown["scale"]       = vec3ToArr(sc.crownScale);
+                    crown["shear"]       = vec3ToArr(sc.crownShear);
+                    c["crown"] = crown;
+                }
                 a["colonization"] = c;
             }
 

@@ -9,9 +9,7 @@
 namespace Xylem::ProcGen {
 
     struct SCParams {
-        // attractorCount = 0 disables space colonization entirely. Default is OFF so existing
-        // scenes that don't define a `colonization` JSON block render identically to before;
-        // new assets opt in by setting attractorCount > 0 in scene JSON or via the UI.
+        // attractorCount = 0 disables space colonization entirely
         uint32_t attractorCount     = 0;
         float    influenceDistance  = 4.0f;
         float    killDistance       = 0.6f;
@@ -20,9 +18,7 @@ namespace Xylem::ProcGen {
 
         // Affine transform applied to a unit ball to produce the attractor cloud.
         // Stored decomposed (composition order S → Shear → R → T) so the JSON and UI stay
-        // hand-editable; collapse to a dm::affine3 via crownTransform(). Coordinates are in
-        // tree-local space (y-up, origin at the L-system trunk base) and NOT scaled by the
-        // L-system bbox — the user picks values that match their tree's height directly.
+        // collapse to a dm::affine3 via crownTransform().
         dm::float3 crownTranslation     = dm::float3(0.f, 8.f, 0.f);
         dm::float3 crownRotationDegrees = dm::float3(0.f, 0.f, 0.f);   // XYZ Euler
         dm::float3 crownScale           = dm::float3(5.f, 5.f, 5.f);
@@ -36,17 +32,14 @@ namespace Xylem::ProcGen {
 
     struct SCNode {
         dm::float3 pos;
-        dm::float3 dir;            // segment direction INTO this node (forward of its ring's plane)
-        dm::float3 right;          // local X axis for ring vertex layout — parallel-transported from parent
+        dm::float3 dir;
+        dm::float3 right;
         int32_t    parent;         // -1 for L-system tip seeds
-        bool       terminal;       // true after grow() if no child node is spawned from this one
+        bool       terminal;
         float      radius;
-        float      branchLength;   // arc-length distance from the originating L-system tip (uv.y continuity)
+        float      branchLength;
     };
 
-    // Runions/Lane-style space colonization. Consumes a list of L-system branch tips,
-    // grows a graph of nodes toward random attractor points placed in a crown volume
-    // around the L-system bbox, and exposes the resulting graph + terminal indices.
     class SpaceColonizer {
     public:
         void setParams(const SCParams& p) { m_p = p; }
@@ -59,10 +52,9 @@ namespace Xylem::ProcGen {
         // smoothly, and continues UV.y across the join. When empty, fallbacks are used.
         void grow(const std::vector<dm::float3>& tipPositions,
                   const std::vector<dm::float3>& tipDirs,
-                  const dm::box3&                lsystemBbox,
-                  const std::vector<dm::float3>& tipRights        = {},
-                  const std::vector<float>&      tipRadii         = {},
-                  const std::vector<float>&      tipBranchLengths = {});
+                  const std::vector<dm::float3>& tipRights,
+                  const std::vector<float>&      tipRadii,
+                  const std::vector<float>&      tipBranchLengths);
 
         const std::vector<SCNode>&   nodes()     const { return m_nodes; }
         const std::vector<uint32_t>& terminals() const { return m_terminals; }

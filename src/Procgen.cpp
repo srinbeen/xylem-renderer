@@ -8,8 +8,8 @@
 using namespace Xylem::ProcGen;
 
 namespace {
-constexpr dm::float3 kGrowthForwardAxis = unit_j;               // +Y local
-constexpr dm::float3 kYawAxis           = dm::float3(0.f, 0.f, -1.f);
+constexpr dm::float3 kGrowthForwardAxis = unit_j;
+constexpr dm::float3 kYawAxis           = -unit_k;
 constexpr dm::float3 kPitchAxis         = unit_i;
 constexpr dm::float3 kRollAxis          = kGrowthForwardAxis;
 }
@@ -147,7 +147,7 @@ void TreeGenerator::generateVertexAndIndexBuffers(const lstring_t& lSystemString
 
 uint32_t TreeGenerator::createRing(const TurtleState& state, Buffers& buffers) {
     const dm::float3 forward = dm::applyQuat(state.orientation, kGrowthForwardAxis);
-    const dm::float3 right   = dm::applyQuat(state.orientation, unit_i);
+    const dm::float3 right   = dm::applyQuat(state.orientation, kPitchAxis);
     const dm::float3 up      = dm::cross(forward, right);
 
     uint32_t nextRingIndex = static_cast<uint32_t>(buffers.positions.size());
@@ -193,15 +193,10 @@ uint32_t TreeGenerator::createRing(const TurtleState& state, Buffers& buffers) {
         }
     }
 
-    // Ring vertices are placed at state.pos + radius * (cos α * right + sin α * up),
-    // i.e. anywhere on a circle of radius `state.radius` in the plane perpendicular
-    // to `forward`. The conservative AABB enclosing that circle for *any* ring
-    // orientation expands state.pos by ±radius along all three world axes.
-    // (The previous normalize(±1)*r only expanded by r/√3 ≈ 0.577r, which clipped
-    //  the silhouette in every downstream consumer of the bbox.)
-    const dm::float3 r3(state.radius);
-    buffers.bbox.m_mins = dm::min(buffers.bbox.m_mins, state.pos - r3);
-    buffers.bbox.m_maxs = dm::max(buffers.bbox.m_maxs, state.pos + r3);
+    // conservatively updates bounding box the enclose potential that ring could lie on
+    // buffers.bbox |= box3(state.pos - state.radius, state.pos + state.radius)
+    buffers.bbox.m_mins = dm::min(buffers.bbox.m_mins, state.pos - state.radius);
+    buffers.bbox.m_maxs = dm::max(buffers.bbox.m_maxs, state.pos + state.radius);
 
     return nextRingIndex;
 }
@@ -220,19 +215,8 @@ void TreeGenerator::emitColonizationCylinders(const std::vector<SCNode>& nodes,
     for (size_t i = 0; i < nodes.size(); ++i) {
         const auto& n = nodes[i];
 
-        // Use the parallel-transported basis SpaceColonizer set on every node. This keeps
-        // ring vertex angles continuous along each chain (no roll discontinuity) AND aligns
-        // SC root rings with the L-system tip rings they sit on top of (no twist in the
-        // connecting quads). Re-orthogonalize/normalize defensively in case of float drift.
-        dm::float3 forward = n.dir;
-        const float fLen = dm::length(forward);
-        forward = (fLen > 1e-6f) ? forward / fLen : unit_j;
-
-        dm::float3 right = n.right - forward * dm::dot(n.right, forward);
-        const float rLen = dm::length(right);
-        right = (rLen > 1e-6f) ? right / rLen
-                               : ((std::abs(forward.y) < 0.9f) ? dm::normalize(dm::cross(forward, unit_j))
-                                                               : dm::normalize(dm::cross(forward, unit_i)));
+        const dm::float3 forward = n.dir;
+        const dm::float3 right = n.right;
         const dm::float3 up = dm::cross(forward, right);
 
         const uint32_t newRingFirstVert = static_cast<uint32_t>(buffers.positions.size());
@@ -251,9 +235,6 @@ void TreeGenerator::emitColonizationCylinders(const std::vector<SCNode>& nodes,
             buffers.normals.push_back(normal);
             buffers.tangents.push_back(tangent);
             buffers.bitangents.push_back(bitangent);
-            // uv invariant: x ∈ [0,1], y ≥ 0 (so the future leaf sentinel `uv.x < 0` is unambiguous).
-            // uv.y carries arc-length from the L-system tip so bark texture wraps continue
-            // smoothly across the L-system → branchlet join instead of restarting at 0.
             buffers.uvs.push_back(dm::float2(percentage, n.branchLength));
         }
         nodeBaseRingIdx[i] = newRingFirstVert;
@@ -273,9 +254,8 @@ void TreeGenerator::emitColonizationCylinders(const std::vector<SCNode>& nodes,
             }
         }
 
-        const dm::float3 r3(n.radius);
-        buffers.bbox.m_mins = dm::min(buffers.bbox.m_mins, n.pos - r3);
-        buffers.bbox.m_maxs = dm::max(buffers.bbox.m_maxs, n.pos + r3);
+        buffers.bbox.m_mins = dm::min(buffers.bbox.m_mins, n.pos - n.radius);
+        buffers.bbox.m_maxs = dm::max(buffers.bbox.m_maxs, n.pos + n.radius);
     }
 }
 

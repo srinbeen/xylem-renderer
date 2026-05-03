@@ -2,6 +2,7 @@
 #define XYLEM_SCENE_H
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <string>
 #include <vector>
@@ -31,6 +32,43 @@ struct TreeLODDef {
     std::vector<uint32_t>   indices;
     dm::box3                bbox;
     uint32_t                radialSegments = 0;
+};
+
+// Per-leaf placement in asset-local space. Promoted from a chunk of the trunk vertex
+// stream (8 verts / 4 prims per leaf) to a single instance entry that drives a shared
+// canonical cross-billboard mesh.
+struct LeafInstance {
+    dm::float3 localPos;   // SC terminal + per-LOD jitter
+    dm::float3 spine;      // unit; cross-billboard's height axis
+    dm::float3 right;      // unit; perpendicular to spine. q2 = cross(spine, right) in shader
+};
+static_assert(sizeof(LeafInstance) == 36, "LeafInstance is tightly packed; GPU buffer uses sizeof() as stride");
+
+// Bounding sphere for one AS-meshlet's worth of leaves (8 leaves). LOD-invariant: the
+// contributing terminal set is fixed at bake time; lower LODs only dispatch fewer meshlets.
+struct LeafMeshletBounds {
+    dm::float3 center;
+    float      radius;
+};
+static_assert(sizeof(LeafMeshletBounds) == 16, "LeafMeshletBounds packed to float4");
+
+// Per-asset leaf data. Storage is LOD-prefix ordered: countByLod[lod] is the prefix
+// length to dispatch at LOD `lod`. countByLod is monotone non-decreasing as lod
+// decreases (LOD0 is the full set; LOD3 is typically 0).
+struct LeafAssetDef {
+    std::vector<LeafInstance>      instances;
+    std::array<uint32_t, 4>        countByLod   = {0, 0, 0, 0};
+    dm::box3                       localBbox    = dm::box3::empty();
+    // P2-only — sized to ceil(countByLod[0] / 8). LOD-invariant.
+    std::vector<LeafMeshletBounds> meshletBounds;
+};
+
+// Canonical 8-vert / 12-index cross-billboard. Single global instance lives on
+// SceneRegistry; uploaded once per pipeline at Init.
+struct CanonicalLeafMesh {
+    std::array<dm::float3, 8> positions;
+    std::array<dm::float3, 8> normals;
+    std::array<uint32_t, 12>  indices;
 };
 
 // GPU-side LOD data — owned by render passes. SoA: one buffer per attribute stream.

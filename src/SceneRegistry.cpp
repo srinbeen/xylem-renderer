@@ -303,8 +303,11 @@ void SceneRegistry::_rebuildAsset(TreeAssetDef& asset) {
             ProcGen::SCParams scParams = asset.colonization;
             if (scParams.seed == 0) scParams.seed = asset.genParams.seed ^ 0xC010D11Bu;
             sc.setParams(scParams);
-            sc.grow(lod.branchTipPositions, lod.branchTipDirs, lod.bbox,
-                    lod.branchTipRights, lod.branchTipRadii, lod.branchTipBranchLengths);
+            sc.grow(lod.branchTipPositions, 
+                    lod.branchTipDirs, 
+                    lod.branchTipRights, 
+                    lod.branchTipRadii, 
+                    lod.branchTipBranchLengths);
         }
 
         if (!sc.nodes().empty()) {

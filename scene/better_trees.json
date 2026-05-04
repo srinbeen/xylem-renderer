@@ -408,10 +408,10 @@
         "PineTall",
         "PineSmall"
       ],
-      "boundsMaxX" : 140.0,
-      "boundsMaxY" : 140.0,
-      "boundsMinX" : -140.0,
-      "boundsMinY" : -140.0,
+      "boundsMaxX" : 280.0,
+      "boundsMaxY" : 280.0,
+      "boundsMinX" : -280.0,
+      "boundsMinY" : -280.0,
       "density" : 0.008,
       "name" : "Center_All"
     },
@@ -421,10 +421,10 @@
         "PineTall",
         "PineSmall"
       ],
-      "boundsMaxX" : 350.0,
-      "boundsMaxY" : 350.0,
-      "boundsMinX" : -140.0,
-      "boundsMinY" : 150.0,
+      "boundsMaxX" : 700.0,
+      "boundsMaxY" : 700.0,
+      "boundsMinX" : -280.0,
+      "boundsMinY" : 300.0,
       "density" : 0.006,
       "name" : "North_Pines"
     },
@@ -433,10 +433,10 @@
       [
         "OakSapling"
       ],
-      "boundsMaxX" : 140.0,
-      "boundsMaxY" : -150.0,
-      "boundsMinX" : -350.0,
-      "boundsMinY" : -350.0,
+      "boundsMaxX" : 280.0,
+      "boundsMaxY" : -300.0,
+      "boundsMinX" : -700.0,
+      "boundsMinY" : -700.0,
       "density" : 0.006,
       "name" : "South_OakSapling"
     },
@@ -445,10 +445,10 @@
       [
         "OakAged"
       ],
-      "boundsMaxX" : 350.0,
-      "boundsMaxY" : 140.0,
-      "boundsMinX" : 150.0,
-      "boundsMinY" : -350.0,
+      "boundsMaxX" : 700.0,
+      "boundsMaxY" : 280.0,
+      "boundsMinX" : 300.0,
+      "boundsMinY" : -700.0,
       "density" : 0.006,
       "name" : "East_OakAged"
     },
@@ -457,10 +457,10 @@
       [
         "OakMature"
       ],
-      "boundsMaxX" : -150.0,
-      "boundsMaxY" : 350.0,
-      "boundsMinX" : -350.0,
-      "boundsMinY" : -140.0,
+      "boundsMaxX" : -300.0,
+      "boundsMaxY" : 700.0,
+      "boundsMinX" : -700.0,
+      "boundsMinY" : -280.0,
       "density" : 0.006,
       "name" : "West_OakMature"
     }

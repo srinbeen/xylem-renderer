@@ -3,10 +3,11 @@
 
 #include <nvrhi/nvrhi.h>
 #include <donut/core/math/math.h>
+#include "macros.h"
 
 namespace Xylem::Render {
 
-static constexpr uint32_t c_NumCascades = 4;
+static constexpr uint32_t c_NumCascades = XYLEM_NUM_CASCADES;
 
 struct InstanceBufferEntry {
     dm::float4x4 model;

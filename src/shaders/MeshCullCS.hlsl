@@ -5,26 +5,21 @@
 #include "meshlet_types.hlsli"
 #include "ShaderRegisterMap.hlsli"
 
-// MeshShader pipeline cull — writes D3D12_DISPATCH_MESH_ARGUMENTS records
-// (with a slotIdx prefix) for main + shadow passes.
-
-static const uint NUM_CASCADES = 4;
-
 void UpdateDispatchMeshArgs(RWByteAddressBuffer argsBuffer, uint slot, uint totalGroups);
 
 cbuffer CB : register(XY_REG_B_MESH_CULL_CB_FRAME)
 {
     float4x4 viewProj;
     float4x4 viewMatrix;
-    float4x4 lightViewProj[NUM_CASCADES];
+    float4x4 lightViewProj[XYLEM_NUM_CASCADES];
     float3   sunLightDir;
     float    _pad0;
     float4   cascadeSplits;
 
     frustum  viewFrustum;
     float4x4 worldToLight;
-    float4   shadowCasterMinLS[NUM_CASCADES];
-    float4   shadowCasterMaxLS[NUM_CASCADES];
+    float4   shadowCasterMinLS[XYLEM_NUM_CASCADES];
+    float4   shadowCasterMaxLS[XYLEM_NUM_CASCADES];
 
     float3   cameraPos;
     uint     numRegions;
@@ -162,14 +157,14 @@ void MeshCullShadow(uint3 dtid : SV_DispatchThreadID)
     bool anyCascade = false;
 
     [unroll]
-    for (uint c = 0; c < NUM_CASCADES; c++)
+    for (uint c = 0; c < XYLEM_NUM_CASCADES; c++)
     {
         float3 cMin = shadowCasterMinLS[c].xyz;
         float3 cMax = shadowCasterMaxLS[c].xyz;
         if (any(cMin > cMax)) continue;
         if (any(bboxMinLS > cMax) || any(bboxMaxLS < cMin)) continue;
 
-        uint slot = ai * NUM_CASCADES + c;
+        uint slot = ai * XYLEM_NUM_CASCADES + c;
         uint writeIdx;
         InterlockedAdd(shadowSlotCountBuf[slot], 1, writeIdx);
         shadowVisBuf[shadowSlotOffsets[slot] + writeIdx] = idx;

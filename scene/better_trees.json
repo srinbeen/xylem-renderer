@@ -76,7 +76,7 @@
       "branchAngle" : 28.0,
       "colonization" : 
       {
-        "attractorCount" : 128,
+        "attractorCount" : 350,
         "branchletTaper" : 0.899,
         "crown" : 
         {
@@ -88,26 +88,26 @@
           ],
           "scale" : 
           [
-            5.0,
-            5.0,
-            5.0
+            6.0,
+            6.0,
+            6.0
           ],
           "shear" : 
           [
-            0.36,
+            -0.35,
             0.0,
-            0.0
+            -0.37
           ],
           "translation" : 
           [
-            0.0,
-            19.5,
+            -1.9,
+            21.9,
             0.0
           ]
         },
         "influenceDistance" : 2.519,
-        "killDistance" : 0.1,
-        "maxIterations" : 131,
+        "killDistance" : 0.8,
+        "maxIterations" : 64,
         "seed" : 3,
         "segmentLength" : 0.359
       },
@@ -128,7 +128,7 @@
           0.0
         ],
         "perTip" : 2,
-        "size" : 0.42
+        "size" : 1.0
       },
       "lsystem" : "Oak",
       "name" : "OakAged",
@@ -196,7 +196,7 @@
           0.0
         ],
         "perTip" : 2,
-        "size" : 0.471
+        "size" : 0.75
       },
       "lsystem" : "Oak",
       "name" : "OakSapling",
@@ -394,7 +394,7 @@
         "F" : "FF",
         "X" : "F[+>X][-<X][&>X][^<X]FX"
       },
-      "seed" : 676767
+      "seed" : 456
     }
   ],
   "regions" : 

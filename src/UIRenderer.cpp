@@ -96,17 +96,6 @@ void UIRenderer::buildUI() {
                 ImGui::Text("splits: %.3f  %.3f  %.3f  %.3f",
                     m_ui.sdsmCascadeSplits[0], m_ui.sdsmCascadeSplits[1],
                     m_ui.sdsmCascadeSplits[2], m_ui.sdsmCascadeSplits[3]);
-                ImGui::Separator();
-                ImGui::Text("Cascade 0 LS bbox:");
-                ImGui::Text("  min: %+.4f %+.4f %+.4f",
-                    m_ui.sdsmCascade0MinLS[0], m_ui.sdsmCascade0MinLS[1], m_ui.sdsmCascade0MinLS[2]);
-                ImGui::Text("  max: %+.4f %+.4f %+.4f",
-                    m_ui.sdsmCascade0MaxLS[0], m_ui.sdsmCascade0MaxLS[1], m_ui.sdsmCascade0MaxLS[2]);
-                const float extX = m_ui.sdsmCascade0MaxLS[0] - m_ui.sdsmCascade0MinLS[0];
-                const float extY = m_ui.sdsmCascade0MaxLS[1] - m_ui.sdsmCascade0MinLS[1];
-                const float extZ = m_ui.sdsmCascade0MaxLS[2] - m_ui.sdsmCascade0MinLS[2];
-                ImGui::Text("  ext: %.4f %.4f %.4f  (texelSize=%.6f)",
-                    extX, extY, extZ, extX / 2048.f);
             }
             ImGui::TreePop();
         }
@@ -743,7 +732,7 @@ void UIRenderer::_buildDebugShadowTopDownSection() {
         { 1.00f, 0.90f, 0.20f },  // yellow
         { 0.30f, 1.00f, 0.40f },  // green
         { 0.30f, 0.70f, 1.00f },  // cyan
-        { 0.80f, 0.40f, 1.00f },  // purple
+        // { 0.80f, 0.40f, 1.00f },  // purple
     };
     auto packColor = [](dm::float3 rgb, float a) -> ImU32 {
         auto clamp01 = [](float v) { return v < 0.f ? 0.f : (v > 1.f ? 1.f : v); };
@@ -805,13 +794,7 @@ void UIRenderer::_buildDebugShadowTopDownSection() {
         snprintf(label, sizeof(label), "Cascade %u", ci);
         ctx.dl->AddText(ImVec2(legendPos.x + 14.f, legendPos.y + y), IM_COL32(220, 220, 220, 255), label);
     }
-    float yExcl = float(Render::c_NumCascades) * 14.f;
-    ctx.dl->AddRectFilled(
-        ImVec2(legendPos.x + 5.f - r * legendScale, legendPos.y + yExcl + 6.f - r * legendScale),
-        ImVec2(legendPos.x + 5.f + r * legendScale, legendPos.y + yExcl + 6.f + r * legendScale),
-        colExcluded);
-    ctx.dl->AddText(ImVec2(legendPos.x + 14.f, legendPos.y + yExcl), IM_COL32(220, 220, 220, 255), "Not shadowed");
-    float camY = yExcl + 14.f + 6.f;
+    float camY = float(Render::c_NumCascades) * 14.f + 6.0f;
     ctx.dl->AddCircleFilled(ImVec2(legendPos.x + 5.f, legendPos.y + camY + 6.f), 4.f, IM_COL32(0, 255, 255, 255));
     ctx.dl->AddText(ImVec2(legendPos.x + 14.f, legendPos.y + camY), IM_COL32(220, 220, 220, 255), "Camera");
 

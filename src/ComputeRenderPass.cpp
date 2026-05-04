@@ -1434,13 +1434,6 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
                 m_UI.sdsmCascadeSplits[2] = out->cascadeSplits.z;
                 m_UI.sdsmCascadeSplits[3] = out->cascadeSplits.w;
 
-                m_UI.sdsmCascade0MinLS[0] = out->shadowCasterMinLS[0].x;
-                m_UI.sdsmCascade0MinLS[1] = out->shadowCasterMinLS[0].y;
-                m_UI.sdsmCascade0MinLS[2] = out->shadowCasterMinLS[0].z;
-                m_UI.sdsmCascade0MaxLS[0] = out->shadowCasterMaxLS[0].x;
-                m_UI.sdsmCascade0MaxLS[1] = out->shadowCasterMaxLS[0].y;
-                m_UI.sdsmCascade0MaxLS[2] = out->shadowCasterMaxLS[0].z;
-
                 GetDevice()->unmapBuffer(m_SDSMReadbackBuffers[readSlot]);
             }
             m_SDSMReadbackPending[readSlot] = false;
@@ -2272,7 +2265,6 @@ bool ComputeRenderPass::_InitSDSMPass() {
     m_StageResources.sdsm.buildPipeline = device->createComputePipeline(pso);
     if (!m_StageResources.sdsm.buildPipeline) return false;
 
-    // Input CB (non-volatile, state-tracked so writeBuffer works inside Render)
     m_StageResources.sdsm.inputCB = device->createBuffer(
         nvrhi::BufferDesc()
             .setByteSize(shader_cb::kSDSMCascadeBuildInputSize)
@@ -2282,7 +2274,6 @@ bool ComputeRenderPass::_InitSDSMPass() {
     );
     if (!m_StageResources.sdsm.inputCB) return false;
 
-    // Cascade output - structured UAV, single element holding all per-cascade data
     m_StageResources.sdsm.cascadeDataBuffer = device->createBuffer(
         nvrhi::BufferDesc()
             .setByteSize(sizeof(shader_cb::SDSMCascadeBuildOutput))

@@ -4,13 +4,11 @@
 #include "meshlet_types.hlsli"
 #include "ShaderRegisterMap.hlsli"
 
-static const uint NUM_CASCADES = 4;
-
 cbuffer CB : register(XY_REG_B_MESH_DRAW_CB_FRAME)
 {
     float4x4 viewProj;
     float4x4 viewMatrix;
-    float4x4 lightViewProj[NUM_CASCADES];
+    float4x4 lightViewProj[XYLEM_NUM_CASCADES];
     float3   sunLightDir;
     float    _pad0;
     float4   cascadeSplits;
@@ -19,8 +17,8 @@ cbuffer CB : register(XY_REG_B_MESH_DRAW_CB_FRAME)
     // address LOD-0 ranges from the shared asset*LOD meshlet table.
     float4   _unusedViewFrustum[6];
     float4x4 _unusedWorldToLight;
-    float4   _unusedShadowCasterMinLS[NUM_CASCADES];
-    float4   _unusedShadowCasterMaxLS[NUM_CASCADES];
+    float4   _unusedShadowCasterMinLS[XYLEM_NUM_CASCADES];
+    float4   _unusedShadowCasterMaxLS[XYLEM_NUM_CASCADES];
     float3   _unusedCameraPos;
     uint     _unusedNumRegions;
     uint     _unusedTotalCapacity;
@@ -319,7 +317,7 @@ void main_ms(
 
 // =============================================================================
 // Shadow pass — AS/MS, no PS (depth-only).
-// Slot encoding: shadowSlot = assetIdx * NUM_CASCADES + cascade
+// Slot encoding: shadowSlot = assetIdx * XYLEM_NUM_CASCADES + cascade
 // Bindings reuse t9..t13 — C++ binds shadow buffers at those slots.
 // =============================================================================
 
@@ -330,10 +328,10 @@ void shadow_as(uint3 gid  : SV_GroupID,
     if (gtid == 0) s_survivors = 0;
     GroupMemoryBarrierWithGroupSync();
 
-    uint slotIdx         = g_SlotIdx;              // shadow slot = ai*NUM_CASCADES + c
+    uint slotIdx         = g_SlotIdx;              // shadow slot = ai*XYLEM_NUM_CASCADES + c
     // Shadow casts from the lowest LOD (matches compute pipeline). Casting from
     // LOD 0 self-shadows the inscribed lower-LOD surface in the color pass.
-    uint assetLodSlot    = (slotIdx / NUM_CASCADES) * g_NumLods + (g_NumLods - 1);
+    uint assetLodSlot    = (slotIdx / XYLEM_NUM_CASCADES) * g_NumLods + (g_NumLods - 1);
     uint ASInvocsPerInst = max(1u, g_ASInvocsPerSlot[slotIdx]);
     uint visibleCount    = g_SlotCounts[slotIdx];
 
@@ -381,8 +379,8 @@ void shadow_ms(
 {
     uint meshletLocalIdx = i_payload.meshletIndices[gid.x];
     uint shadowSlot      = i_payload.assetLod;
-    uint assetLodSlot    = (shadowSlot / NUM_CASCADES) * g_NumLods + (g_NumLods - 1);
-    uint cascade         = shadowSlot % NUM_CASCADES;
+    uint assetLodSlot    = (shadowSlot / XYLEM_NUM_CASCADES) * g_NumLods + (g_NumLods - 1);
+    uint cascade         = shadowSlot % XYLEM_NUM_CASCADES;
 
     AssetLodRange      al   = g_AssetLodRanges[assetLodSlot];
     MeshletDesc        m    = g_Meshlets[al.meshletOffset + meshletLocalIdx];

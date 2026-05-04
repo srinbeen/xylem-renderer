@@ -4,23 +4,19 @@
 #include "types.hlsli"
 #include "ShaderRegisterMap.hlsli"
 
-static const uint NUM_CASCADES = 4;
-static const uint IMPOSTOR_AZIMUTH_VIEWS = XYLEM_IMPOSTOR_AZIMUTH_VIEWS;
-static const uint IMPOSTOR_ELEVATION_VIEWS = XYLEM_IMPOSTOR_ELEVATION_VIEWS;
-
 cbuffer CB : register(XY_REG_B_COMPUTE_IMPOSTOR_CB_FRAME)
 {
     float4x4 viewProj;
     float4x4 viewMatrix;
-    float4x4 lightViewProj[NUM_CASCADES];
+    float4x4 lightViewProj[XYLEM_NUM_CASCADES];
     float3   sunLightDir;
     float    _pad0;
     float4   cascadeSplits;
 
     frustum  viewFrustum;
     float4x4 worldToLight;
-    float4   shadowCasterMinLS[NUM_CASCADES];
-    float4   shadowCasterMaxLS[NUM_CASCADES];
+    float4   shadowCasterMinLS[XYLEM_NUM_CASCADES];
+    float4   shadowCasterMaxLS[XYLEM_NUM_CASCADES];
 
     float3   cameraPos;
     uint     numRegions;
@@ -115,11 +111,11 @@ float2 UnitVectorToHemiOctahedron(float3 dirToCamera)
 
 float2 ImpostorViewGridUV(uint viewIndex)
 {
-    uint x = viewIndex % IMPOSTOR_AZIMUTH_VIEWS;
-    uint y = viewIndex / IMPOSTOR_AZIMUTH_VIEWS;
+    uint x = viewIndex % XYLEM_IMPOSTOR_AZIMUTH_VIEWS;
+    uint y = viewIndex / XYLEM_IMPOSTOR_AZIMUTH_VIEWS;
     return float2(
-        (float)x / (float)max(1u, IMPOSTOR_AZIMUTH_VIEWS - 1u),
-        (float)y / (float)max(1u, IMPOSTOR_ELEVATION_VIEWS - 1u));
+        (float)x / (float)max(1u, XYLEM_IMPOSTOR_AZIMUTH_VIEWS - 1u),
+        (float)y / (float)max(1u, XYLEM_IMPOSTOR_ELEVATION_VIEWS - 1u));
 }
 
 float3 ImpostorViewDirection(uint viewIndex)
@@ -147,20 +143,20 @@ void ImpostorViewBasis(uint viewIndex, out float3 dirToCamera, out float3 right,
 
 uint ImpostorViewIndex(uint2 gridCoord)
 {
-    uint x = min(gridCoord.x, IMPOSTOR_AZIMUTH_VIEWS - 1u);
-    uint y = min(gridCoord.y, IMPOSTOR_ELEVATION_VIEWS - 1u);
-    return y * IMPOSTOR_AZIMUTH_VIEWS + x;
+    uint x = min(gridCoord.x, XYLEM_IMPOSTOR_AZIMUTH_VIEWS - 1u);
+    uint y = min(gridCoord.y, XYLEM_IMPOSTOR_ELEVATION_VIEWS - 1u);
+    return y * XYLEM_IMPOSTOR_AZIMUTH_VIEWS + x;
 }
 
 void SelectImpostorViews(float3 dirToCamera, out uint3 viewIndices, out float3 weights)
 {
     float2 gridMax = float2(
-        (float)(IMPOSTOR_AZIMUTH_VIEWS - 1u),
-        (float)(IMPOSTOR_ELEVATION_VIEWS - 1u));
+        (float)(XYLEM_IMPOSTOR_AZIMUTH_VIEWS - 1u),
+        (float)(XYLEM_IMPOSTOR_ELEVATION_VIEWS - 1u));
     float2 grid = UnitVectorToHemiOctahedron(dirToCamera) * gridMax;
 
-    uint maxBaseX = (IMPOSTOR_AZIMUTH_VIEWS > 1u) ? (IMPOSTOR_AZIMUTH_VIEWS - 2u) : 0u;
-    uint maxBaseY = (IMPOSTOR_ELEVATION_VIEWS > 1u) ? (IMPOSTOR_ELEVATION_VIEWS - 2u) : 0u;
+    uint maxBaseX = (XYLEM_IMPOSTOR_AZIMUTH_VIEWS > 1u) ? (XYLEM_IMPOSTOR_AZIMUTH_VIEWS - 2u) : 0u;
+    uint maxBaseY = (XYLEM_IMPOSTOR_ELEVATION_VIEWS > 1u) ? (XYLEM_IMPOSTOR_ELEVATION_VIEWS - 2u) : 0u;
     // bottom-left atlas index within a quad
     // clamped to one ring of outermost atlas to allow for blending
     float2 baseF = min(floor(grid), float2((float)maxBaseX, (float)maxBaseY));
@@ -168,8 +164,8 @@ void SelectImpostorViews(float3 dirToCamera, out uint3 viewIndices, out float3 w
 
     // bottom/top-left/right
     uint2 bl = uint2((uint)baseF.x, (uint)baseF.y);
-    uint2 br = uint2(min(bl.x + 1u, IMPOSTOR_AZIMUTH_VIEWS - 1u), bl.y);
-    uint2 tl = uint2(bl.x, min(bl.y + 1u, IMPOSTOR_ELEVATION_VIEWS - 1u));
+    uint2 br = uint2(min(bl.x + 1u, XYLEM_IMPOSTOR_AZIMUTH_VIEWS - 1u), bl.y);
+    uint2 tl = uint2(bl.x, min(bl.y + 1u, XYLEM_IMPOSTOR_ELEVATION_VIEWS - 1u));
     uint2 tr = uint2(br.x, tl.y);
 
     // within the right triangle (defined cw)
@@ -343,7 +339,7 @@ void impostor_ps(
     out float4 o_color : SV_Target0,
     out float o_depth : SV_Depth)
 {
-    uint viewCount = IMPOSTOR_AZIMUTH_VIEWS * IMPOSTOR_ELEVATION_VIEWS;
+    uint viewCount = XYLEM_IMPOSTOR_AZIMUTH_VIEWS * XYLEM_IMPOSTOR_ELEVATION_VIEWS;
     uint slice0 = rc.assetIndex * viewCount + i.viewIndex0;
     uint slice1 = rc.assetIndex * viewCount + i.viewIndex1;
     uint slice2 = rc.assetIndex * viewCount + i.viewIndex2;

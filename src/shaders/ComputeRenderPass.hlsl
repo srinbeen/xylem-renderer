@@ -2,14 +2,13 @@
 
 #include "types.hlsli"
 #include "ShaderRegisterMap.hlsli"
-
-static const uint NUM_CASCADES = 4;
+#include "../include/macros.h"
 
 cbuffer CB : register(XY_REG_B_COMPUTE_SCENE_CB_FRAME)
 {
     float4x4 viewProj;
     float4x4 viewMatrix;
-    float4x4 lightViewProj[NUM_CASCADES];
+    float4x4 lightViewProj[XYLEM_NUM_CASCADES];
     float3   sunLightDir;
     float    _pad0;
     float4   cascadeSplits;

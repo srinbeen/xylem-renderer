@@ -4,14 +4,12 @@
 #include "types.hlsli"
 #include "ShaderRegisterMap.hlsli"
 
-static const uint NUM_CASCADES = 4;
-
 cbuffer CB : register(XY_REG_B_COMPUTE_CULL_CB_FRAME)
 {
     // Prefix — matches Render::ConstantBufferEntry / CullConstantBufferEntry
     float4x4 viewProj;
     float4x4 viewMatrix;
-    float4x4 lightViewProj[NUM_CASCADES];
+    float4x4 lightViewProj[XYLEM_NUM_CASCADES];
     float3   sunLightDir;
     float    _pad0;
     float4   cascadeSplits;
@@ -19,8 +17,8 @@ cbuffer CB : register(XY_REG_B_COMPUTE_CULL_CB_FRAME)
     // Cull fields
     frustum  viewFrustum;
     float4x4 worldToLight;
-    float4   shadowCasterMinLS[NUM_CASCADES];
-    float4   shadowCasterMaxLS[NUM_CASCADES];
+    float4   shadowCasterMinLS[XYLEM_NUM_CASCADES];
+    float4   shadowCasterMaxLS[XYLEM_NUM_CASCADES];
 
     float3   cameraPos;
     uint     numRegions;
@@ -169,7 +167,7 @@ void CullShadow(uint3 dtid : SV_DispatchThreadID)
     bool anyCascadeVisible = false;
 
     [unroll]
-    for (uint c = 0; c < NUM_CASCADES; c++)
+    for (uint c = 0; c < XYLEM_NUM_CASCADES; c++)
     {
         float3 cMin = shadowCasterMinLS[c].xyz;
         float3 cMax = shadowCasterMaxLS[c].xyz;
@@ -180,7 +178,7 @@ void CullShadow(uint3 dtid : SV_DispatchThreadID)
         // AABB-vs-AABB intersection test in light space
         if (any(bboxMinLS > cMax) || any(bboxMaxLS < cMin)) continue;
 
-        uint slot = ai * NUM_CASCADES + c;
+        uint slot = ai * XYLEM_NUM_CASCADES + c;
 
         uint writeIdx;
         InterlockedAdd(shadowSlotCountBuf[slot], 1, writeIdx);

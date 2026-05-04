@@ -53,8 +53,6 @@ struct UIData {
     float    sdsmTightNear        = 0.f;
     float    sdsmTightFar         = 0.f;
     float    sdsmCascadeSplits[4] = { 0.f, 0.f, 0.f, 0.f };
-    float    sdsmCascade0MinLS[3] = { 0.f, 0.f, 0.f };
-    float    sdsmCascade0MaxLS[3] = { 0.f, 0.f, 0.f };
 
     void*    shadowMapTexture = nullptr;  // nvrhi::ITexture*, set by active render pass
     // Single per-pass scratch texture into which the active pass copies the

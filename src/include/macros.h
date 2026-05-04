@@ -6,6 +6,7 @@ namespace Xylem {
     #define XYLEM_IMPOSTOR_AZIMUTH_VIEWS           8
     #define XYLEM_IMPOSTOR_ELEVATION_VIEWS         8
     #define XYLEM_IMPOSTOR_VIEW_COUNT              (XYLEM_IMPOSTOR_AZIMUTH_VIEWS * XYLEM_IMPOSTOR_ELEVATION_VIEWS)
+    #define XYLEM_NUM_CASCADES                     3
 
 }
 

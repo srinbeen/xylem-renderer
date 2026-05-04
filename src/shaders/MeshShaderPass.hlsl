@@ -505,16 +505,15 @@ void main_ps(in V2P i_v, out float4 o_color : SV_Target0)
     float3 lightDir   = -normalize(sunLightDir);
     float  notInShadow = SampleShadowCascade(i_v.worldPos, cascadeIdx);
 
-    // Leaves: uv.x < 0 sentinel set by the CPU emitter. Color is packed into the TANGENT
-    // slot (the MS skips the rotation for leaf verts so it survives intact).
+    // Leaves: uv.x < 0 sentinel set by the CPU emitter. They use the same
+    // single-sided diffuse response as trunk geometry.
     if (i_v.uv.x < 0.0)
     {
         float3 leafColor = i_v.tangent;
         float3 N = normalize(i_v.normal);
-        float diffuse = abs(dot(N, lightDir));
+        float diffuse = max(dot(N, lightDir), 0.0);
 
-        float ambient  = 0.20;
-        float lighting = ambient + (1.0 - ambient) * diffuse * notInShadow;
+        float lighting = XYLEM_TREE_AMBIENT + (1.0 - XYLEM_TREE_AMBIENT) * diffuse * notInShadow;
         o_color = float4(lighting * leafColor, 1.0);
         return;
     }
@@ -530,8 +529,7 @@ void main_ps(in V2P i_v, out float4 o_color : SV_Target0)
 
     float diffuse = max(dot(worldNormal, lightDir), 0.0);
 
-    float ambient  = 0.15;
-    float lighting = ambient + (1.0 - ambient) * diffuse * notInShadow;
+    float lighting = XYLEM_TREE_AMBIENT + (1.0 - XYLEM_TREE_AMBIENT) * diffuse * notInShadow;
     float3 albedo  = t_Diffuse.Sample(s_Sampler, i_v.uv).rgb;
     o_color = float4(lighting * albedo, 1.0);
 }

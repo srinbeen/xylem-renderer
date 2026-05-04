@@ -136,17 +136,15 @@ void main_ps(
 	float3 lightDir = -normalize(sunLightDir);
 	float notInShadow = SampleShadowCascade(i_worldPos, cascadeIdx);
 
-	// Leaves are tagged with uv = (-1, -1) by the CPU emitter. They take a simple
-	// double-sided lambert path (abs(N·L) — both sides lit since cull=none) and read
-	// their color from the TANGENT slot, where the per-asset leaf color was packed.
+	// Leaves are tagged with uv = (-1, -1) by the CPU emitter. They use the same
+	// single-sided diffuse response as trunk geometry.
 	if (i_uv.x < 0.0)
 	{
 		float3 leafColor = i_tangent;   // tangent stream carries leaf color for leaf verts
 		float3 N = normalize(i_normal);
-		float diffuse = abs(dot(N, lightDir));
+		float diffuse = max(dot(N, lightDir), 0.0);
 
-		float ambient  = 0.20;
-		float lighting = ambient + (1.0 - ambient) * diffuse * notInShadow;
+		float lighting = XYLEM_TREE_AMBIENT + (1.0 - XYLEM_TREE_AMBIENT) * diffuse * notInShadow;
 		o_color = float4(lighting * leafColor, 1);
 		return;
 	}
@@ -162,7 +160,6 @@ void main_ps(
 
 	float diffuse = max(dot(worldNormal, lightDir), 0);
 
-	float ambient  = 0.15;
-	float lighting = ambient + (1.0 - ambient) * diffuse * notInShadow;
+	float lighting = XYLEM_TREE_AMBIENT + (1.0 - XYLEM_TREE_AMBIENT) * diffuse * notInShadow;
     o_color = float4(lighting * t_Diffuse.Sample(s_Sampler, i_uv).rgb, 1);
 }

@@ -1448,40 +1448,8 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     _RenderImpostorPass(framebuffer);
     m_CommandList->endMarker();
 
-    // Copy selected asset's impostor atlas slices into ImGui debug sheets.
-    if (m_UI.showImpostorAtlas
-        && m_Shared->impostorAlbedo()
-        && m_Shared->impostorNormal()
-        && m_Shared->impostorDepth()
-        && m_Shared->impostorDebugAlbedoAtlas()
-        && m_Shared->impostorDebugNormalAtlas()
-        && m_Shared->impostorDebugDepthAtlas())
-    {
-        const uint32_t numAssets = static_cast<uint32_t>(m_Registry.getAssets().size());
-        const uint32_t assetIdx = std::min(m_UI.impostorSelectedAsset,
-            numAssets == 0 ? 0u : numAssets - 1);
-
-        constexpr uint32_t bakeRes = SharedGPUAssets::k_ImpostorBakeResolution;
-        for (uint32_t view = 0; view < k_ImpostorViewCount; view++) {
-            const uint32_t tileX = view % k_ImpostorAzimuthViews;
-            const uint32_t tileY = view / k_ImpostorAzimuthViews;
-            const uint32_t tileSlice = assetIdx * k_ImpostorViewCount + view;
-            nvrhi::TextureSlice dst = nvrhi::TextureSlice()
-                .setOrigin(tileX * bakeRes, tileY * bakeRes, 0)
-                .setWidth(bakeRes)
-                .setHeight(bakeRes);
-
-            m_CommandList->copyTexture(
-                m_Shared->impostorDebugAlbedoAtlas(), dst,
-                m_Shared->impostorAlbedo(), nvrhi::TextureSlice().setArraySlice(tileSlice));
-            m_CommandList->copyTexture(
-                m_Shared->impostorDebugNormalAtlas(), dst,
-                m_Shared->impostorNormal(), nvrhi::TextureSlice().setArraySlice(tileSlice));
-            m_CommandList->copyTexture(
-                m_Shared->impostorDebugDepthAtlas(), dst,
-                m_Shared->impostorDepth(), nvrhi::TextureSlice().setArraySlice(tileSlice));
-        }
-    }
+    if (m_UI.showImpostorAtlas && m_Shared)
+        m_Shared->CopySelectedImpostorDebugAtlases(m_CommandList, m_UI.impostorSelectedAsset);
 
     m_CommandList->close();
     GetDevice()->executeCommandList(m_CommandList);

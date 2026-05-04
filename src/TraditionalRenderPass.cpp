@@ -21,6 +21,7 @@ using namespace donut::math;
 using namespace Xylem;
 namespace shader_cb = Xylem::shader::cb;
 namespace traditional_reg = Xylem::shader::reg::Traditional;
+namespace compute_reg = Xylem::shader::reg::Compute;
 
 // ===========================================================================
 // GPU asset upload helpers
@@ -111,11 +112,85 @@ void TraditionalRenderPass::_RebuildInstanceBuffers() {
     m_VisibleInstanceBuffer.resize(totalInstances);
     for (auto& csd : m_CascadeShadowData)
         csd.instanceBuffer.resize(totalInstances);
+
+    _BuildImpostorSlotLayout();
+    _RebuildImpostorBuffers();
+}
+
+void TraditionalRenderPass::_BuildImpostorSlotLayout() {
+    const uint32_t numAssets = static_cast<uint32_t>(m_GPUAssets.size());
+    std::vector<uint32_t> livePerAsset(std::max(1u, numAssets), 0);
+
+    const auto& regions = m_Registry.getRegions();
+    for (const auto& region : regions) {
+        for (const auto& inst : region.instances) {
+            auto it = m_AssetIdToGPUIndex.find(inst.assetId);
+            if (it == m_AssetIdToGPUIndex.end()) continue;
+
+            uint32_t gpuIdx = static_cast<uint32_t>(it->second);
+            if (gpuIdx < numAssets)
+                livePerAsset[gpuIdx]++;
+        }
+    }
+
+    m_ImpostorSlotOffsets.assign(std::max(1u, numAssets), 0);
+    m_ImpostorMaxSlotCounts.assign(std::max(1u, numAssets), 0);
+    m_ImpostorVisBufferSize = 0;
+
+    for (uint32_t ai = 0; ai < numAssets; ai++) {
+        m_ImpostorSlotOffsets[ai]   = m_ImpostorVisBufferSize;
+        m_ImpostorMaxSlotCounts[ai] = livePerAsset[ai];
+        m_ImpostorVisBufferSize    += livePerAsset[ai];
+    }
+    m_ImpostorVisBufferSize = std::max(1u, m_ImpostorVisBufferSize);
+}
+
+void TraditionalRenderPass::_RebuildImpostorBuffers() {
+    auto* device = GetDevice();
+    const uint32_t numAssets = std::max(1u, static_cast<uint32_t>(m_GPUAssets.size()));
+    const uint32_t visCapacity = std::max(1u, m_ImpostorVisBufferSize);
+
+    m_StageResources.impostorStage.instanceBuffer = device->createBuffer(
+        nvrhi::BufferDesc()
+            .setByteSize(visCapacity * sizeof(Render::InstanceBufferEntry))
+            .setStructStride(sizeof(Render::InstanceBufferEntry))
+            .setDebugName("TraditionalImpostorInstanceBuffer")
+            .enableAutomaticStateTracking(nvrhi::ResourceStates::CopyDest));
+
+    m_StageResources.impostorStage.cullDataBuffer = device->createBuffer(
+        nvrhi::BufferDesc()
+            .setByteSize(visCapacity * sizeof(Render::CullInstanceData))
+            .setStructStride(sizeof(Render::CullInstanceData))
+            .setDebugName("TraditionalImpostorCullDataBuffer")
+            .enableAutomaticStateTracking(nvrhi::ResourceStates::CopyDest));
+
+    m_StageResources.impostorStage.visBuffer = device->createBuffer(
+        nvrhi::BufferDesc()
+            .setByteSize(visCapacity * sizeof(uint32_t))
+            .setStructStride(sizeof(uint32_t))
+            .setDebugName("TraditionalImpostorVisBuffer")
+            .enableAutomaticStateTracking(nvrhi::ResourceStates::CopyDest));
+
+    m_StageResources.impostorStage.slotOffsetBuffer = device->createBuffer(
+        nvrhi::BufferDesc()
+            .setByteSize(numAssets * sizeof(uint32_t))
+            .setStructStride(sizeof(uint32_t))
+            .setDebugName("TraditionalImpostorSlotOffsetBuffer")
+            .enableAutomaticStateTracking(nvrhi::ResourceStates::CopyDest));
+
+    m_ImpostorInstanceStaging.assign(visCapacity, {});
+    m_ImpostorCullDataStaging.assign(visCapacity, {});
+    m_ImpostorVisStaging.resize(visCapacity);
+    for (uint32_t i = 0; i < visCapacity; i++)
+        m_ImpostorVisStaging[i] = i;
+
+    m_ImpostorCounts.assign(numAssets, 0);
+    m_ImpostorWriteOffsets.assign(numAssets, 0);
+    m_VisibleImpostorReferences.clear();
+    m_VisibleImpostorReferences.reserve(m_Registry.totalInstanceCount());
 }
 
 void TraditionalRenderPass::_RebuildBindingSets() {
-    uint32_t totalInstances = std::max<uint32_t>(1, m_Registry.totalInstanceCount());
-
     const auto& barkTextures = m_Shared->barkTextures();
     m_StageResources.sceneTreeStage.bindingSets.resize(barkTextures.size());
 
@@ -147,6 +222,51 @@ void TraditionalRenderPass::_RebuildBindingSets() {
         
         m_StageResources.sceneTreeStage.bindingSets[i] = GetDevice()->createBindingSet(bsd, m_StageResources.sceneTreeStage.bindingLayout);
     }
+
+    m_StageResources.impostorStage.bindingSets.clear();
+    if (!m_StageResources.impostorStage.bindingLayout
+        || !m_StageResources.impostorStage.instanceBuffer
+        || !m_StageResources.impostorStage.cullDataBuffer
+        || !m_StageResources.impostorStage.visBuffer
+        || !m_StageResources.impostorStage.slotOffsetBuffer
+        || !m_StageResources.shadowStage.depthTexture
+        || !m_Shared->impostorAlbedo()
+        || !m_Shared->impostorNormal()
+        || !m_Shared->impostorDepth()
+        || !m_Shared->assetDimsBuffer()
+        || barkTextures.empty())
+    {
+        return;
+    }
+
+    m_StageResources.impostorStage.bindingSets.resize(barkTextures.size());
+    for (size_t i = 0; i < barkTextures.size(); i++) {
+        nvrhi::BindingSetDesc bsd;
+        bsd.bindings = {
+            nvrhi::BindingSetItem::ConstantBuffer(
+                compute_reg::Impostor::kCB_Frame,
+                m_StageResources.frameShared.constantBuffer,
+                nvrhi::BufferRange(0, shader_cb::kCullFrameSize)),
+            nvrhi::BindingSetItem::PushConstants(compute_reg::Impostor::kPushC_AssetIndex, sizeof(uint32_t)),
+
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::Impostor::kSRV_Vis, m_StageResources.impostorStage.visBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::Impostor::kSRV_Instances, m_StageResources.impostorStage.instanceBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::Impostor::kSRV_SlotOffsets, m_StageResources.impostorStage.slotOffsetBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::Impostor::kSRV_CullData, m_StageResources.impostorStage.cullDataBuffer),
+
+            nvrhi::BindingSetItem::Texture_SRV(compute_reg::Impostor::kTex_Albedo, m_Shared->impostorAlbedo()),
+            nvrhi::BindingSetItem::Texture_SRV(compute_reg::Impostor::kTex_Normal, m_Shared->impostorNormal()),
+            nvrhi::BindingSetItem::Texture_SRV(compute_reg::Impostor::kTex_Depth, m_Shared->impostorDepth(), nvrhi::Format::R32_FLOAT),
+            nvrhi::BindingSetItem::Texture_SRV(compute_reg::Impostor::kTex_ShadowMap, m_StageResources.shadowStage.depthTexture),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::Impostor::kSRV_AssetDims, m_Shared->assetDimsBuffer()),
+
+            nvrhi::BindingSetItem::Sampler(compute_reg::Impostor::kSampler_Main, m_StageResources.impostorStage.sampler),
+            nvrhi::BindingSetItem::Sampler(compute_reg::Impostor::kSampler_Shadow, m_StageResources.shadowStage.comparisonSampler),
+            nvrhi::BindingSetItem::Sampler(compute_reg::Impostor::kSampler_Depth, m_StageResources.impostorStage.depthSampler),
+        };
+        m_StageResources.impostorStage.bindingSets[i] = GetDevice()->createBindingSet(
+            bsd, m_StageResources.impostorStage.bindingLayout);
+    }
 }
 
 // ===========================================================================
@@ -157,6 +277,7 @@ bool TraditionalRenderPass::Init() {
     if (!_InitShared())                                 return false;
     if (!_InitShadowPass())                             return false;
     if (!_InitTreePass())                               return false;
+    if (!_InitImpostorPass())                           return false;
     if (!_InitSkyPass())                                return false;
     
     if (!_InitDebug())                                  return false;
@@ -197,16 +318,21 @@ bool TraditionalRenderPass::LoadResources() {
 
     m_VisibleInstanceReferences.clear();
     m_VisibleInstanceReferences.reserve(totalInstances);
+    m_VisibleImpostorReferences.clear();
+    m_VisibleImpostorReferences.reserve(totalInstances);
 
     size_t numAssets = m_GPUAssets.size();
     size_t numLods   = m_Registry.getLodSegments().size();
 
     m_InstanceCounts.assign(numAssets, std::vector<uint32_t>(numLods, 0));
     m_InstanceOffsets.assign(numAssets, std::vector<uint32_t>(numLods, 0));
+    m_ImpostorCounts.assign(std::max<size_t>(1, numAssets), 0);
+    m_ImpostorWriteOffsets.assign(std::max<size_t>(1, numAssets), 0);
 
     m_VisibleInstanceBuffer.assign(std::max<uint32_t>(1, totalInstances), {});
     m_DrawCmds.clear();
     m_DrawCmds.reserve(numAssets * numLods);
+    m_ImpostorDrawCallCount = 0;
 
     for (auto& csd : m_CascadeShadowData) {
         csd.instanceBuffer.assign(std::max<uint32_t>(1, totalInstances), {});
@@ -264,6 +390,10 @@ void TraditionalRenderPass::onAssetsDirty(const std::vector<size_t>& dirtyAssetI
     size_t numLods   = m_Registry.getLodSegments().size();
     m_InstanceCounts.resize(numAssets, std::vector<uint32_t>(numLods, 0));
     m_InstanceOffsets.resize(numAssets, std::vector<uint32_t>(numLods, 0));
+
+    _BuildImpostorSlotLayout();
+    _RebuildImpostorBuffers();
+    _RebuildBindingSets();
 }
 
 void TraditionalRenderPass::onRegionsDirty(const std::vector<size_t>& /*dirtyRegionIndices*/) {
@@ -319,9 +449,38 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         m_ShadowRes,
         m_UI.pssmLambda);
 
-    Render::ConstantBufferEntry constants{};
+    Render::CullConstantBufferEntry constants{};
     frame::FillCommonFrameConstants(constants, m_ViewHandler, m_Registry.getSunDirection());
-    m_CommandList->writeBuffer(m_StageResources.frameShared.constantBuffer, &constants, shader_cb::kFrameSize);
+
+    constants.viewFrustum  = m_ViewHandler.view.GetViewFrustum();
+    constants.worldToLight = dm::affineToHomogeneous(m_ViewHandler.worldToLight);
+    for (uint32_t c = 0; c < Render::c_NumCascades; c++) {
+        const dm::box3& cBbox = m_ViewHandler.cascades[c].shadowCasterBboxLS;
+        if (cBbox.isempty()) {
+            constants.shadowCasterMinLS[c] = dm::float4(1e30f, 1e30f, 1e30f, 0.f);
+            constants.shadowCasterMaxLS[c] = dm::float4(-1e30f, -1e30f, -1e30f, 0.f);
+        } else {
+            constants.shadowCasterMinLS[c] = dm::float4(cBbox.m_mins, 0.f);
+            constants.shadowCasterMaxLS[c] = dm::float4(cBbox.m_maxs, 0.f);
+        }
+    }
+
+    constants.cameraPos     = m_ViewHandler.camera.GetPosition();
+    constants.numRegions    = static_cast<uint32_t>(m_Registry.getRegions().size());
+    constants.totalCapacity = m_Registry.totalInstanceCount();
+    constants.numLods       = static_cast<uint32_t>(m_Registry.getLodSegments().size());
+    const auto& lodDistances = m_Registry.getLodDistances();
+    for (uint32_t i = 0; i < constants.numLods && i < lodDistances.size(); i++)
+        constants.lodDistances[i] = lodDistances[i];
+
+    constants.hizDimensions = dm::float2(
+        static_cast<float>(fbInfo.width),
+        static_cast<float>(fbInfo.height));
+    constants.maxHiZMip = 0.f;
+    constants.hizEnabled = 0u;
+    constants.impostorAlphaClip = m_UI.impostorAlphaClip;
+
+    m_CommandList->writeBuffer(m_StageResources.frameShared.constantBuffer, &constants, shader_cb::kCullFrameSize);
 
     m_CommandList->beginMarker("Draw");
 
@@ -345,7 +504,14 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     _RenderScenePass(framebuffer);
     m_CommandList->endMarker();
 
+    m_CommandList->beginMarker("Impostors");
+    _RenderImpostorPass(framebuffer);
+    m_CommandList->endMarker();
+
     m_CommandList->endMarker(); // Draw
+
+    if (m_UI.showImpostorAtlas && m_Shared)
+        m_Shared->CopySelectedImpostorDebugAtlases(m_CommandList, m_UI.impostorSelectedAsset);
 
     // m_CommandList->endTimerQuery(m_GpuTimers[m_NextTimerIdx]);
     m_CommandList->close();
@@ -357,16 +523,22 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
 
     // m_NextTimerIdx = (m_NextTimerIdx + 1) % m_QueuedFrames;
 
+    const uint32_t meshVisibleCount = static_cast<uint32_t>(m_VisibleInstanceReferences.size());
+    const uint32_t impostorVisibleCount = static_cast<uint32_t>(m_VisibleImpostorReferences.size());
+    const uint32_t visibleTotal = meshVisibleCount + impostorVisibleCount;
+
     m_UI.totalInstanceCount   = m_Registry.totalInstanceCount();
-    m_UI.visibleInstanceCount = (uint32_t)m_VisibleInstanceReferences.size();
-    m_UI.impostorVisibleCount = 0;
-    m_UI.culledInstanceCount  = m_UI.totalInstanceCount - m_UI.visibleInstanceCount;
-    m_UI.drawCallCount        = (uint32_t)m_DrawCmds.size();
+    m_UI.visibleInstanceCount = visibleTotal;
+    m_UI.impostorVisibleCount = impostorVisibleCount;
+    m_UI.culledInstanceCount  = (visibleTotal <= m_UI.totalInstanceCount)
+        ? m_UI.totalInstanceCount - visibleTotal : 0;
+    m_UI.drawCallCount        = static_cast<uint32_t>(m_DrawCmds.size()) + m_ImpostorDrawCallCount;
 
     m_UI.shadowVisibleCount   = m_TotalShadowInstancesDrawn;
     m_UI.shadowCulledCount    = m_UI.totalInstanceCount - m_TotalShadowInstancesDrawn;
 
     m_VisibleInstanceReferences.clear();
+    m_VisibleImpostorReferences.clear();
 
     cpuTimer.Stop();
     m_UI.cpuRenderTimeMs = (float)cpuTimer.Milliseconds();
@@ -635,9 +807,14 @@ void TraditionalRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
         m_StageResources.sceneTreeStage.pipeline = GetDevice()->createGraphicsPipeline(psoDesc, fbinfo);
     }
 
-    // Frustum culling & LOD assignment
+    const uint32_t numLods = static_cast<uint32_t>(lodSegments.size());
+    const uint32_t impostorThresholdLod = numLods > 0 ? numLods - 1 : 0;
+
+    // Frustum culling + LOD/impostor assignment
     m_VisibleInstanceReferences.clear();
+    m_VisibleImpostorReferences.clear();
     m_InstanceCounts.assign(m_GPUAssets.size(), std::vector<uint32_t>(lodSegments.size(), 0));
+    m_ImpostorCounts.assign(std::max<size_t>(1, m_GPUAssets.size()), 0);
 
     for (uint32_t ri = 0; ri < regions.size(); ri++) {
         const auto& region = regions[ri];
@@ -656,14 +833,23 @@ void TraditionalRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
 
             if (!m_ViewHandler.view.IsBoxVisible(inst.bbox)) continue;
             float dist = dm::distance(m_ViewHandler.camera.GetPosition(), inst.bbox);
-            uint32_t lod = m_ViewHandler.distToLOD(dist, lodDistances);
 
             auto it = m_AssetIdToGPUIndex.find(inst.assetId);
             if (it == m_AssetIdToGPUIndex.end()) continue;
             uint32_t gpuIdx = static_cast<uint32_t>(it->second);
+            if (numLods == 0 || lodDistances.empty()) continue;
 
-            m_VisibleInstanceReferences.push_back({ ri, ii, gpuIdx, lod });
-            m_InstanceCounts[gpuIdx][lod]++;
+            const bool useImpostor = !lodDistances.empty()
+                && (dist >= lodDistances[impostorThresholdLod]);
+            if (useImpostor) {
+                m_VisibleImpostorReferences.push_back({ ri, ii, gpuIdx, impostorThresholdLod });
+                m_ImpostorCounts[gpuIdx]++;
+            } else {
+                uint32_t lod = m_ViewHandler.distToLOD(dist, lodDistances);
+                lod = std::min<uint32_t>(lod, numLods > 0 ? numLods - 1 : 0);
+                m_VisibleInstanceReferences.push_back({ ri, ii, gpuIdx, lod });
+                m_InstanceCounts[gpuIdx][lod]++;
+            }
         }
     }
 
@@ -702,6 +888,65 @@ void TraditionalRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
     if (!m_VisibleInstanceReferences.empty())
         m_CommandList->writeBuffer(m_StageResources.sceneTreeStage.instanceBuffer, m_VisibleInstanceBuffer.data(),
             m_VisibleInstanceReferences.size() * sizeof(Render::InstanceBufferEntry));
+
+    // Fill impostor staging data in per-asset slot windows.
+    std::fill(m_ImpostorWriteOffsets.begin(), m_ImpostorWriteOffsets.end(), 0);
+    for (uint32_t ai = 0; ai < m_GPUAssets.size() && ai < m_ImpostorWriteOffsets.size(); ai++)
+        m_ImpostorWriteOffsets[ai] = m_ImpostorSlotOffsets[ai];
+
+    for (const auto& ref : m_VisibleImpostorReferences) {
+        if (ref.treeId >= m_ImpostorWriteOffsets.size()
+            || ref.treeId >= m_ImpostorSlotOffsets.size()
+            || ref.treeId >= m_ImpostorMaxSlotCounts.size())
+            continue;
+
+        uint32_t& writeOffset = m_ImpostorWriteOffsets[ref.treeId];
+        const uint32_t baseOffset = m_ImpostorSlotOffsets[ref.treeId];
+        const uint32_t maxCount = m_ImpostorMaxSlotCounts[ref.treeId];
+        if ((writeOffset - baseOffset) >= maxCount || writeOffset >= m_ImpostorInstanceStaging.size())
+            continue;
+
+        const auto& inst = regions[ref.regionIdx].instances[ref.instanceIdx];
+        const uint32_t persistentId = writeOffset;
+
+        m_ImpostorInstanceStaging[persistentId] = Render::InstanceBufferEntry(
+            inst.model, inst.normal, ref.treeId);
+
+        Render::CullInstanceData cullData{};
+        cullData.bbox     = inst.bbox;
+        cullData.baseSlot = ref.treeId * std::max(1u, numLods);
+        cullData.regionId = ref.regionIdx;
+        cullData.active   = 1;
+        m_ImpostorCullDataStaging[persistentId] = cullData;
+        m_ImpostorVisStaging[persistentId] = persistentId;
+
+        writeOffset++;
+    }
+
+    if (m_StageResources.impostorStage.slotOffsetBuffer && !m_ImpostorSlotOffsets.empty()) {
+        m_CommandList->writeBuffer(
+            m_StageResources.impostorStage.slotOffsetBuffer,
+            m_ImpostorSlotOffsets.data(),
+            m_ImpostorSlotOffsets.size() * sizeof(uint32_t));
+    }
+    if (m_StageResources.impostorStage.instanceBuffer && !m_ImpostorInstanceStaging.empty()) {
+        m_CommandList->writeBuffer(
+            m_StageResources.impostorStage.instanceBuffer,
+            m_ImpostorInstanceStaging.data(),
+            m_ImpostorInstanceStaging.size() * sizeof(Render::InstanceBufferEntry));
+    }
+    if (m_StageResources.impostorStage.cullDataBuffer && !m_ImpostorCullDataStaging.empty()) {
+        m_CommandList->writeBuffer(
+            m_StageResources.impostorStage.cullDataBuffer,
+            m_ImpostorCullDataStaging.data(),
+            m_ImpostorCullDataStaging.size() * sizeof(Render::CullInstanceData));
+    }
+    if (m_StageResources.impostorStage.visBuffer && !m_ImpostorVisStaging.empty()) {
+        m_CommandList->writeBuffer(
+            m_StageResources.impostorStage.visBuffer,
+            m_ImpostorVisStaging.data(),
+            m_ImpostorVisStaging.size() * sizeof(uint32_t));
+    }
 
     // Draw trees
     nvrhi::GraphicsState state;
@@ -756,12 +1001,68 @@ void TraditionalRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
     }
 }
 
+void TraditionalRenderPass::_RenderImpostorPass(nvrhi::IFramebuffer* framebuffer) {
+    m_ImpostorDrawCallCount = 0;
+
+    if (m_GPUAssets.empty()
+        || m_StageResources.impostorStage.bindingSets.empty()
+        || !m_StageResources.impostorStage.instanceBuffer
+        || !m_StageResources.impostorStage.cullDataBuffer
+        || !m_StageResources.impostorStage.visBuffer
+        || !m_StageResources.impostorStage.slotOffsetBuffer)
+    {
+        return;
+    }
+
+    const nvrhi::FramebufferInfoEx& fbinfo = framebuffer->getFramebufferInfo();
+    if (!m_StageResources.impostorStage.pipeline) {
+        nvrhi::GraphicsPipelineDesc psoDesc;
+        psoDesc.VS = m_StageResources.impostorStage.vertexShader;
+        psoDesc.PS = m_StageResources.impostorStage.pixelShader;
+        psoDesc.inputLayout = nullptr;
+        psoDesc.bindingLayouts = { m_StageResources.impostorStage.bindingLayout };
+        psoDesc.primType = nvrhi::PrimitiveType::TriangleStrip;
+    #if XYLEM_USE_REVERSE_Z
+        psoDesc.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Greater);
+    #else
+        psoDesc.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
+    #endif
+        psoDesc.renderState.rasterState.setCullNone();
+        psoDesc.renderState.rasterState
+            .setDepthBias(16)
+            .setSlopeScaleDepthBias(1.0f);
+        m_StageResources.impostorStage.pipeline = GetDevice()->createGraphicsPipeline(psoDesc, fbinfo);
+    }
+
+    nvrhi::GraphicsState state;
+    state.pipeline = m_StageResources.impostorStage.pipeline;
+    state.framebuffer = framebuffer;
+    state.viewport = m_ViewHandler.view.GetViewportState();
+
+    for (uint32_t ai = 0; ai < m_GPUAssets.size(); ai++) {
+        if (ai >= m_ImpostorCounts.size() || m_ImpostorCounts[ai] == 0)
+            continue;
+
+        uint32_t texIdx = std::min<uint32_t>(
+            m_GPUAssets[ai].textureSetIdx,
+            static_cast<uint32_t>(m_StageResources.impostorStage.bindingSets.size() - 1));
+        state.bindings = { m_StageResources.impostorStage.bindingSets[texIdx] };
+        m_CommandList->setGraphicsState(state);
+        m_CommandList->setPushConstants(&ai, sizeof(ai));
+        m_CommandList->draw(
+            nvrhi::DrawArguments()
+                .setVertexCount(4)
+                .setInstanceCount(m_ImpostorCounts[ai]));
+        m_ImpostorDrawCallCount++;
+    }
+}
+
 bool TraditionalRenderPass::_InitShared() {
     m_StageResources.frameShared.constantBuffer = GetDevice()->createBuffer(
         nvrhi::BufferDesc()
-            .setByteSize(shader_cb::kFrameSize)
+            .setByteSize(shader_cb::kCullFrameSize)
             .setIsConstantBuffer(true)
-            .setDebugName("ConstantBuffer")
+            .setDebugName("CullConstantBuffer")
             .enableAutomaticStateTracking(nvrhi::ResourceStates::ConstantBuffer)
     );
     return !!m_StageResources.frameShared.constantBuffer;
@@ -825,6 +1126,48 @@ bool TraditionalRenderPass::_InitTreePass() {
     if (!m_StageResources.sceneTreeStage.inputLayout) return false;
 
     return true;
+}
+
+bool TraditionalRenderPass::_InitImpostorPass() {
+    m_StageResources.impostorStage.vertexShader = m_ShaderFactory->CreateShader(
+        "app/ImpostorRenderPass.hlsl", "impostor_vs", nullptr, nvrhi::ShaderType::Vertex);
+    m_StageResources.impostorStage.pixelShader = m_ShaderFactory->CreateShader(
+        "app/ImpostorRenderPass.hlsl", "impostor_ps", nullptr, nvrhi::ShaderType::Pixel);
+    if (!m_StageResources.impostorStage.vertexShader || !m_StageResources.impostorStage.pixelShader)
+        return false;
+
+    nvrhi::BindingLayoutDesc layoutDesc;
+    layoutDesc.visibility = nvrhi::ShaderType::All;
+    layoutDesc.bindings = {
+        nvrhi::BindingLayoutItem::ConstantBuffer(compute_reg::Impostor::kCB_Frame),
+        nvrhi::BindingLayoutItem::PushConstants(compute_reg::Impostor::kPushC_AssetIndex, sizeof(uint32_t)),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(compute_reg::Impostor::kSRV_Vis),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(compute_reg::Impostor::kSRV_Instances),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(compute_reg::Impostor::kSRV_SlotOffsets),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(compute_reg::Impostor::kSRV_CullData),
+        nvrhi::BindingLayoutItem::Texture_SRV(compute_reg::Impostor::kTex_Albedo),
+        nvrhi::BindingLayoutItem::Texture_SRV(compute_reg::Impostor::kTex_Normal),
+        nvrhi::BindingLayoutItem::Texture_SRV(compute_reg::Impostor::kTex_Depth),
+        nvrhi::BindingLayoutItem::Texture_SRV(compute_reg::Impostor::kTex_ShadowMap),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(compute_reg::Impostor::kSRV_AssetDims),
+        nvrhi::BindingLayoutItem::Sampler(compute_reg::Impostor::kSampler_Main),
+        nvrhi::BindingLayoutItem::Sampler(compute_reg::Impostor::kSampler_Shadow),
+        nvrhi::BindingLayoutItem::Sampler(compute_reg::Impostor::kSampler_Depth),
+    };
+    m_StageResources.impostorStage.bindingLayout = GetDevice()->createBindingLayout(layoutDesc);
+    if (!m_StageResources.impostorStage.bindingLayout) return false;
+
+    m_StageResources.impostorStage.sampler = GetDevice()->createSampler(
+        nvrhi::SamplerDesc()
+            .setAllAddressModes(nvrhi::SamplerAddressMode::Clamp)
+            .setAllFilters(true));
+    if (!m_StageResources.impostorStage.sampler) return false;
+
+    m_StageResources.impostorStage.depthSampler = GetDevice()->createSampler(
+        nvrhi::SamplerDesc()
+            .setAllAddressModes(nvrhi::SamplerAddressMode::Clamp)
+            .setAllFilters(false));
+    return m_StageResources.impostorStage.depthSampler != nullptr;
 }
 
 // bool TraditionalRenderPass::_InitTimerQueries() {

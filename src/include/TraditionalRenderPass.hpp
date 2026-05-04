@@ -41,6 +41,7 @@ public:
     void Animate(float seconds) override;
     void BackBufferResizing() override {
         m_StageResources.sceneTreeStage.pipeline = nullptr;
+        m_StageResources.impostorStage.pipeline = nullptr;
         m_StageResources.sceneTerrainStage.pipeline = nullptr;
         m_StageResources.shadowStage.treePipeline = nullptr;
         m_StageResources.shadowStage.terrainPipeline = nullptr;
@@ -76,6 +77,22 @@ private:
         nvrhi::BindingLayoutHandle             bindingLayout;
         std::vector<nvrhi::BindingSetHandle>   bindingSets;
         nvrhi::GraphicsPipelineHandle          pipeline;
+    };
+
+    // Hemi-octahedral impostor render pass. Atlas textures + asset dims come
+    // from SharedGPUAssets; this pass owns per-frame visibility/instance SRVs.
+    struct ImpostorPassResources {
+        nvrhi::ShaderHandle                    vertexShader;
+        nvrhi::ShaderHandle                    pixelShader;
+        nvrhi::BindingLayoutHandle             bindingLayout;
+        nvrhi::SamplerHandle                   sampler;
+        nvrhi::SamplerHandle                   depthSampler;
+        std::vector<nvrhi::BindingSetHandle>   bindingSets;
+        nvrhi::GraphicsPipelineHandle          pipeline;
+        nvrhi::BufferHandle                    instanceBuffer;
+        nvrhi::BufferHandle                    cullDataBuffer;
+        nvrhi::BufferHandle                    visBuffer;
+        nvrhi::BufferHandle                    slotOffsetBuffer;
     };
 
     // Shadow depth pass
@@ -123,6 +140,7 @@ private:
         ShadowPassResources  shadowStage;
         SkyPassResources     skyStage;
         TreePassResources    sceneTreeStage;
+        ImpostorPassResources impostorStage;
         TerrainPassResources sceneTerrainStage;
     };
 
@@ -149,6 +167,16 @@ private:
     std::vector<std::vector<uint32_t>>                 m_InstanceOffsets;
     std::vector<Render::DrawCmd>                       m_DrawCmds;
     std::vector<Render::InstanceBufferEntry>           m_VisibleInstanceBuffer;
+    std::vector<Render::InstanceReference>             m_VisibleImpostorReferences;
+    std::vector<uint32_t>                              m_ImpostorCounts;
+    std::vector<uint32_t>                              m_ImpostorWriteOffsets;
+    std::vector<uint32_t>                              m_ImpostorSlotOffsets;
+    std::vector<uint32_t>                              m_ImpostorMaxSlotCounts;
+    uint32_t                                           m_ImpostorVisBufferSize = 0;
+    std::vector<Render::InstanceBufferEntry>           m_ImpostorInstanceStaging;
+    std::vector<Render::CullInstanceData>              m_ImpostorCullDataStaging;
+    std::vector<uint32_t>                              m_ImpostorVisStaging;
+    uint32_t                                           m_ImpostorDrawCallCount = 0;
     uint32_t                                           m_TotalShadowInstancesDrawn;
 
     // Per-cascade shadow draw data
@@ -161,6 +189,7 @@ private:
 
     bool _InitShared();
     bool _InitTreePass();
+    bool _InitImpostorPass();
     bool _InitShadowPass();
     bool _InitTerrainPass(nvrhi::ICommandList* initCL);
     bool _InitSkyPass();
@@ -171,11 +200,14 @@ private:
     void _UploadAsset(const TreeAssetDef& assetDef, GPUTreeAsset& gpuAsset,
                       nvrhi::IDevice* device, nvrhi::ICommandList* commandList);
     void _RebuildInstanceBuffers();
+    void _BuildImpostorSlotLayout();
+    void _RebuildImpostorBuffers();
     void _RebuildBindingSets();
 
     void _RenderSkyPass(nvrhi::IFramebuffer* framebuffer);
     void _RenderShadowPass();
     void _RenderScenePass(nvrhi::IFramebuffer* framebuffer);
+    void _RenderImpostorPass(nvrhi::IFramebuffer* framebuffer);
 };
 
 } // namespace Xylem

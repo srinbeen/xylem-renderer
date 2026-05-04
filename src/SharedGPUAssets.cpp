@@ -502,4 +502,45 @@ bool SharedGPUAssets::_BakeImpostors(nvrhi::ICommandList* cl)
     return true;
 }
 
+bool SharedGPUAssets::CopySelectedImpostorDebugAtlases(nvrhi::ICommandList* cl, uint32_t selectedAsset)
+{
+    if (!cl
+        || !m_AlbedoAlphaTexture
+        || !m_NormalTexture
+        || !m_DepthTexture
+        || !m_DebugAlbedoAtlasTexture
+        || !m_DebugNormalAtlasTexture
+        || !m_DebugDepthAtlasTexture)
+    {
+        return false;
+    }
+
+    const uint32_t numAssets = static_cast<uint32_t>(m_Registry.getAssets().size());
+    const uint32_t assetIdx = std::min(
+        selectedAsset,
+        numAssets == 0 ? 0u : numAssets - 1);
+
+    for (uint32_t view = 0; view < k_ImpostorViewCount; view++) {
+        const uint32_t tileX = view % k_ImpostorAzimuthViews;
+        const uint32_t tileY = view / k_ImpostorAzimuthViews;
+        const uint32_t tileSlice = assetIdx * k_ImpostorViewCount + view;
+        nvrhi::TextureSlice dst = nvrhi::TextureSlice()
+            .setOrigin(tileX * k_ImpostorBakeResolution, tileY * k_ImpostorBakeResolution, 0)
+            .setWidth(k_ImpostorBakeResolution)
+            .setHeight(k_ImpostorBakeResolution);
+
+        cl->copyTexture(
+            m_DebugAlbedoAtlasTexture, dst,
+            m_AlbedoAlphaTexture, nvrhi::TextureSlice().setArraySlice(tileSlice));
+        cl->copyTexture(
+            m_DebugNormalAtlasTexture, dst,
+            m_NormalTexture, nvrhi::TextureSlice().setArraySlice(tileSlice));
+        cl->copyTexture(
+            m_DebugDepthAtlasTexture, dst,
+            m_DepthTexture, nvrhi::TextureSlice().setArraySlice(tileSlice));
+    }
+
+    return true;
+}
+
 } // namespace Xylem

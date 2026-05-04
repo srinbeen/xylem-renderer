@@ -318,6 +318,13 @@ float SampleShadowCascade(float3 worldPos, uint cascadeIdx)
     float2 texelSize = 1.0 / float2(width, height);
 
     float shadow = 0.0;
+
+    static const float weights[3][3] = {
+        { 1.0, 2.0, 1.0 },
+        { 2.0, 4.0, 2.0 },
+        { 1.0, 2.0, 1.0 }
+    };
+
     [unroll]
     for (int x = -1; x <= 1; ++x)
     {
@@ -325,13 +332,14 @@ float SampleShadowCascade(float3 worldPos, uint cascadeIdx)
         for (int y = -1; y <= 1; ++y)
         {
             float2 offset = float2(x, y) * texelSize;
-            shadow += t_ShadowMap.SampleCmpLevelZero(
+            float weight = weights[x + 1][y + 1];
+            shadow += weight * t_ShadowMap.SampleCmpLevelZero(
                 s_ShadowSampler,
                 float3(shadowUV + offset, float(cascadeIdx)),
                 posLS.z);
         }
     }
-    return shadow / 9.0;
+    return shadow / 16.0;
 }
 
 void impostor_ps(
@@ -383,7 +391,6 @@ void impostor_ps(
          objectNormal1 * alphaWeights.y +
          objectNormal2 * alphaWeights.z) / alphaWeightSum);
     float3 worldNormal = normalize(mul(objectNormal, instBuf[i.persistentId].normal));
-
     float3 lightDir = -normalize(sunLightDir);
     float diffuse = max(dot(worldNormal, lightDir), 0.0);
 
@@ -395,8 +402,7 @@ void impostor_ps(
     else if (viewZ < cascadeSplits.z) cascadeIdx = 2;
 
     float notInShadow = SampleShadowCascade(depthWorldPos, cascadeIdx);
-    float ambient = 0.18;
-    float lighting = ambient + (1.0 - ambient) * diffuse * notInShadow;
+    float lighting = XYLEM_TREE_AMBIENT + (1.0 - XYLEM_TREE_AMBIENT) * diffuse * notInShadow;
 
     // Keep depth writes stable by using the card depth. Writing the baked
     // per-pixel depth exposes atlas-resolution quantization as visible bands.

@@ -61,6 +61,8 @@ public:
     nvrhi::ITexture* impostorDebugNormalAtlas() const { return m_DebugNormalAtlasTexture; }
     nvrhi::ITexture* impostorDebugDepthAtlas()  const { return m_DebugDepthAtlasTexture; }
 
+    bool CopySelectedImpostorDebugAtlases(nvrhi::ICommandList* cl, uint32_t selectedAsset);
+
 private:
     bool _InitBakePipeline();
     bool _LoadBarkTextures(nvrhi::ICommandList* cl, donut::engine::CommonRenderPasses& commonPasses);

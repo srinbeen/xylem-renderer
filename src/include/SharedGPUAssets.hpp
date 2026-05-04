@@ -56,6 +56,10 @@ public:
     nvrhi::ITexture* impostorNormal() const { return m_NormalTexture; }
     nvrhi::ITexture* impostorDepth()  const { return m_DepthTexture; }
     nvrhi::IBuffer*  assetDimsBuffer() const { return m_AssetDimsBuffer; }
+    nvrhi::IBuffer*  leafInstancesBuffer() const { return m_LeafInstancesBuffer; }
+    nvrhi::IBuffer*  leafSlotsBuffer() const { return m_LeafSlotsBuffer; }
+    nvrhi::IBuffer*  leafShadowSlotsBuffer() const { return m_LeafShadowSlotsBuffer; }
+    nvrhi::IBuffer*  leafMeshletsBuffer() const { return m_LeafMeshletsBuffer; }
 
     nvrhi::ITexture* impostorDebugAlbedoAtlas() const { return m_DebugAlbedoAtlasTexture; }
     nvrhi::ITexture* impostorDebugNormalAtlas() const { return m_DebugNormalAtlasTexture; }
@@ -66,6 +70,7 @@ public:
 private:
     bool _InitBakePipeline();
     bool _LoadBarkTextures(nvrhi::ICommandList* cl, donut::engine::CommonRenderPasses& commonPasses);
+    bool _RebuildLeafBuffers(nvrhi::ICommandList* cl);
     bool _BakeImpostors(nvrhi::ICommandList* cl);
     bool _RebuildAssetDimsBuffer(nvrhi::ICommandList* cl);
 
@@ -87,6 +92,13 @@ private:
     nvrhi::BufferHandle                              m_BakeConstantBuffer;
     nvrhi::GraphicsPipelineHandle                    m_BakePipeline;
 
+    // Leaf bake — separate PSO + binding set, identity-model leaf draw on top of trunk.
+    nvrhi::ShaderHandle                              m_LeafBakeVS;
+    nvrhi::ShaderHandle                              m_LeafBakePS;
+    nvrhi::BindingLayoutHandle                       m_LeafBakeBindingLayout;
+    nvrhi::BindingSetHandle                          m_LeafBakeBindingSet;
+    nvrhi::GraphicsPipelineHandle                    m_LeafBakePipeline;
+
     // Impostor atlas + asset dims
     nvrhi::TextureHandle                             m_AlbedoAlphaTexture;
     nvrhi::TextureHandle                             m_NormalTexture;
@@ -95,6 +107,10 @@ private:
     nvrhi::TextureHandle                             m_DebugNormalAtlasTexture;
     nvrhi::TextureHandle                             m_DebugDepthAtlasTexture;
     nvrhi::BufferHandle                              m_AssetDimsBuffer;
+    nvrhi::BufferHandle                              m_LeafInstancesBuffer;
+    nvrhi::BufferHandle                              m_LeafSlotsBuffer;
+    nvrhi::BufferHandle                              m_LeafShadowSlotsBuffer;
+    nvrhi::BufferHandle                              m_LeafMeshletsBuffer;
 };
 
 } // namespace Xylem

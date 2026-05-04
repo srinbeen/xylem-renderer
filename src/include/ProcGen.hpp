@@ -280,30 +280,9 @@ namespace Xylem::ProcGen {
         // Append cylinder rings + connecting quads for every parent→child edge in the SC
         // graph. Each node becomes a ring at node.pos oriented along node.dir; non-root
         // nodes also generate quad indices joining their ring to the parent's ring.
-        // Branchlet uvs respect the global tree invariant (uv.x ∈ [0,1], uv.y ≥ 0) so the
-        // future leaf sentinel `uv.x < 0` is unambiguous.
         void emitColonizationCylinders(const std::vector<SCNode>& nodes,
                                        Buffers&                   buffers,
                                        uint32_t                   radialSegments);
-
-        // Append solid cross-billboard leaves (two perpendicular quads per leaf, 8 verts /
-        // 12 indices) at each terminal SC node. Leaf vertices are tagged in-band via
-        // `uv = (-1, -1)` so pixel shaders can route them through a leaf-shading branch
-        // without an extra vertex stream. `countPerTip` is the LOD-scaled count (caller
-        // does the multiplier math); when 0, the call is a no-op.
-        //
-        // The per-asset leaf color is packed into each leaf vertex's TANGENT slot. This
-        // avoids plumbing a new per-instance attribute (treeId) and a per-asset SRV through
-        // all three pipelines. Trunk vertices store a real tangent for normal mapping;
-        // leaf vertices store an RGB color. The PS branches on `uv.x < 0` and reinterprets
-        // the tangent stream accordingly.
-        void emitLeafCrosses(const std::vector<SCNode>&   nodes,
-                             const std::vector<uint32_t>& terminals,
-                             uint32_t                     countPerTip,
-                             float                        size,
-                             const dm::float3&            color,
-                             uint32_t                     seed,
-                             Buffers&                     buffers);
     };
 
 } // namespace Xylem::ProcGen

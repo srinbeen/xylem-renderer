@@ -54,20 +54,8 @@ void main_vs(
 	o_worldPos		= worldPos.xyz;
 	o_viewZ			= mul(worldPos, viewMatrix).z;
 	o_normal    	= normalize(mul(i_normal, normalMat));
-
-	// Leaf vertices (uv.x < 0) carry leaf color in the TANGENT slot — skip the rotation +
-	// normalize so the RGB values reach the PS intact. Trunk verts take the standard path
-	// (tangent transformed for normal mapping).
-	if (i_uv.x < 0.0)
-	{
-		o_tangent   = i_tangent;
-		o_bitangent = i_bitangent;
-	}
-	else
-	{
-		o_tangent   = normalize(mul(i_tangent, normalMat));
-		o_bitangent = normalize(mul(i_bitangent, normalMat));
-	}
+	o_tangent   	= normalize(mul(i_tangent, normalMat));
+	o_bitangent 	= normalize(mul(i_bitangent, normalMat));
 	o_uv 			= i_uv;
 }
 
@@ -127,7 +115,6 @@ void main_ps(
 	out float4 o_color : SV_Target0
 )
 {
-	// Cascade selection (shared between trunk + leaf paths)
 	uint cascadeIdx = 3;
 	if      (i_viewZ < cascadeSplits.x) cascadeIdx = 0;
 	else if (i_viewZ < cascadeSplits.y) cascadeIdx = 1;
@@ -136,20 +123,8 @@ void main_ps(
 	float3 lightDir = -normalize(sunLightDir);
 	float notInShadow = SampleShadowCascade(i_worldPos, cascadeIdx);
 
-	// Leaves are tagged with uv = (-1, -1) by the CPU emitter. They use the same
-	// single-sided diffuse response as trunk geometry.
-	if (i_uv.x < 0.0)
-	{
-		float3 leafColor = i_tangent;   // tangent stream carries leaf color for leaf verts
-		float3 N = normalize(i_normal);
-		float diffuse = max(dot(N, lightDir), 0.0);
-
-		float lighting = XYLEM_TREE_AMBIENT + (1.0 - XYLEM_TREE_AMBIENT) * diffuse * notInShadow;
-		o_color = float4(lighting * leafColor, 1);
-		return;
-	}
-
-	// Trunk / branchlet path: tangent-space normal mapping
+	// Trunk / branchlet path: tangent-space normal mapping. Leaves render through
+	// the dedicated TraditionalLeaves pipeline.
 	float3 T = normalize(i_tangent);
 	float3 B = normalize(i_bitangent);
 	float3 N = normalize(i_normal);

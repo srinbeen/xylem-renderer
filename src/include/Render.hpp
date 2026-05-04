@@ -57,12 +57,14 @@ struct DrawCmd {
     nvrhi::BufferHandle  indexBuffer;
     nvrhi::DrawArguments drawArgs;
     uint32_t             textureSetIdx;
+    uint32_t             leafSlot;
 };
 
 struct ShadowDrawCmd {
     nvrhi::BufferHandle  positionBuffer;
     nvrhi::BufferHandle  indexBuffer;
     nvrhi::DrawArguments drawArgs;
+    uint32_t             leafSlot;
 };
 
 struct InstanceReference {

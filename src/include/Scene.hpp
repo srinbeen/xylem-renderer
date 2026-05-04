@@ -38,37 +38,38 @@ struct TreeLODDef {
 // stream (8 verts / 4 prims per leaf) to a single instance entry that drives a shared
 // canonical cross-billboard mesh.
 struct LeafInstance {
-    dm::float3 localPos;   // SC terminal + per-LOD jitter
-    dm::float3 spine;      // unit; cross-billboard's height axis
-    dm::float3 right;      // unit; perpendicular to spine. q2 = cross(spine, right) in shader
+    dm::float4 centerHalfSize; // xyz = local center, w = half-size
+    dm::float4 spine;          // xyz = unit height axis
+    dm::float4 right;          // xyz = unit width axis; q2 = cross(spine, right)
+    dm::float4 color;          // rgb = leaf albedo, a unused
 };
-static_assert(sizeof(LeafInstance) == 36, "LeafInstance is tightly packed; GPU buffer uses sizeof() as stride");
+static_assert(sizeof(LeafInstance) == 64, "LeafInstance must match HLSL LeafInstanceData");
 
 // Bounding sphere for one AS-meshlet's worth of leaves (8 leaves). LOD-invariant: the
 // contributing terminal set is fixed at bake time; lower LODs only dispatch fewer meshlets.
-struct LeafMeshletBounds {
-    dm::float3 center;
-    float      radius;
+struct LeafSlot {
+    uint32_t leafOffset    = 0;
+    uint32_t leafCount     = 0;
+    uint32_t meshletOffset = 0;
+    uint32_t meshletCount  = 0;
 };
-static_assert(sizeof(LeafMeshletBounds) == 16, "LeafMeshletBounds packed to float4");
+static_assert(sizeof(LeafSlot) == 16, "LeafSlot must match HLSL LeafSlotData");
+
+struct LeafMeshlet {
+    dm::uint4  meta;   // x = local leaf offset, y = leaf count
+    dm::float4 bounds; // xyz = local center, w = radius
+};
+static_assert(sizeof(LeafMeshlet) == 32, "LeafMeshlet must match HLSL LeafMeshletData");
 
 // Per-asset leaf data. Storage is LOD-prefix ordered: countByLod[lod] is the prefix
 // length to dispatch at LOD `lod`. countByLod is monotone non-decreasing as lod
 // decreases (LOD0 is the full set; LOD3 is typically 0).
 struct LeafAssetDef {
-    std::vector<LeafInstance>      instances;
-    std::array<uint32_t, 4>        countByLod   = {0, 0, 0, 0};
-    dm::box3                       localBbox    = dm::box3::empty();
-    // P2-only — sized to ceil(countByLod[0] / 8). LOD-invariant.
-    std::vector<LeafMeshletBounds> meshletBounds;
-};
-
-// Canonical 8-vert / 12-index cross-billboard. Single global instance lives on
-// SceneRegistry; uploaded once per pipeline at Init.
-struct CanonicalLeafMesh {
-    std::array<dm::float3, 8> positions;
-    std::array<dm::float3, 8> normals;
-    std::array<uint32_t, 12>  indices;
+    std::vector<LeafInstance> instances;
+    std::vector<uint32_t>     countByLod;
+    std::vector<LeafSlot>     lodSlots;
+    dm::box3                  localBbox = dm::box3::empty();
+    std::vector<LeafMeshlet>  meshlets;
 };
 
 // GPU-side LOD data — owned by render passes. SoA: one buffer per attribute stream.
@@ -113,3 +114,4 @@ struct TreeRegion {
 } // namespace Xylem::Scene
 
 #endif // XYLEM_SCENE_H
+

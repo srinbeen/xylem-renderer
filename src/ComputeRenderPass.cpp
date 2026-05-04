@@ -215,6 +215,8 @@ void ComputeRenderPass::_BuildSlotLayout() {
 
     // Build indirect args staging - pre-fill with indexCount, instanceCount=0
     m_IndirectArgsStaging.resize(std::max(1u, m_NumSlots));
+    m_LeafIndirectArgsStaging.resize(std::max(1u, m_NumSlots));
+    const auto& registryAssets = m_Registry.getAssets();
     for (uint32_t ai = 0; ai < numAssets; ai++) {
         for (uint32_t lodi = 0; lodi < numLods; lodi++) {
             uint32_t slotIdx = ai * numLods + lodi;
@@ -224,6 +226,15 @@ void ComputeRenderPass::_BuildSlotLayout() {
             args.startIndexLocation    = 0;
             args.baseVertexLocation    = 0;
             args.startInstanceLocation = 0;
+
+            uint32_t leafCount = 0;
+            if (ai < registryAssets.size() && lodi < registryAssets[ai].leafAsset.lodSlots.size())
+                leafCount = registryAssets[ai].leafAsset.lodSlots[lodi].leafCount;
+            auto& leafArgs = m_LeafIndirectArgsStaging[slotIdx];
+            leafArgs.vertexCount           = leafCount * 12u;
+            leafArgs.instanceCount         = 0;
+            leafArgs.startVertexLocation   = 0;
+            leafArgs.startInstanceLocation = 0;
         }
     }
 
@@ -241,6 +252,7 @@ void ComputeRenderPass::_BuildSlotLayout() {
 
     const uint32_t lowestLOD = numLods > 0 ? numLods - 1 : 0;
     m_ShadowIndirectArgsStaging.resize(std::max(1u, numShadowSlots));
+    m_LeafShadowIndirectArgsStaging.resize(std::max(1u, numShadowSlots));
     for (uint32_t ai = 0; ai < numAssets; ai++) {
         for (uint32_t c = 0; c < Render::c_NumCascades; c++) {
             uint32_t slot = ai * Render::c_NumCascades + c;
@@ -250,6 +262,15 @@ void ComputeRenderPass::_BuildSlotLayout() {
             args.startIndexLocation    = 0;
             args.baseVertexLocation    = 0;
             args.startInstanceLocation = 0;
+
+            uint32_t leafCount = 0;
+            if (ai < registryAssets.size() && lowestLOD < registryAssets[ai].leafAsset.lodSlots.size())
+                leafCount = registryAssets[ai].leafAsset.lodSlots[lowestLOD].leafCount;
+            auto& leafArgs = m_LeafShadowIndirectArgsStaging[slot];
+            leafArgs.vertexCount           = leafCount * 12u;
+            leafArgs.instanceCount         = 0;
+            leafArgs.startVertexLocation   = 0;
+            leafArgs.startInstanceLocation = 0;
         }
     }
 }
@@ -425,6 +446,17 @@ void ComputeRenderPass::_UploadCullBuffers(nvrhi::ICommandList* commandList) {
             .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess)
     );
 
+    uint32_t leafIndirectArgsBufSize = std::max(1u, m_NumSlots) * sizeof(nvrhi::DrawIndirectArguments);
+    m_StageResources.cull.leafIndirectArgsBuffer = device->createBuffer(
+        nvrhi::BufferDesc()
+            .setByteSize(leafIndirectArgsBufSize)
+            .setDebugName("LeafIndirectArgsBuffer")
+            .setIsDrawIndirectArgs(true)
+            .setCanHaveUAVs(true)
+            .setCanHaveRawViews(true)
+            .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess)
+    );
+
     // ImpostorIndirectArgsBuffer - UAV + indirect draw args, DrawIndirectArguments[numAssets]
     uint32_t impostorIndirectArgsBufSize = std::max(1u, numAssets) * sizeof(nvrhi::DrawIndirectArguments);
     m_StageResources.cull.impostorIndirectArgsBuffer = device->createBuffer(
@@ -443,6 +475,17 @@ void ComputeRenderPass::_UploadCullBuffers(nvrhi::ICommandList* commandList) {
         nvrhi::BufferDesc()
             .setByteSize(shadowIndirectArgsBufSize)
             .setDebugName("ShadowIndirectArgsBuffer")
+            .setIsDrawIndirectArgs(true)
+            .setCanHaveUAVs(true)
+            .setCanHaveRawViews(true)
+            .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess)
+    );
+
+    uint32_t leafShadowIndirectArgsBufSize = std::max(1u, numShadowSlots) * sizeof(nvrhi::DrawIndirectArguments);
+    m_StageResources.cull.leafShadowIndirectArgsBuffer = device->createBuffer(
+        nvrhi::BufferDesc()
+            .setByteSize(leafShadowIndirectArgsBufSize)
+            .setDebugName("LeafShadowIndirectArgsBuffer")
             .setIsDrawIndirectArgs(true)
             .setCanHaveUAVs(true)
             .setCanHaveRawViews(true)
@@ -524,6 +567,8 @@ void ComputeRenderPass::_RebuildCullBindings() {
         nvrhi::BindingSetItem::StructuredBuffer_UAV(compute_reg::Cull::kUAV_ImpostorCount, m_StageResources.cull.impostorCountBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_UAV(compute_reg::Cull::kUAV_ImpostorVis, m_StageResources.cull.impostorVisBuffer),
         nvrhi::BindingSetItem::RawBuffer_UAV(compute_reg::Cull::kUAV_ImpostorIndirectArgs, m_StageResources.cull.impostorIndirectArgsBuffer),
+        nvrhi::BindingSetItem::RawBuffer_UAV(11, m_StageResources.cull.leafIndirectArgsBuffer),
+        nvrhi::BindingSetItem::RawBuffer_UAV(12, m_StageResources.cull.leafShadowIndirectArgsBuffer),
 
         nvrhi::BindingSetItem::Texture_SRV(compute_reg::Cull::kSRV_HiZ, m_StageResources.hiz.hizTexture),
         nvrhi::BindingSetItem::Sampler(compute_reg::Cull::kSampler_HiZ, m_StageResources.hiz.pointSampler),
@@ -593,6 +638,50 @@ void ComputeRenderPass::_RebuildCullBindings() {
         nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::Shadow::kSRV_SlotOffsets, m_StageResources.cull.shadowSlotOffsetBuffer),
     };
     m_StageResources.shadow.bindingSet = device->createBindingSet(shadowBSD, m_StageResources.shadow.bindingLayout);
+
+    nvrhi::BindingSetDesc leafBSD;
+    leafBSD.bindings = {
+        nvrhi::BindingSetItem::ConstantBuffer(0, m_StageResources.frameShared.constantBuffer,
+            nvrhi::BufferRange(0, shader_cb::kCullFrameSize)),
+        nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t) * 2),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_StageResources.cull.visibilityBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_StageResources.cull.persistentInstBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_StageResources.cull.slotOffsetBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(3, m_Shared->leafInstancesBuffer()),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(4, m_Shared->leafSlotsBuffer()),
+        nvrhi::BindingSetItem::Texture_SRV(5, m_StageResources.shadow.depthTexture),
+        nvrhi::BindingSetItem::Sampler(0, m_StageResources.shadow.comparisonSampler),
+    };
+    m_StageResources.sceneLeaves.bindingSet =
+        device->createBindingSet(leafBSD, m_StageResources.sceneLeaves.bindingLayout);
+
+    nvrhi::BindingSetDesc leafDepthBSD;
+    leafDepthBSD.bindings = {
+        nvrhi::BindingSetItem::ConstantBuffer(0, m_StageResources.frameShared.constantBuffer,
+            nvrhi::BufferRange(0, shader_cb::kCullFrameSize)),
+        nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t) * 2),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_StageResources.cull.visibilityBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_StageResources.cull.persistentInstBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_StageResources.cull.slotOffsetBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(3, m_Shared->leafInstancesBuffer()),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(4, m_Shared->leafSlotsBuffer()),
+    };
+    m_StageResources.sceneLeaves.depthBindingSet =
+        device->createBindingSet(leafDepthBSD, m_StageResources.sceneLeaves.depthBindingLayout);
+
+    nvrhi::BindingSetDesc leafShadowBSD;
+    leafShadowBSD.bindings = {
+        nvrhi::BindingSetItem::ConstantBuffer(0, m_StageResources.frameShared.constantBuffer,
+            nvrhi::BufferRange(0, shader_cb::kCullFrameSize)),
+        nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t) * 2),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_StageResources.cull.shadowVisBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_StageResources.cull.persistentInstBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_StageResources.cull.shadowSlotOffsetBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(3, m_Shared->leafInstancesBuffer()),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(4, m_Shared->leafShadowSlotsBuffer()),
+    };
+    m_StageResources.sceneLeaves.shadowBindingSet =
+        device->createBindingSet(leafShadowBSD, m_StageResources.sceneLeaves.shadowBindingLayout);
 }
 
 // ===========================================================================
@@ -756,6 +845,21 @@ void ComputeRenderPass::_RenderDepthPrepass() {
         m_StageResources.depthPrepass.treePipeline = GetDevice()->createGraphicsPipeline(
             pso, m_StageResources.depthPrepass.framebuffer->getFramebufferInfo());
     }
+    if (!m_StageResources.sceneLeaves.depthPipeline) {
+        nvrhi::GraphicsPipelineDesc pso;
+        pso.VS = m_StageResources.sceneLeaves.depthVS;
+        pso.inputLayout = nullptr;
+        pso.bindingLayouts = { m_StageResources.sceneLeaves.depthBindingLayout };
+        pso.primType = nvrhi::PrimitiveType::TriangleList;
+    #if XYLEM_USE_REVERSE_Z
+        pso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Greater);
+    #else
+        pso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
+    #endif
+        pso.renderState.rasterState.setCullNone();
+        m_StageResources.sceneLeaves.depthPipeline = GetDevice()->createGraphicsPipeline(
+            pso, m_StageResources.depthPrepass.framebuffer->getFramebufferInfo());
+    }
 
     // Draw trees using last frame's indirect args (not yet cleared)
     nvrhi::GraphicsState state;
@@ -777,6 +881,26 @@ void ComputeRenderPass::_RenderDepthPrepass() {
             m_CommandList->setPushConstants(&slot, sizeof(slot));
             m_CommandList->drawIndexedIndirect(
                 slot * sizeof(nvrhi::DrawIndexedIndirectArguments));
+        }
+    }
+
+    if (m_StageResources.sceneLeaves.depthPipeline && m_StageResources.sceneLeaves.depthBindingSet) {
+        nvrhi::GraphicsState leafState;
+        leafState.pipeline = m_StageResources.sceneLeaves.depthPipeline;
+        leafState.framebuffer = m_StageResources.depthPrepass.framebuffer;
+        leafState.viewport = m_ViewHandler.view.GetViewportState();
+        leafState.bindings = { m_StageResources.sceneLeaves.depthBindingSet };
+        leafState.indirectParams = m_StageResources.cull.leafIndirectArgsBuffer;
+
+        for (uint32_t ai = 0; ai < m_GPUAssets.size(); ai++) {
+            for (uint32_t li = 0; li < numLods; li++) {
+                uint32_t slot = ai * numLods + li;
+                if (m_MaxSlotCounts[slot] == 0) continue;
+                m_CommandList->setGraphicsState(leafState);
+                uint32_t pc[2] = { slot, 0 };
+                m_CommandList->setPushConstants(pc, sizeof(pc));
+                m_CommandList->drawIndirect(slot * sizeof(nvrhi::DrawIndirectArguments));
+            }
         }
     }
 
@@ -988,6 +1112,7 @@ bool ComputeRenderPass::Init() {
     if (!_InitShared())                                return false;
     if (!_InitShadowPass())                            return false;
     if (!_InitTreePass(nullptr, commonPasses))         return false;
+    if (!_InitLeafPass())                              return false;
     if (!_InitImpostorPass())                          return false;
     if (!_InitSkyPass())                               return false;
     if (!_InitHiZShaders())                            return false;
@@ -1034,6 +1159,9 @@ void ComputeRenderPass::Animate(float /*seconds*/) {
 
 void ComputeRenderPass::BackBufferResizing() {
     m_StageResources.sceneTree.pipeline          = nullptr;
+    m_StageResources.sceneLeaves.pipeline        = nullptr;
+    m_StageResources.sceneLeaves.depthPipeline   = nullptr;
+    m_StageResources.sceneLeaves.shadowPipeline  = nullptr;
     m_StageResources.impostor.pipeline           = nullptr;
     m_StageResources.sceneTerrain.pipeline       = nullptr;
     m_StageResources.shadow.treePipeline    = nullptr;
@@ -1237,12 +1365,18 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_CommandList->writeBuffer(m_StageResources.cull.indirectArgsBuffer,
         m_IndirectArgsStaging.data(),
         m_IndirectArgsStaging.size() * sizeof(nvrhi::DrawIndexedIndirectArguments));
+    m_CommandList->writeBuffer(m_StageResources.cull.leafIndirectArgsBuffer,
+        m_LeafIndirectArgsStaging.data(),
+        m_LeafIndirectArgsStaging.size() * sizeof(nvrhi::DrawIndirectArguments));
     m_CommandList->writeBuffer(m_StageResources.cull.impostorIndirectArgsBuffer,
         m_ImpostorIndirectArgsStaging.data(),
         m_ImpostorIndirectArgsStaging.size() * sizeof(nvrhi::DrawIndirectArguments));
     m_CommandList->writeBuffer(m_StageResources.cull.shadowIndirectArgsBuffer,
         m_ShadowIndirectArgsStaging.data(),
         m_ShadowIndirectArgsStaging.size() * sizeof(nvrhi::DrawIndexedIndirectArguments));
+    m_CommandList->writeBuffer(m_StageResources.cull.leafShadowIndirectArgsBuffer,
+        m_LeafShadowIndirectArgsStaging.data(),
+        m_LeafShadowIndirectArgsStaging.size() * sizeof(nvrhi::DrawIndirectArguments));
 
     m_CommandList->beginMarker("Cull");
 
@@ -1616,6 +1750,21 @@ void ComputeRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
     #endif
         m_StageResources.sceneTree.pipeline = GetDevice()->createGraphicsPipeline(psoDesc, fbinfo);
     }
+    if (!m_StageResources.sceneLeaves.pipeline) {
+        nvrhi::GraphicsPipelineDesc leafPso;
+        leafPso.VS = m_StageResources.sceneLeaves.vertexShader;
+        leafPso.PS = m_StageResources.sceneLeaves.pixelShader;
+        leafPso.inputLayout = nullptr;
+        leafPso.bindingLayouts = { m_StageResources.sceneLeaves.bindingLayout };
+        leafPso.primType = nvrhi::PrimitiveType::TriangleList;
+        leafPso.renderState.rasterState.setCullNone();
+    #if XYLEM_USE_REVERSE_Z
+        leafPso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Greater);
+    #else
+        leafPso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
+    #endif
+        m_StageResources.sceneLeaves.pipeline = GetDevice()->createGraphicsPipeline(leafPso, fbinfo);
+    }
 
     nvrhi::GraphicsState state;
     state.pipeline    = m_StageResources.sceneTree.pipeline;
@@ -1647,6 +1796,26 @@ void ComputeRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
 
             m_CommandList->drawIndexedIndirect(
                 slot * sizeof(nvrhi::DrawIndexedIndirectArguments));
+        }
+    }
+
+    if (m_StageResources.sceneLeaves.pipeline && m_StageResources.sceneLeaves.bindingSet) {
+        nvrhi::GraphicsState leafState;
+        leafState.pipeline = m_StageResources.sceneLeaves.pipeline;
+        leafState.framebuffer = framebuffer;
+        leafState.viewport = m_ViewHandler.view.GetViewportState();
+        leafState.bindings = { m_StageResources.sceneLeaves.bindingSet };
+        leafState.indirectParams = m_StageResources.cull.leafIndirectArgsBuffer;
+
+        for (uint32_t ai = 0; ai < m_GPUAssets.size(); ai++) {
+            for (uint32_t li = 0; li < numLods; li++) {
+                uint32_t slot = ai * numLods + li;
+                if (m_MaxSlotCounts[slot] == 0) continue;
+                m_CommandList->setGraphicsState(leafState);
+                uint32_t pc[2] = { slot, 0 };
+                m_CommandList->setPushConstants(pc, sizeof(pc));
+                m_CommandList->drawIndirect(slot * sizeof(nvrhi::DrawIndirectArguments));
+            }
         }
     }
 
@@ -1780,6 +1949,8 @@ bool ComputeRenderPass::_InitCullPass(nvrhi::ICommandList* /*initCL*/) {
         nvrhi::BindingLayoutItem::StructuredBuffer_UAV(compute_reg::Cull::kUAV_ImpostorCount),
         nvrhi::BindingLayoutItem::StructuredBuffer_UAV(compute_reg::Cull::kUAV_ImpostorVis),
         nvrhi::BindingLayoutItem::RawBuffer_UAV(compute_reg::Cull::kUAV_ImpostorIndirectArgs),
+        nvrhi::BindingLayoutItem::RawBuffer_UAV(11),
+        nvrhi::BindingLayoutItem::RawBuffer_UAV(12),
 
         nvrhi::BindingLayoutItem::Texture_SRV(compute_reg::Cull::kSRV_HiZ),
         nvrhi::BindingLayoutItem::Sampler(compute_reg::Cull::kSampler_HiZ),
@@ -1874,6 +2045,56 @@ bool ComputeRenderPass::_InitTreePass(nvrhi::ICommandList* initCL, engine::Commo
 
     // Binding sets are created in _RebuildCullBindings after buffers exist
     return true;
+}
+
+bool ComputeRenderPass::_InitLeafPass() {
+    m_StageResources.sceneLeaves.vertexShader = m_ShaderFactory->CreateShader(
+        "app/ComputeLeaves.hlsl", "leaf_vs", nullptr, nvrhi::ShaderType::Vertex);
+    m_StageResources.sceneLeaves.pixelShader = m_ShaderFactory->CreateShader(
+        "app/ComputeLeaves.hlsl", "leaf_ps", nullptr, nvrhi::ShaderType::Pixel);
+    m_StageResources.sceneLeaves.depthVS = m_ShaderFactory->CreateShader(
+        "app/ComputeLeaves.hlsl", "leaf_depth_vs", nullptr, nvrhi::ShaderType::Vertex);
+    m_StageResources.sceneLeaves.shadowVS = m_ShaderFactory->CreateShader(
+        "app/ComputeLeaves.hlsl", "leaf_shadow_vs", nullptr, nvrhi::ShaderType::Vertex);
+    if (!m_StageResources.sceneLeaves.vertexShader
+        || !m_StageResources.sceneLeaves.pixelShader
+        || !m_StageResources.sceneLeaves.depthVS
+        || !m_StageResources.sceneLeaves.shadowVS)
+        return false;
+
+    nvrhi::BindingLayoutDesc mainLayout;
+    mainLayout.visibility = nvrhi::ShaderType::All;
+    mainLayout.bindings = {
+        nvrhi::BindingLayoutItem::ConstantBuffer(0),
+        nvrhi::BindingLayoutItem::PushConstants(1, sizeof(uint32_t) * 2),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(4),
+        nvrhi::BindingLayoutItem::Texture_SRV(5),
+        nvrhi::BindingLayoutItem::Sampler(0),
+    };
+    m_StageResources.sceneLeaves.bindingLayout = GetDevice()->createBindingLayout(mainLayout);
+    if (!m_StageResources.sceneLeaves.bindingLayout) return false;
+
+    nvrhi::BindingLayoutDesc depthLayout;
+    depthLayout.visibility = nvrhi::ShaderType::All;
+    depthLayout.bindings = {
+        nvrhi::BindingLayoutItem::ConstantBuffer(0),
+        nvrhi::BindingLayoutItem::PushConstants(1, sizeof(uint32_t) * 2),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(4),
+    };
+    m_StageResources.sceneLeaves.depthBindingLayout = GetDevice()->createBindingLayout(depthLayout);
+    if (!m_StageResources.sceneLeaves.depthBindingLayout) return false;
+
+    nvrhi::BindingLayoutDesc shadowLayout = depthLayout;
+    m_StageResources.sceneLeaves.shadowBindingLayout = GetDevice()->createBindingLayout(shadowLayout);
+    return m_StageResources.sceneLeaves.shadowBindingLayout != nullptr;
 }
 
 bool ComputeRenderPass::_InitImpostorPass() {

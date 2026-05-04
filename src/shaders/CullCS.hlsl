@@ -68,6 +68,8 @@ RWByteAddressBuffer                shadowUniqueCounter  : register(XY_REG_U_COMP
 RWStructuredBuffer<uint>           impostorSlotCountBuf : register(XY_REG_U_COMPUTE_CULL_UAV_IMPOSTOR_COUNT);
 RWStructuredBuffer<uint>           impostorVisBuf       : register(XY_REG_U_COMPUTE_CULL_UAV_IMPOSTOR_VIS);
 RWByteAddressBuffer                impostorIndirectArgs : register(XY_REG_U_COMPUTE_CULL_UAV_IMPOSTOR_INDIRECT_ARGS);
+RWByteAddressBuffer                leafMainIndirectArgs : register(u11);
+RWByteAddressBuffer                leafShadowIndirectArgs : register(u12);
 
 Texture2D<float2>                  hizTexture           : register(XY_REG_T_COMPUTE_CULL_SRV_HI_Z);
 SamplerState                       hizSampler           : register(XY_REG_S_COMPUTE_CULL_SAMPLER_HI_Z);
@@ -129,6 +131,7 @@ void CullMain(uint3 dtid : SV_DispatchThreadID)
     //   offset 0: indexCount, offset 4: instanceCount, offset 8: startIndexLocation, ...
     uint dummy;
     mainIndirectArgs.InterlockedAdd(slot * 20 + 4, 1, dummy);
+    leafMainIndirectArgs.InterlockedAdd(slot * 16 + 4, 1, dummy);
 }
 
 [numthreads(256, 1, 1)]
@@ -187,6 +190,7 @@ void CullShadow(uint3 dtid : SV_DispatchThreadID)
         // Atomically increment instanceCount in shadow indirect draw args for this slot.
         uint dummy;
         shadowIndirectArgs.InterlockedAdd(slot * 20 + 4, 1, dummy);
+        leafShadowIndirectArgs.InterlockedAdd(slot * 16 + 4, 1, dummy);
 
         anyCascadeVisible = true;
     }

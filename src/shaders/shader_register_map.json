@@ -135,9 +135,13 @@
     { "namespace": ["Mesh", "Cull"], "name": "kUAV_ShadowDispatch", "kind": "u", "slot": 6 },
     { "namespace": ["Mesh", "Cull"], "name": "kUAV_ShadowUnique", "kind": "u", "slot": 7 },
     { "namespace": ["Mesh", "Cull"], "name": "kSRV_ImpostorSlotOffsets", "kind": "t", "slot": 7 },
+    { "namespace": ["Mesh", "Cull"], "name": "kSRV_MainLeafInvocations", "kind": "t", "slot": 8 },
+    { "namespace": ["Mesh", "Cull"], "name": "kSRV_ShadowLeafInvocations", "kind": "t", "slot": 9 },
     { "namespace": ["Mesh", "Cull"], "name": "kUAV_ImpostorCount", "kind": "u", "slot": 8 },
     { "namespace": ["Mesh", "Cull"], "name": "kUAV_ImpostorVis", "kind": "u", "slot": 9 },
     { "namespace": ["Mesh", "Cull"], "name": "kUAV_ImpostorIndirectArgs", "kind": "u", "slot": 10 },
+    { "namespace": ["Mesh", "Cull"], "name": "kUAV_MainLeafDispatch", "kind": "u", "slot": 11 },
+    { "namespace": ["Mesh", "Cull"], "name": "kUAV_ShadowLeafDispatch", "kind": "u", "slot": 12 },
     { "namespace": ["Mesh", "Cull"], "name": "kSampler_HiZ", "kind": "s", "slot": 0 },
 
     { "namespace": ["Mesh", "DepthPrepass"], "name": "kCB_Frame", "kind": "b", "slot": 0 },

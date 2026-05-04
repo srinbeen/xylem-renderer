@@ -49,13 +49,15 @@ struct CullRegionData
     box3   bbox;
 };
 
-StructuredBuffer<CullRegionData>   regionData             : register(XY_REG_T_MESH_CULL_SRV_REGION_DATA);
-StructuredBuffer<CullInstanceData> instanceData           : register(XY_REG_T_MESH_CULL_SRV_INSTANCE_DATA);
-StructuredBuffer<uint>             mainSlotOffsets        : register(XY_REG_T_MESH_CULL_SRV_MAIN_SLOT_OFFSETS);
-StructuredBuffer<uint>             mainInvocsPerSlot      : register(XY_REG_T_MESH_CULL_SRV_MAIN_INVOCATIONS);
-StructuredBuffer<uint>             shadowSlotOffsets      : register(XY_REG_T_MESH_CULL_SRV_SHADOW_SLOT_OFFSETS);
-StructuredBuffer<uint>             shadowInvocsPerSlot    : register(XY_REG_T_MESH_CULL_SRV_SHADOW_INVOCATIONS);
-StructuredBuffer<uint>             impostorSlotOffsets    : register(XY_REG_T_MESH_CULL_SRV_IMPOSTOR_SLOT_OFFSETS);
+StructuredBuffer<CullRegionData>   regionData               : register(XY_REG_T_MESH_CULL_SRV_REGION_DATA);
+StructuredBuffer<CullInstanceData> instanceData             : register(XY_REG_T_MESH_CULL_SRV_INSTANCE_DATA);
+StructuredBuffer<uint>             mainSlotOffsets          : register(XY_REG_T_MESH_CULL_SRV_MAIN_SLOT_OFFSETS);
+StructuredBuffer<uint>             mainInvocsPerSlot        : register(XY_REG_T_MESH_CULL_SRV_MAIN_INVOCATIONS);
+StructuredBuffer<uint>             shadowSlotOffsets        : register(XY_REG_T_MESH_CULL_SRV_SHADOW_SLOT_OFFSETS);
+StructuredBuffer<uint>             shadowInvocsPerSlot      : register(XY_REG_T_MESH_CULL_SRV_SHADOW_INVOCATIONS);
+StructuredBuffer<uint>             impostorSlotOffsets      : register(XY_REG_T_MESH_CULL_SRV_IMPOSTOR_SLOT_OFFSETS);
+StructuredBuffer<uint>             mainLeafInvocsPerSlot    : register(XY_REG_T_MESH_CULL_SRV_MAIN_LEAF_INVOCATIONS);
+StructuredBuffer<uint>             shadowLeafInvocsPerSlot  : register(XY_REG_T_MESH_CULL_SRV_SHADOW_LEAF_INVOCATIONS);
 
 RWStructuredBuffer<uint>           mainRegionVisBuf       : register(XY_REG_U_MESH_CULL_UAV_MAIN_REGION_VIS);
 RWStructuredBuffer<uint>           mainSlotCountBuf       : register(XY_REG_U_MESH_CULL_UAV_MAIN_COUNT);
@@ -68,6 +70,8 @@ RWByteAddressBuffer                shadowUniqueCounter    : register(XY_REG_U_ME
 RWStructuredBuffer<uint>           impostorSlotCountBuf   : register(XY_REG_U_MESH_CULL_UAV_IMPOSTOR_COUNT);
 RWStructuredBuffer<uint>           impostorVisBuf         : register(XY_REG_U_MESH_CULL_UAV_IMPOSTOR_VIS);
 RWByteAddressBuffer                impostorIndirectArgs   : register(XY_REG_U_MESH_CULL_UAV_IMPOSTOR_INDIRECT_ARGS);
+RWByteAddressBuffer                mainLeafDispatchArgs   : register(XY_REG_U_MESH_CULL_UAV_MAIN_LEAF_DISPATCH);
+RWByteAddressBuffer                shadowLeafDispatchArgs : register(XY_REG_U_MESH_CULL_UAV_SHADOW_LEAF_DISPATCH);
 
 Texture2D<float2>                  hizTexture             : register(XY_REG_T_MESH_CULL_SRV_HI_Z);
 SamplerState                       hizSampler             : register(XY_REG_S_MESH_CULL_SAMPLER_HI_Z);
@@ -121,6 +125,12 @@ void MeshCullMain(uint3 dtid : SV_DispatchThreadID)
 
     // DISPATCH_MESH record: [slotIdx | groupsX | groupsY | groupsZ] = 16 bytes
     UpdateDispatchMeshArgs(mainDispatchArgs, slot, (writeIdx + 1u) * mainInvocsPerSlot[slot]);
+
+    // Leaves dispatch in lockstep with trunks. v1 has no per-leaf-meshlet cull,
+    // so AS groups per visible instance is fixed by the leaf meshlet count for this slot.
+    uint leafInvocs = mainLeafInvocsPerSlot[slot];
+    if (leafInvocs > 0)
+        UpdateDispatchMeshArgs(mainLeafDispatchArgs, slot, (writeIdx + 1u) * leafInvocs);
 }
 
 [numthreads(256, 1, 1)]
@@ -170,6 +180,10 @@ void MeshCullShadow(uint3 dtid : SV_DispatchThreadID)
         shadowVisBuf[shadowSlotOffsets[slot] + writeIdx] = idx;
 
         UpdateDispatchMeshArgs(shadowDispatchArgs, slot, (writeIdx + 1u) * shadowInvocsPerSlot[slot]);
+
+        uint leafInvocs = shadowLeafInvocsPerSlot[slot];
+        if (leafInvocs > 0)
+            UpdateDispatchMeshArgs(shadowLeafDispatchArgs, slot, (writeIdx + 1u) * leafInvocs);
         anyCascade = true;
     }
 

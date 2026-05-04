@@ -1,6 +1,7 @@
 #pragma pack_matrix(row_major)
 
 #include "ShaderRegisterMap.hlsli"
+#include "LeafCommon.hlsli"
 
 cbuffer BakeCB : register(XY_REG_B_COMPUTE_IMPOSTORBAKE_CB_BAKE)
 {
@@ -11,6 +12,18 @@ cbuffer BakeCB : register(XY_REG_B_COMPUTE_IMPOSTORBAKE_CB_BAKE)
 Texture2D    t_Diffuse   : register(XY_REG_T_COMPUTE_IMPOSTORBAKE_TEX_DIFFUSE);
 Texture2D    t_NormalMap : register(XY_REG_T_COMPUTE_IMPOSTORBAKE_TEX_NORMAL_MAP);
 SamplerState s_Sampler   : register(XY_REG_S_COMPUTE_IMPOSTORBAKE_SAMPLER_MAIN);
+
+// Leaf bake bindings live on a separate root layout — one CB at b0 (mvp shared with trunk path),
+// a leaf-instance push constant at b1, and the per-asset leaf instance buffer at t0.
+cbuffer LeafBakePush : register(b1)
+{
+    uint g_LeafOffset;
+    uint g_LeafCount;
+    uint _leafPad0;
+    uint _leafPad1;
+};
+
+StructuredBuffer<LeafInstanceData> g_BakeLeaves : register(t0);
 
 struct V2P
 {
@@ -32,18 +45,8 @@ void bake_vs(
 {
     o.pos       = mul(float4(i_pos, 1.0), mvp);
     o.normal    = normalize(i_normal);
-    // Leaf vertices (uv.x < 0) pack the per-asset leaf color in TANGENT — pass through
-    // unnormalized so the RGB survives interpolation. Matches the runtime tree shaders.
-    if (i_uv.x < 0.0)
-    {
-        o.tangent   = i_tangent;
-        o.bitangent = i_bitangent;
-    }
-    else
-    {
-        o.tangent   = normalize(i_tangent);
-        o.bitangent = normalize(i_bitangent);
-    }
+    o.tangent   = normalize(i_tangent);
+    o.bitangent = normalize(i_bitangent);
     o.uv        = i_uv;
 }
 
@@ -57,18 +60,8 @@ BakeOutput bake_ps(in V2P i)
 {
     BakeOutput o;
 
-    // Leaf path: cross-billboards have no diffuse/normal texture — color is the
-    // per-asset leaf color packed into TANGENT, and the surface normal is the
-    // billboard's own face normal. Alpha = 1 (opaque), no clip.
-    if (i.uv.x < 0.0)
-    {
-        o.albedoAlpha = float4(i.tangent, 1.0);
-        float3 N = normalize(i.normal);
-        o.normal = float4(saturate(N * 0.5 + 0.5), 1.0);
-        return o;
-    }
-
-    // Trunk / branchlet path: tangent-space normal map sample.
+    // Trunk / branchlet path: tangent-space normal map sample. Leaves bake through
+    // a dedicated leaf bake pass (asset-local leaf instances, no normal-map sampling).
     float3 T = normalize(i.tangent);
     float3 B = normalize(i.bitangent);
     float3 N = normalize(i.normal);
@@ -82,5 +75,34 @@ BakeOutput bake_ps(in V2P i)
 
     o.albedoAlpha = diffuse;
     o.normal = float4(saturate(objectNormal * 0.5 + 0.5), 1.0);
+    return o;
+}
+
+struct LeafBakeV2P
+{
+    float4 pos    : SV_Position;
+    float3 color  : COLOR0;
+    float3 normal : NORMAL;
+};
+
+void leaf_bake_vs(in uint vertexId : SV_VertexID, out LeafBakeV2P o)
+{
+    uint leafIdx = LeafIndexFromVertex(vertexId);
+    uint vertInLeaf = LeafVertexInLeaf(vertexId);
+    LeafInstanceData leaf = g_BakeLeaves[g_LeafOffset + leafIdx];
+
+    float3 localPos, localNormal;
+    BuildLeafVertex(leaf, vertInLeaf, localPos, localNormal);
+
+    o.pos    = mul(float4(localPos, 1.0), mvp);
+    o.color  = leaf.color.rgb;
+    o.normal = localNormal;
+}
+
+BakeOutput leaf_bake_ps(in LeafBakeV2P i)
+{
+    BakeOutput o;
+    o.albedoAlpha = float4(i.color, 1.0);
+    o.normal = float4(saturate(normalize(i.normal) * 0.5 + 0.5), 1.0);
     return o;
 }

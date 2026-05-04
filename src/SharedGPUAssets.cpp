@@ -123,6 +123,7 @@ bool SharedGPUAssets::Init()
     initCL->open();
 
     if (!_LoadBarkTextures(initCL, commonPasses)) { initCL->close(); return false; }
+    if (!_RebuildLeafBuffers(initCL))             { initCL->close(); return false; }
     if (!_BakeImpostors(initCL))                  { initCL->close(); return false; }
 
     initCL->close();
@@ -152,7 +153,8 @@ bool SharedGPUAssets::OnAssetsDirty()
         if (!_LoadBarkTextures(cl, commonPasses)) { cl->close(); return false; }
     }
 
-    if (!_BakeImpostors(cl)) { cl->close(); return false; }
+    if (!_RebuildLeafBuffers(cl)) { cl->close(); return false; }
+    if (!_BakeImpostors(cl))      { cl->close(); return false; }
 
     cl->close();
     m_Device->executeCommandList(cl);
@@ -225,7 +227,28 @@ bool SharedGPUAssets::_InitBakePipeline()
             .setAllAddressModes(nvrhi::SamplerAddressMode::Wrap)
             .setAllFilters(true)
             .setMaxAnisotropy(8.f));
-    return m_BarkSampler != nullptr;
+    if (!m_BarkSampler) return false;
+
+    // Leaf bake pipeline — separate root layout (b0 mvp shared with trunk path,
+    // b1 leaf push constant, t0 leaf instance buffer).
+    m_LeafBakeVS = m_ShaderFactory->CreateShader(
+        "app/ImpostorBake.hlsl", "leaf_bake_vs", nullptr, nvrhi::ShaderType::Vertex);
+    m_LeafBakePS = m_ShaderFactory->CreateShader(
+        "app/ImpostorBake.hlsl", "leaf_bake_ps", nullptr, nvrhi::ShaderType::Pixel);
+    if (!m_LeafBakeVS || !m_LeafBakePS) {
+        donut::log::error("SharedGPUAssets: leaf bake shaders failed to compile");
+        return false;
+    }
+
+    nvrhi::BindingLayoutDesc leafBLD;
+    leafBLD.visibility = nvrhi::ShaderType::All;
+    leafBLD.bindings = {
+        nvrhi::BindingLayoutItem::VolatileConstantBuffer(compute_reg::ImpostorBake::kCB_Bake),
+        nvrhi::BindingLayoutItem::PushConstants(1, sizeof(uint32_t) * 4),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0),
+    };
+    m_LeafBakeBindingLayout = m_Device->createBindingLayout(leafBLD);
+    return m_LeafBakeBindingLayout != nullptr;
 }
 
 bool SharedGPUAssets::_LoadBarkTextures(nvrhi::ICommandList* cl, engine::CommonRenderPasses& commonPasses)
@@ -260,6 +283,90 @@ bool SharedGPUAssets::_LoadBarkTextures(nvrhi::ICommandList* cl, engine::CommonR
             return false;
         }
     }
+    return true;
+}
+
+bool SharedGPUAssets::_RebuildLeafBuffers(nvrhi::ICommandList* cl)
+{
+    const auto& assets = m_Registry.getAssets();
+    const uint32_t numAssets = static_cast<uint32_t>(assets.size());
+    const uint32_t numLods = static_cast<uint32_t>(m_Registry.getLodSegments().size());
+
+    std::vector<Scene::LeafInstance> leaves;
+    std::vector<Scene::LeafSlot> mainSlots(std::max(1u, numAssets * numLods));
+    std::vector<Scene::LeafSlot> shadowSlots(std::max(1u, numAssets * Render::c_NumCascades));
+    std::vector<Scene::LeafMeshlet> meshlets;
+
+    for (uint32_t ai = 0; ai < numAssets; ai++) {
+        const auto& leafAsset = assets[ai].leafAsset;
+        const uint32_t leafBase = static_cast<uint32_t>(leaves.size());
+        const uint32_t meshletBase = static_cast<uint32_t>(meshlets.size());
+
+        leaves.insert(leaves.end(), leafAsset.instances.begin(), leafAsset.instances.end());
+
+        meshlets.reserve(meshlets.size() + leafAsset.meshlets.size());
+        for (Scene::LeafMeshlet meshlet : leafAsset.meshlets) {
+            meshlet.meta.x += leafBase;
+            meshlets.push_back(meshlet);
+        }
+
+        for (uint32_t lod = 0; lod < numLods; lod++) {
+            Scene::LeafSlot slot{};
+            if (lod < leafAsset.lodSlots.size()) {
+                slot = leafAsset.lodSlots[lod];
+                slot.leafOffset += leafBase;
+                slot.meshletOffset += meshletBase;
+            }
+            mainSlots[ai * numLods + lod] = slot;
+        }
+
+        const uint32_t lowestLod = numLods > 0 ? numLods - 1 : 0;
+        Scene::LeafSlot shadowSlot{};
+        if (lowestLod < leafAsset.lodSlots.size()) {
+            shadowSlot = leafAsset.lodSlots[lowestLod];
+            shadowSlot.leafOffset += leafBase;
+            shadowSlot.meshletOffset += meshletBase;
+        }
+        for (uint32_t c = 0; c < Render::c_NumCascades; c++)
+            shadowSlots[ai * Render::c_NumCascades + c] = shadowSlot;
+    }
+
+    if (leaves.empty()) leaves.push_back(Scene::LeafInstance{});
+    if (meshlets.empty()) meshlets.push_back(Scene::LeafMeshlet{});
+
+    auto uploadStructured = [&](nvrhi::BufferHandle& out, const void* data, size_t bytes,
+                                uint32_t stride, const char* debugName) {
+        out = m_Device->createBuffer(
+            nvrhi::BufferDesc()
+                .setByteSize(std::max<size_t>(bytes, stride))
+                .setStructStride(stride)
+                .setDebugName(debugName)
+                .setInitialState(nvrhi::ResourceStates::CopyDest));
+        if (!out) return false;
+
+        cl->beginTrackingBufferState(out, nvrhi::ResourceStates::CopyDest);
+        if (data && bytes > 0) cl->writeBuffer(out, data, bytes);
+        cl->setPermanentBufferState(out, nvrhi::ResourceStates::ShaderResource);
+        return true;
+    };
+
+    if (!uploadStructured(m_LeafInstancesBuffer, leaves.data(),
+                          leaves.size() * sizeof(Scene::LeafInstance),
+                          sizeof(Scene::LeafInstance), "Shared_LeafInstances"))
+        return false;
+    if (!uploadStructured(m_LeafSlotsBuffer, mainSlots.data(),
+                          mainSlots.size() * sizeof(Scene::LeafSlot),
+                          sizeof(Scene::LeafSlot), "Shared_LeafSlots"))
+        return false;
+    if (!uploadStructured(m_LeafShadowSlotsBuffer, shadowSlots.data(),
+                          shadowSlots.size() * sizeof(Scene::LeafSlot),
+                          sizeof(Scene::LeafSlot), "Shared_LeafShadowSlots"))
+        return false;
+    if (!uploadStructured(m_LeafMeshletsBuffer, meshlets.data(),
+                          meshlets.size() * sizeof(Scene::LeafMeshlet),
+                          sizeof(Scene::LeafMeshlet), "Shared_LeafMeshlets"))
+        return false;
+
     return true;
 }
 
@@ -385,6 +492,31 @@ bool SharedGPUAssets::_BakeImpostors(nvrhi::ICommandList* cl)
     m_BakePipeline = m_Device->createGraphicsPipeline(psoDesc, pipelineProtoFB->getFramebufferInfo());
     if (!m_BakePipeline) return false;
 
+    // Leaf bake pipeline + binding set. Reuses the trunk constant buffer for mvp;
+    // leaf-instance offset/count comes through push constants per draw.
+    if (m_LeafBakeBindingLayout && m_LeafBakeVS && m_LeafBakePS && m_LeafInstancesBuffer) {
+        nvrhi::BindingSetDesc leafBSD;
+        leafBSD.bindings = {
+            nvrhi::BindingSetItem::ConstantBuffer(compute_reg::ImpostorBake::kCB_Bake, m_BakeConstantBuffer),
+            nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t) * 4),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_LeafInstancesBuffer),
+        };
+        m_LeafBakeBindingSet = m_Device->createBindingSet(leafBSD, m_LeafBakeBindingLayout);
+        if (!m_LeafBakeBindingSet) return false;
+
+        nvrhi::GraphicsPipelineDesc leafPso;
+        leafPso.VS = m_LeafBakeVS;
+        leafPso.PS = m_LeafBakePS;
+        leafPso.inputLayout = nullptr;
+        leafPso.bindingLayouts = { m_LeafBakeBindingLayout };
+        leafPso.primType = nvrhi::PrimitiveType::TriangleList;
+        leafPso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
+        leafPso.renderState.rasterState.setCullNone();
+        m_LeafBakePipeline = m_Device->createGraphicsPipeline(
+            leafPso, pipelineProtoFB->getFramebufferInfo());
+        if (!m_LeafBakePipeline) return false;
+    }
+
     nvrhi::GraphicsState state;
     state.pipeline = m_BakePipeline;
     state.viewport.addViewportAndScissorRect(nvrhi::Viewport(
@@ -427,6 +559,7 @@ bool SharedGPUAssets::_BakeImpostors(nvrhi::ICommandList* cl)
         return buf;
     };
 
+    const uint32_t numLodsAll = static_cast<uint32_t>(m_Registry.getLodSegments().size());
     for (uint32_t ai = 0; ai < numAssets; ai++) {
         const auto& asset = assets[ai];
         if (asset.lods.empty()) continue;
@@ -453,6 +586,21 @@ bool SharedGPUAssets::_BakeImpostors(nvrhi::ICommandList* cl)
         };
         state.indexBuffer = { idxBuf, nvrhi::Format::R32_UINT, 0 };
 
+        // LOD0 leaf slot drives the asset-local leaf bake (full leaf set).
+        uint32_t leafOffset = 0;
+        uint32_t leafCount  = 0;
+        if (numLodsAll > 0 && !asset.leafAsset.lodSlots.empty()) {
+            const Scene::LeafSlot& slot = asset.leafAsset.lodSlots[0];
+            // Slot offsets in m_LeafSlotsBuffer were patched with global leafBase in
+            // _RebuildLeafBuffers; re-derive the global offset by re-reading the
+            // patched slot via the same stride math.
+            uint32_t base = 0;
+            for (uint32_t prev = 0; prev < ai; prev++)
+                base += static_cast<uint32_t>(assets[prev].leafAsset.instances.size());
+            leafOffset = base + slot.leafOffset;  // slot.leafOffset is asset-local (always 0 for now)
+            leafCount  = slot.leafCount;
+        }
+
         for (uint32_t vi = 0; vi < k_ImpostorViewCount; vi++) {
             const uint32_t slice = ai * k_ImpostorViewCount + vi;
             nvrhi::FramebufferHandle framebuffer = (slice == 0)
@@ -464,6 +612,7 @@ bool SharedGPUAssets::_BakeImpostors(nvrhi::ICommandList* cl)
             nvrhi::utils::ClearColorAttachment(cl, framebuffer, 1, nvrhi::Color(0.5f, 0.5f, 1.f, 0.f));
             nvrhi::utils::ClearDepthStencilAttachment(cl, framebuffer, 1.f, 0);
 
+            // Bake bbox covers leaves too (asset.lods[0].bbox is union including leaf bbox).
             ImpostorBakeCB cb;
             cb.mvp = BuildtoProjTransform(lod.bbox, vi);
             cl->writeBuffer(m_BakeConstantBuffer, &cb, sizeof(cb));
@@ -471,6 +620,20 @@ bool SharedGPUAssets::_BakeImpostors(nvrhi::ICommandList* cl)
             state.framebuffer = framebuffer;
             cl->setGraphicsState(state);
             cl->drawIndexed(nvrhi::DrawArguments().setVertexCount(static_cast<uint32_t>(lod.indices.size())));
+
+            if (leafCount > 0 && m_LeafBakePipeline && m_LeafBakeBindingSet) {
+                nvrhi::GraphicsState leafState;
+                leafState.pipeline    = m_LeafBakePipeline;
+                leafState.framebuffer = framebuffer;
+                leafState.bindings    = { m_LeafBakeBindingSet };
+                leafState.viewport.addViewportAndScissorRect(nvrhi::Viewport(
+                    float(k_ImpostorBakeResolution), float(k_ImpostorBakeResolution)));
+                cl->setGraphicsState(leafState);
+
+                uint32_t pc[4] = { leafOffset, leafCount, 0u, 0u };
+                cl->setPushConstants(pc, sizeof(pc));
+                cl->draw(nvrhi::DrawArguments().setVertexCount(leafCount * 12u));
+            }
         }
     }
 

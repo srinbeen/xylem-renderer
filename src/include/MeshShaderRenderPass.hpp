@@ -113,6 +113,8 @@ private:
         nvrhi::BufferHandle              mainCountBuffer;
         nvrhi::BufferHandle              mainVisBuffer;
         nvrhi::BufferHandle              mainDispatchArgsBuffer;
+        nvrhi::BufferHandle              mainLeafASInvocsPerSlotBuffer;  // SRV, AS groups per leaf-slot per instance
+        nvrhi::BufferHandle              mainLeafDispatchArgsBuffer;     // UAV + indirect, parallel to mainDispatchArgsBuffer
 
         // Shadow slot buffers (numShadowSlots = numAssets * NUM_CASCADES, LOD 0 only)
         nvrhi::BufferHandle              shadowSlotOffsetBuffer;
@@ -120,6 +122,8 @@ private:
         nvrhi::BufferHandle              shadowCountBuffer;
         nvrhi::BufferHandle              shadowVisBuffer;
         nvrhi::BufferHandle              shadowDispatchArgsBuffer;
+        nvrhi::BufferHandle              shadowLeafASInvocsPerSlotBuffer;
+        nvrhi::BufferHandle              shadowLeafDispatchArgsBuffer;
         nvrhi::BufferHandle              shadowUniqueCounter;   // UAV raw, single uint32
 
         // Impostor terminal-LOD slot buffers (numAssets slots, one per asset)
@@ -141,6 +145,31 @@ private:
         nvrhi::BindingLayoutHandle       bindingLayout;
         std::vector<nvrhi::BindingSetHandle> bindingSets;
         nvrhi::MeshletPipelineHandle     pipeline;
+    };
+
+    // Leaf AS/MS pipelines mirror DrawResources but consume LeafCommon.hlsli's
+    // SRV layout (b0..b1, t0..t8) and the shared leaf instance/slot/meshlet
+    // buffers from SharedGPUAssets. Three pipelines: main color, depth prepass,
+    // and shadow. v1 has no per-leaf-meshlet cull — AS dispatch count is fixed
+    // by leaf meshlet count for visible trees.
+    struct LeafDrawResources {
+        nvrhi::ShaderHandle              amplificationShader;
+        nvrhi::ShaderHandle              meshShader;
+        nvrhi::ShaderHandle              depthMS;
+        nvrhi::ShaderHandle              shadowMS;
+        nvrhi::ShaderHandle              pixelShader;
+        nvrhi::BindingLayoutHandle       mainLayout;
+        nvrhi::BindingLayoutHandle       depthLayout;
+        nvrhi::BindingLayoutHandle       shadowLayout;
+        nvrhi::BindingSetHandle          mainBindingSet;
+        nvrhi::BindingSetHandle          depthBindingSet;
+        nvrhi::BindingSetHandle          shadowBindingSet;
+        nvrhi::MeshletPipelineHandle     mainPipeline;
+        nvrhi::MeshletPipelineHandle     depthPipeline;
+        nvrhi::MeshletPipelineHandle     shadowPipeline;
+        nvrhi::RefCountPtr<ID3D12CommandSignature> mainSignature;
+        nvrhi::RefCountPtr<ID3D12CommandSignature> depthSignature;
+        nvrhi::RefCountPtr<ID3D12CommandSignature> shadowSignature;
     };
 
     // Hemi-octahedral impostor *render* side. Atlas, asset-dims, debug atlases,
@@ -240,6 +269,7 @@ private:
         MeshletResources      sceneMeshletData;
         CullPassResources     cull;
         DrawResources         sceneDraw;
+        LeafDrawResources     sceneLeaves;
         ImpostorPassResources impostor;
         ShadowPassResources   shadow;
         DepthPrepassResources depthPrepass;
@@ -277,6 +307,7 @@ private:
     uint32_t                                          m_NumMainSlots = 0;
     std::vector<uint32_t>                             m_MainSlotOffsets;
     std::vector<uint32_t>                             m_MainASInvocsPerSlot;
+    std::vector<uint32_t>                             m_MainLeafASInvocsPerSlot;
     std::vector<uint32_t>                             m_MainSlotTextureSet;
     uint32_t                                          m_MainVisBufferSize = 0;
 
@@ -284,6 +315,7 @@ private:
     uint32_t                                          m_NumShadowSlots = 0;
     std::vector<uint32_t>                             m_ShadowSlotOffsets;
     std::vector<uint32_t>                             m_ShadowASInvocsPerSlot;
+    std::vector<uint32_t>                             m_ShadowLeafASInvocsPerSlot;
     uint32_t                                          m_ShadowVisBufferSize = 0;
 
     // Impostor terminal-LOD slot layout (per-asset: numAssets slots)
@@ -295,6 +327,8 @@ private:
     struct DispatchRecord { uint32_t slotIdx; uint32_t gx; uint32_t gy; uint32_t gz; };
     std::vector<DispatchRecord>                       m_MainDispatchArgsStaging;
     std::vector<DispatchRecord>                       m_ShadowDispatchArgsStaging;
+    std::vector<DispatchRecord>                       m_MainLeafDispatchArgsStaging;
+    std::vector<DispatchRecord>                       m_ShadowLeafDispatchArgsStaging;
 
     // Readback ring: [main counts][shadow counts][impostor counts][shadow unique]
     nvrhi::BufferHandle                               m_ReadbackBuffers[k_QueuedFrames];
@@ -313,6 +347,7 @@ private:
     // -----------------------------------------------------------------------
     bool _InitShared();
     bool _InitDrawResources();
+    bool _InitLeafResources();
     bool _InitCullResources();
     bool _InitShadowPass();
     bool _InitDepthPrepass();
@@ -331,11 +366,14 @@ private:
     void _RebuildDrawBindingSet();
     void _RebuildShadowBindingSet();
     void _RebuildDepthPrepassBindingSet();
+    void _RebuildLeafBindingSets();
 
     void _CreateMainPipelineIfNeeded(nvrhi::IFramebuffer* framebuffer);
     void _CreateShadowPipelineIfNeeded();
     void _CreateDepthPrepassPipelineIfNeeded();
+    void _CreateLeafPipelinesIfNeeded(nvrhi::IFramebuffer* framebuffer);
     void _EnsureDispatchMeshSignatures();
+    void _EnsureLeafDispatchMeshSignatures();
 
     // Per-frame helpers
     void _EnsureHiZResources(uint32_t width, uint32_t height);

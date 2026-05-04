@@ -41,6 +41,7 @@ bool MeshShaderRenderPass::Init() {
     // binding layouts, command signatures. None of these touch m_Registry.
     if (!_InitShared())         return false;
     if (!_InitDrawResources())  return false;
+    if (!_InitLeafResources())  return false;
     if (!_InitCullResources())  return false;
     if (!_InitShadowPass())     return false;
     if (!_InitDepthPrepass())   return false;
@@ -71,6 +72,7 @@ bool MeshShaderRenderPass::LoadResources() {
     _RebuildDrawBindingSet();
     _RebuildShadowBindingSet();
     _RebuildDepthPrepassBindingSet();
+    _RebuildLeafBindingSets();
     _RebuildImpostorBindingSets();
 
     initCL->close();
@@ -177,6 +179,68 @@ bool MeshShaderRenderPass::_InitDrawResources() {
     return m_StageResources.sceneDraw.bindingLayout != nullptr;
 }
 
+bool MeshShaderRenderPass::_InitLeafResources() {
+    if (!m_ShaderFactory) return false;
+
+    auto& L = m_StageResources.sceneLeaves;
+    L.amplificationShader = m_ShaderFactory->CreateShader("app/MeshLeaves.hlsl",
+        "leaf_as", nullptr, nvrhi::ShaderType::Amplification);
+    L.meshShader = m_ShaderFactory->CreateShader("app/MeshLeaves.hlsl",
+        "leaf_ms", nullptr, nvrhi::ShaderType::Mesh);
+    L.depthMS = m_ShaderFactory->CreateShader("app/MeshLeaves.hlsl",
+        "leaf_depth_ms", nullptr, nvrhi::ShaderType::Mesh);
+    L.shadowMS = m_ShaderFactory->CreateShader("app/MeshLeaves.hlsl",
+        "leaf_shadow_ms", nullptr, nvrhi::ShaderType::Mesh);
+    L.pixelShader = m_ShaderFactory->CreateShader("app/MeshLeaves.hlsl",
+        "leaf_ps", nullptr, nvrhi::ShaderType::Pixel);
+    if (!L.amplificationShader || !L.meshShader || !L.depthMS || !L.shadowMS || !L.pixelShader) {
+        log::error("MeshShaderRenderPass: leaf AS/MS/PS compile failed");
+        return false;
+    }
+
+    // Main color: b0 CB, b1 push, t0..t8 SRVs, s0 sampler. Mirrors MeshLeaves.hlsl.
+    nvrhi::BindingLayoutDesc mainBLD;
+    mainBLD.visibility = nvrhi::ShaderType::All;
+    mainBLD.bindings = {
+        nvrhi::BindingLayoutItem::ConstantBuffer(0),
+        nvrhi::BindingLayoutItem::PushConstants(1, sizeof(uint32_t)),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(4),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(5),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(6),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(7),
+        nvrhi::BindingLayoutItem::Texture_SRV(8),
+        nvrhi::BindingLayoutItem::Sampler(0),
+    };
+    L.mainLayout = GetDevice()->createBindingLayout(mainBLD);
+    if (!L.mainLayout) return false;
+
+    // Depth prepass: same SRVs t0..t7, no shadow texture/sampler.
+    nvrhi::BindingLayoutDesc depthBLD;
+    depthBLD.visibility = nvrhi::ShaderType::All;
+    depthBLD.bindings = {
+        nvrhi::BindingLayoutItem::ConstantBuffer(0),
+        nvrhi::BindingLayoutItem::PushConstants(1, sizeof(uint32_t)),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(4),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(5),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(6),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(7),
+    };
+    L.depthLayout = GetDevice()->createBindingLayout(depthBLD);
+    if (!L.depthLayout) return false;
+
+    // Shadow: same as depth but bound to shadow vis/slot/count buffers + shadow leaf slots.
+    L.shadowLayout = GetDevice()->createBindingLayout(depthBLD);
+    return L.shadowLayout != nullptr;
+}
+
 bool MeshShaderRenderPass::_InitCullResources() {
     if (!m_ShaderFactory) return false;
 
@@ -203,6 +267,8 @@ bool MeshShaderRenderPass::_InitCullResources() {
         nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Cull::kSRV_ShadowSlotOffsets),
         nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Cull::kSRV_ShadowInvocations),
         nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Cull::kSRV_ImpostorSlotOffsets),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Cull::kSRV_MainLeafInvocations),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Cull::kSRV_ShadowLeafInvocations),
 
         nvrhi::BindingLayoutItem::StructuredBuffer_UAV(mesh_reg::Cull::kUAV_MainRegionVis),
         nvrhi::BindingLayoutItem::StructuredBuffer_UAV(mesh_reg::Cull::kUAV_MainCount),
@@ -215,6 +281,8 @@ bool MeshShaderRenderPass::_InitCullResources() {
         nvrhi::BindingLayoutItem::StructuredBuffer_UAV(mesh_reg::Cull::kUAV_ImpostorCount),
         nvrhi::BindingLayoutItem::StructuredBuffer_UAV(mesh_reg::Cull::kUAV_ImpostorVis),
         nvrhi::BindingLayoutItem::RawBuffer_UAV(mesh_reg::Cull::kUAV_ImpostorIndirectArgs),
+        nvrhi::BindingLayoutItem::RawBuffer_UAV(mesh_reg::Cull::kUAV_MainLeafDispatch),
+        nvrhi::BindingLayoutItem::RawBuffer_UAV(mesh_reg::Cull::kUAV_ShadowLeafDispatch),
 
         nvrhi::BindingLayoutItem::Texture_SRV(mesh_reg::Cull::kSRV_HiZ),
         nvrhi::BindingLayoutItem::Sampler(mesh_reg::Cull::kSampler_HiZ),
@@ -400,20 +468,6 @@ void MeshShaderRenderPass::_RebuildMeshletMegabuffers(nvrhi::ICommandList* /*cl*
                 desc.bounds         = dm::float4(b.center[0],   b.center[1],   b.center[2],   b.radius);
                 desc.coneApex       = dm::float4(b.cone_apex[0],b.cone_apex[1],b.cone_apex[2], 0.f);
                 desc.coneAxisCutoff = dm::float4(b.cone_axis[0],b.cone_axis[1],b.cone_axis[2], b.cone_cutoff);
-
-                // Disable AS cone culling for any meshlet that contains leaf vertices.
-                // Leaf cross-billboards have triangles facing four different directions —
-                // meshopt usually returns cone_cutoff = 1 (disabled) for such divergent
-                // clusters, but a mixed trunk + leaf meshlet could get a misleading cone
-                // that culls the trunk part incorrectly. Forcing cutoff = 1 is cheap and
-                // bulletproof. Detection is via the uv.x < 0 sentinel set in emitLeafCrosses.
-                for (uint32_t v = 0; v < m.vertex_count; ++v) {
-                    const uint32_t localIdx = mlVerts[m.vertex_offset + v];
-                    if (localIdx < lod.uvs.size() && lod.uvs[localIdx].x < 0.f) {
-                        desc.coneAxisCutoff.w = 1.f;
-                        break;
-                    }
-                }
                 meshletDescs.push_back(desc);
 
                 meshletVerts.insert(meshletVerts.end(),
@@ -578,8 +632,10 @@ void MeshShaderRenderPass::_BuildSlotLayout() {
     // Main slots (asset x LOD)
     m_MainSlotOffsets.assign(m_NumMainSlots, 0);
     m_MainASInvocsPerSlot.assign(m_NumMainSlots, 0);
+    m_MainLeafASInvocsPerSlot.assign(m_NumMainSlots, 0);
     m_MainSlotTextureSet.assign(m_NumMainSlots, 0);
     m_MainDispatchArgsStaging.assign(m_NumMainSlots, {0, 0, 1, 1});
+    m_MainLeafDispatchArgsStaging.assign(m_NumMainSlots, {0, 0, 1, 1});
     m_MainVisBufferSize = 0;
 
     for (uint32_t ai = 0; ai < numAssets; ai++) {
@@ -594,6 +650,16 @@ void MeshShaderRenderPass::_BuildSlotLayout() {
                 (meshletCount + Render::k_ASGroupSize - 1) / Render::k_ASGroupSize);
             m_MainASInvocsPerSlot[slot] = invocations;
             m_MainDispatchArgsStaging[slot].slotIdx = slot;
+            m_MainLeafDispatchArgsStaging[slot].slotIdx = slot;
+
+            // Leaf AS invocations per visible instance: ceil(leafMeshletCount / AS_GROUP_SIZE).
+            // Zero when the asset has no leaves at this LOD; cull shader skips the increment.
+            uint32_t leafMeshletCount = 0;
+            if (ai < assets.size() && lodi < assets[ai].leafAsset.lodSlots.size())
+                leafMeshletCount = assets[ai].leafAsset.lodSlots[lodi].meshletCount;
+            m_MainLeafASInvocsPerSlot[slot] = leafMeshletCount > 0
+                ? (leafMeshletCount + Render::k_ASGroupSize - 1) / Render::k_ASGroupSize
+                : 0u;
 
             if (ai < assets.size()) {
                 uint32_t textureSet = assets[ai].textureSetIdx;
@@ -609,9 +675,12 @@ void MeshShaderRenderPass::_BuildSlotLayout() {
     // Shadow slots (asset x cascade, LOD 0 only)
     m_ShadowSlotOffsets.assign(m_NumShadowSlots, 0);
     m_ShadowASInvocsPerSlot.assign(m_NumShadowSlots, 0);
+    m_ShadowLeafASInvocsPerSlot.assign(m_NumShadowSlots, 0);
     m_ShadowDispatchArgsStaging.assign(m_NumShadowSlots, {0, 0, 1, 1});
+    m_ShadowLeafDispatchArgsStaging.assign(m_NumShadowSlots, {0, 0, 1, 1});
     m_ShadowVisBufferSize = 0;
 
+    const uint32_t lowestLod = numLods > 0 ? numLods - 1 : 0;
     for (uint32_t ai = 0; ai < numAssets; ai++) {
         for (uint32_t c = 0; c < nCasc; c++) {
             uint32_t slot = ai * nCasc + c;
@@ -621,7 +690,6 @@ void MeshShaderRenderPass::_BuildSlotLayout() {
             // Shadow casts from the lowest (coarsest) LOD to match the compute
             // pipeline. Casting from LOD 0 (round) while the color pass renders
             // LOD N-1 (square inscribed in that circle) self-shadows every face.
-            uint32_t lowestLod     = numLods > 0 ? numLods - 1 : 0;
             uint32_t shadowLodSlot = ai * numLods + lowestLod;
             uint32_t meshletCount = (shadowLodSlot < m_MeshletMegabuffers.meshOffsets.size())
                 ? m_MeshletMegabuffers.meshOffsets[shadowLodSlot].meshletCount : 0u;
@@ -629,6 +697,14 @@ void MeshShaderRenderPass::_BuildSlotLayout() {
                 (meshletCount + Render::k_ASGroupSize - 1) / Render::k_ASGroupSize);
             m_ShadowASInvocsPerSlot[slot] = invocations;
             m_ShadowDispatchArgsStaging[slot].slotIdx = slot;
+            m_ShadowLeafDispatchArgsStaging[slot].slotIdx = slot;
+
+            uint32_t leafMeshletCount = 0;
+            if (ai < assets.size() && lowestLod < assets[ai].leafAsset.lodSlots.size())
+                leafMeshletCount = assets[ai].leafAsset.lodSlots[lowestLod].meshletCount;
+            m_ShadowLeafASInvocsPerSlot[slot] = leafMeshletCount > 0
+                ? (leafMeshletCount + Render::k_ASGroupSize - 1) / Render::k_ASGroupSize
+                : 0u;
         }
     }
     m_ShadowVisBufferSize = std::max(1u, m_ShadowVisBufferSize);
@@ -723,6 +799,26 @@ void MeshShaderRenderPass::_UploadCullBuffers(nvrhi::ICommandList* cl) {
         m_NumShadowSlots * sizeof(uint32_t));
     cl->setPermanentBufferState(m_StageResources.cull.shadowASInvocsPerSlotBuffer, nvrhi::ResourceStates::ShaderResource);
 
+    m_StageResources.cull.mainLeafASInvocsPerSlotBuffer = device->createBuffer(nvrhi::BufferDesc()
+        .setByteSize(m_NumMainSlots * sizeof(uint32_t))
+        .setStructStride(sizeof(uint32_t))
+        .setDebugName("Mesh_MainLeafASInvocsPerSlotBuffer")
+        .setInitialState(nvrhi::ResourceStates::CopyDest));
+    cl->beginTrackingBufferState(m_StageResources.cull.mainLeafASInvocsPerSlotBuffer, nvrhi::ResourceStates::CopyDest);
+    cl->writeBuffer(m_StageResources.cull.mainLeafASInvocsPerSlotBuffer, m_MainLeafASInvocsPerSlot.data(),
+        m_NumMainSlots * sizeof(uint32_t));
+    cl->setPermanentBufferState(m_StageResources.cull.mainLeafASInvocsPerSlotBuffer, nvrhi::ResourceStates::ShaderResource);
+
+    m_StageResources.cull.shadowLeafASInvocsPerSlotBuffer = device->createBuffer(nvrhi::BufferDesc()
+        .setByteSize(m_NumShadowSlots * sizeof(uint32_t))
+        .setStructStride(sizeof(uint32_t))
+        .setDebugName("Mesh_ShadowLeafASInvocsPerSlotBuffer")
+        .setInitialState(nvrhi::ResourceStates::CopyDest));
+    cl->beginTrackingBufferState(m_StageResources.cull.shadowLeafASInvocsPerSlotBuffer, nvrhi::ResourceStates::CopyDest);
+    cl->writeBuffer(m_StageResources.cull.shadowLeafASInvocsPerSlotBuffer, m_ShadowLeafASInvocsPerSlot.data(),
+        m_NumShadowSlots * sizeof(uint32_t));
+    cl->setPermanentBufferState(m_StageResources.cull.shadowLeafASInvocsPerSlotBuffer, nvrhi::ResourceStates::ShaderResource);
+
     // --- UAVs ---
     m_StageResources.cull.regionVisibleBuffer = device->createBuffer(nvrhi::BufferDesc()
         .setByteSize(numRegions * sizeof(uint32_t))
@@ -770,6 +866,22 @@ void MeshShaderRenderPass::_UploadCullBuffers(nvrhi::ICommandList* cl) {
     m_StageResources.cull.shadowDispatchArgsBuffer = device->createBuffer(nvrhi::BufferDesc()
         .setByteSize(m_NumShadowSlots * sizeof(DispatchRecord))
         .setDebugName("Mesh_ShadowDispatchArgsBuffer")
+        .setIsDrawIndirectArgs(true)
+        .setCanHaveUAVs(true)
+        .setCanHaveRawViews(true)
+        .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess));
+
+    m_StageResources.cull.mainLeafDispatchArgsBuffer = device->createBuffer(nvrhi::BufferDesc()
+        .setByteSize(m_NumMainSlots * sizeof(DispatchRecord))
+        .setDebugName("Mesh_MainLeafDispatchArgsBuffer")
+        .setIsDrawIndirectArgs(true)
+        .setCanHaveUAVs(true)
+        .setCanHaveRawViews(true)
+        .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess));
+
+    m_StageResources.cull.shadowLeafDispatchArgsBuffer = device->createBuffer(nvrhi::BufferDesc()
+        .setByteSize(m_NumShadowSlots * sizeof(DispatchRecord))
+        .setDebugName("Mesh_ShadowLeafDispatchArgsBuffer")
         .setIsDrawIndirectArgs(true)
         .setCanHaveUAVs(true)
         .setCanHaveRawViews(true)
@@ -831,6 +943,12 @@ void MeshShaderRenderPass::_UploadCullBuffers(nvrhi::ICommandList* cl) {
     cl->writeBuffer(m_StageResources.cull.shadowDispatchArgsBuffer,
         m_ShadowDispatchArgsStaging.data(),
         m_ShadowDispatchArgsStaging.size() * sizeof(DispatchRecord));
+    cl->writeBuffer(m_StageResources.cull.mainLeafDispatchArgsBuffer,
+        m_MainLeafDispatchArgsStaging.data(),
+        m_MainLeafDispatchArgsStaging.size() * sizeof(DispatchRecord));
+    cl->writeBuffer(m_StageResources.cull.shadowLeafDispatchArgsBuffer,
+        m_ShadowLeafDispatchArgsStaging.data(),
+        m_ShadowLeafDispatchArgsStaging.size() * sizeof(DispatchRecord));
 
     // Pre-fill impostor indirect args: vertexCount=4 (triangle-strip quad),
     // instanceCount=0 (CS atomically increments each frame).
@@ -881,6 +999,8 @@ void MeshShaderRenderPass::_RebuildCullBindingSet() {
         nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Cull::kSRV_ShadowSlotOffsets, m_StageResources.cull.shadowSlotOffsetBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Cull::kSRV_ShadowInvocations,   m_StageResources.cull.shadowASInvocsPerSlotBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Cull::kSRV_ImpostorSlotOffsets, m_StageResources.cull.impostorSlotOffsetBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Cull::kSRV_MainLeafInvocations, m_StageResources.cull.mainLeafASInvocsPerSlotBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Cull::kSRV_ShadowLeafInvocations, m_StageResources.cull.shadowLeafASInvocsPerSlotBuffer),
 
         nvrhi::BindingSetItem::StructuredBuffer_UAV(mesh_reg::Cull::kUAV_MainRegionVis,  m_StageResources.cull.regionVisibleBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_UAV(mesh_reg::Cull::kUAV_MainCount,      m_StageResources.cull.mainCountBuffer),
@@ -893,6 +1013,8 @@ void MeshShaderRenderPass::_RebuildCullBindingSet() {
         nvrhi::BindingSetItem::StructuredBuffer_UAV(mesh_reg::Cull::kUAV_ImpostorCount,  m_StageResources.cull.impostorCountBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_UAV(mesh_reg::Cull::kUAV_ImpostorVis,    m_StageResources.cull.impostorVisBuffer),
         nvrhi::BindingSetItem::RawBuffer_UAV(mesh_reg::Cull::kUAV_ImpostorIndirectArgs,  m_StageResources.cull.impostorIndirectArgsBuffer),
+        nvrhi::BindingSetItem::RawBuffer_UAV(mesh_reg::Cull::kUAV_MainLeafDispatch,      m_StageResources.cull.mainLeafDispatchArgsBuffer),
+        nvrhi::BindingSetItem::RawBuffer_UAV(mesh_reg::Cull::kUAV_ShadowLeafDispatch,    m_StageResources.cull.shadowLeafDispatchArgsBuffer),
 
         nvrhi::BindingSetItem::Texture_SRV(mesh_reg::Cull::kSRV_HiZ, m_StageResources.hiz.hizTexture),
         nvrhi::BindingSetItem::Sampler(mesh_reg::Cull::kSampler_HiZ, m_StageResources.hiz.pointSampler),
@@ -971,6 +1093,75 @@ void MeshShaderRenderPass::_RebuildShadowBindingSet() {
     m_StageResources.shadow.bindingSet = GetDevice()->createBindingSet(bsd, m_StageResources.shadow.bindingLayout);
 }
 
+void MeshShaderRenderPass::_RebuildLeafBindingSets() {
+    auto& L = m_StageResources.sceneLeaves;
+    if (!L.mainLayout || !L.depthLayout || !L.shadowLayout) return;
+    if (!m_Shared || !m_Shared->leafInstancesBuffer()
+        || !m_Shared->leafSlotsBuffer() || !m_Shared->leafShadowSlotsBuffer()
+        || !m_Shared->leafMeshletsBuffer()) return;
+
+    // Main color leaves consume the trunk-cull main vis/count + leaf instance buffers.
+    // Layout matches MeshLeaves.hlsl: t0=Vis, t1=SlotOffsets, t2=SlotCounts, t3=Instances,
+    // t4=ASInvocsPerSlot, t5=Leaves, t6=LeafSlots, t7=LeafMeshlets, t8=ShadowMap.
+    {
+        nvrhi::BindingSetDesc bsd;
+        bsd.bindings = {
+            nvrhi::BindingSetItem::ConstantBuffer(0, m_StageResources.frameShared.constantBuffer,
+                nvrhi::BufferRange(0, shader_cb::kCullFrameSize)),
+            nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t)),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_StageResources.cull.mainVisBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_StageResources.cull.mainSlotOffsetBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_StageResources.cull.mainCountBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(3, m_StageResources.cull.persistentInstBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(4, m_StageResources.cull.mainLeafASInvocsPerSlotBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(5, m_Shared->leafInstancesBuffer()),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(6, m_Shared->leafSlotsBuffer()),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(7, m_Shared->leafMeshletsBuffer()),
+            nvrhi::BindingSetItem::Texture_SRV(8, m_StageResources.shadow.depthTexture),
+            nvrhi::BindingSetItem::Sampler(0, m_StageResources.sceneDraw.shadowSampler),
+        };
+        L.mainBindingSet = GetDevice()->createBindingSet(bsd, L.mainLayout);
+    }
+
+    // Depth prepass leaves: same as main but no shadow tex/sampler.
+    {
+        nvrhi::BindingSetDesc bsd;
+        bsd.bindings = {
+            nvrhi::BindingSetItem::ConstantBuffer(0, m_StageResources.frameShared.constantBuffer,
+                nvrhi::BufferRange(0, shader_cb::kCullFrameSize)),
+            nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t)),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_StageResources.cull.mainVisBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_StageResources.cull.mainSlotOffsetBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_StageResources.cull.mainCountBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(3, m_StageResources.cull.persistentInstBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(4, m_StageResources.cull.mainLeafASInvocsPerSlotBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(5, m_Shared->leafInstancesBuffer()),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(6, m_Shared->leafSlotsBuffer()),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(7, m_Shared->leafMeshletsBuffer()),
+        };
+        L.depthBindingSet = GetDevice()->createBindingSet(bsd, L.depthLayout);
+    }
+
+    // Shadow leaves: redirect to shadow-side cull buffers + shadow leaf slots.
+    {
+        nvrhi::BindingSetDesc bsd;
+        bsd.bindings = {
+            nvrhi::BindingSetItem::ConstantBuffer(0, m_StageResources.frameShared.constantBuffer,
+                nvrhi::BufferRange(0, shader_cb::kCullFrameSize)),
+            nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t)),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_StageResources.cull.shadowVisBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_StageResources.cull.shadowSlotOffsetBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_StageResources.cull.shadowCountBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(3, m_StageResources.cull.persistentInstBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(4, m_StageResources.cull.shadowLeafASInvocsPerSlotBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(5, m_Shared->leafInstancesBuffer()),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(6, m_Shared->leafShadowSlotsBuffer()),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(7, m_Shared->leafMeshletsBuffer()),
+        };
+        L.shadowBindingSet = GetDevice()->createBindingSet(bsd, L.shadowLayout);
+    }
+}
+
 // ===========================================================================
 // Hot-reload callbacks
 // ===========================================================================
@@ -993,6 +1184,7 @@ void MeshShaderRenderPass::onAssetsDirty(const std::vector<size_t>&) {
     _RebuildDrawBindingSet();
     _RebuildShadowBindingSet();
     _RebuildDepthPrepassBindingSet();
+    _RebuildLeafBindingSets();
     _RebuildImpostorBindingSets();
 }
 
@@ -1011,6 +1203,7 @@ void MeshShaderRenderPass::onRegionsDirty(const std::vector<size_t>&) {
     _RebuildDrawBindingSet();
     _RebuildShadowBindingSet();
     _RebuildDepthPrepassBindingSet();
+    _RebuildLeafBindingSets();
     _RebuildImpostorBindingSets();
 }
 
@@ -1103,6 +1296,103 @@ void MeshShaderRenderPass::_EnsureDispatchMeshSignatures() {
     makeSig(m_StageResources.shadow.pipeline, m_StageResources.shadow.dispatchMeshSignature,  "shadow");
 }
 
+void MeshShaderRenderPass::_CreateLeafPipelinesIfNeeded(nvrhi::IFramebuffer* framebuffer) {
+    auto& L = m_StageResources.sceneLeaves;
+
+    if (!L.mainPipeline && L.mainLayout && L.amplificationShader && L.meshShader && L.pixelShader) {
+        nvrhi::MeshletPipelineDesc psoDesc;
+        psoDesc.AS = L.amplificationShader;
+        psoDesc.MS = L.meshShader;
+        psoDesc.PS = L.pixelShader;
+        psoDesc.primType = nvrhi::PrimitiveType::TriangleList;
+        psoDesc.bindingLayouts = { L.mainLayout };
+        auto& rs = psoDesc.renderState;
+        rs.depthStencilState.depthTestEnable  = true;
+        rs.depthStencilState.depthWriteEnable = true;
+    #if XYLEM_USE_REVERSE_Z
+        rs.depthStencilState.depthFunc = nvrhi::ComparisonFunc::Greater;
+    #else
+        rs.depthStencilState.depthFunc = nvrhi::ComparisonFunc::Less;
+    #endif
+        rs.rasterState.cullMode = nvrhi::RasterCullMode::None;
+        L.mainPipeline = GetDevice()->createMeshletPipeline(psoDesc, framebuffer->getFramebufferInfo());
+    }
+
+    if (!L.depthPipeline && L.depthLayout && L.amplificationShader && L.depthMS
+        && m_StageResources.depthPrepass.framebuffer) {
+        nvrhi::MeshletPipelineDesc psoDesc;
+        psoDesc.AS = L.amplificationShader;
+        psoDesc.MS = L.depthMS;
+        psoDesc.primType = nvrhi::PrimitiveType::TriangleList;
+        psoDesc.bindingLayouts = { L.depthLayout };
+        auto& rs = psoDesc.renderState;
+        rs.depthStencilState.depthTestEnable  = true;
+        rs.depthStencilState.depthWriteEnable = true;
+    #if XYLEM_USE_REVERSE_Z
+        rs.depthStencilState.depthFunc = nvrhi::ComparisonFunc::GreaterOrEqual;
+    #else
+        rs.depthStencilState.depthFunc = nvrhi::ComparisonFunc::LessOrEqual;
+    #endif
+        rs.rasterState.cullMode = nvrhi::RasterCullMode::None;
+        L.depthPipeline = GetDevice()->createMeshletPipeline(
+            psoDesc, m_StageResources.depthPrepass.framebuffer->getFramebufferInfo());
+    }
+
+    if (!L.shadowPipeline && L.shadowLayout && L.amplificationShader && L.shadowMS
+        && m_StageResources.shadow.framebuffers[0]) {
+        nvrhi::MeshletPipelineDesc psoDesc;
+        psoDesc.AS = L.amplificationShader;
+        psoDesc.MS = L.shadowMS;
+        psoDesc.primType = nvrhi::PrimitiveType::TriangleList;
+        psoDesc.bindingLayouts = { L.shadowLayout };
+        auto& rs = psoDesc.renderState;
+        rs.depthStencilState.depthTestEnable  = true;
+        rs.depthStencilState.depthWriteEnable = true;
+        rs.depthStencilState.depthFunc = nvrhi::ComparisonFunc::Less;
+        rs.rasterState.cullMode = nvrhi::RasterCullMode::None;
+        rs.rasterState.depthBias = 2;
+        rs.rasterState.slopeScaledDepthBias = 2.5f;
+        L.shadowPipeline = GetDevice()->createMeshletPipeline(
+            psoDesc, m_StageResources.shadow.framebuffers[0]->getFramebufferInfo());
+    }
+}
+
+void MeshShaderRenderPass::_EnsureLeafDispatchMeshSignatures() {
+    ID3D12Device* d3dDevice = GetDevice()->getNativeObject(nvrhi::ObjectTypes::D3D12_Device);
+    if (!d3dDevice) return;
+
+    auto makeSig = [&](nvrhi::MeshletPipelineHandle pipe,
+                       nvrhi::RefCountPtr<ID3D12CommandSignature>& out,
+                       const char* dbgName) {
+        if (out || !pipe) return;
+        ID3D12RootSignature* rootSig = pipe->getNativeObject(nvrhi::ObjectTypes::D3D12_RootSignature);
+        if (!rootSig) return;
+
+        D3D12_INDIRECT_ARGUMENT_DESC args[2] = {};
+        args[0].Type = D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT;
+        args[0].Constant.RootParameterIndex      = mesh_reg::kPushC_RootParamIdx;
+        args[0].Constant.DestOffsetIn32BitValues = 0;
+        args[0].Constant.Num32BitValuesToSet     = 1;
+        args[1].Type = D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH_MESH;
+
+        D3D12_COMMAND_SIGNATURE_DESC desc = {};
+        desc.ByteStride       = sizeof(DispatchRecord);
+        desc.NumArgumentDescs = 2;
+        desc.pArgumentDescs   = args;
+
+        HRESULT hr = d3dDevice->CreateCommandSignature(&desc, rootSig, IID_PPV_ARGS(&out));
+        if (FAILED(hr)) {
+            log::error("MeshShaderRenderPass: CreateCommandSignature(leaf %s) failed (0x%08x)", dbgName, hr);
+            out = nullptr;
+        }
+    };
+
+    auto& L = m_StageResources.sceneLeaves;
+    makeSig(L.mainPipeline,   L.mainSignature,   "main");
+    makeSig(L.depthPipeline,  L.depthSignature,  "depth");
+    makeSig(L.shadowPipeline, L.shadowSignature, "shadow");
+}
+
 // ===========================================================================
 // IRenderPass overrides
 // ===========================================================================
@@ -1119,6 +1409,13 @@ void MeshShaderRenderPass::BackBufferResizing() {
     m_StageResources.shadow.pipeline        = nullptr;
     m_DispatchMeshSignature  = nullptr;
     m_StageResources.shadow.dispatchMeshSignature = nullptr;
+
+    m_StageResources.sceneLeaves.mainPipeline    = nullptr;
+    m_StageResources.sceneLeaves.depthPipeline   = nullptr;
+    m_StageResources.sceneLeaves.shadowPipeline  = nullptr;
+    m_StageResources.sceneLeaves.mainSignature   = nullptr;
+    m_StageResources.sceneLeaves.depthSignature  = nullptr;
+    m_StageResources.sceneLeaves.shadowSignature = nullptr;
 
     m_StageResources.depthPrepass.pipeline        = nullptr;
     m_StageResources.depthPrepass.terrainPipeline = nullptr;
@@ -1159,7 +1456,9 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
 
     _CreateMainPipelineIfNeeded(framebuffer);
     _CreateShadowPipelineIfNeeded();
+    _CreateLeafPipelinesIfNeeded(framebuffer);
     _EnsureDispatchMeshSignatures();
+    _EnsureLeafDispatchMeshSignatures();
 
     const dm::float3& camPos = m_ViewHandler.camera.GetPosition();
     const dm::float3& camDir = m_ViewHandler.camera.GetDir();
@@ -1263,6 +1562,12 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_CommandList->writeBuffer(m_StageResources.cull.shadowDispatchArgsBuffer,
         m_ShadowDispatchArgsStaging.data(),
         m_ShadowDispatchArgsStaging.size() * sizeof(DispatchRecord));
+    m_CommandList->writeBuffer(m_StageResources.cull.mainLeafDispatchArgsBuffer,
+        m_MainLeafDispatchArgsStaging.data(),
+        m_MainLeafDispatchArgsStaging.size() * sizeof(DispatchRecord));
+    m_CommandList->writeBuffer(m_StageResources.cull.shadowLeafDispatchArgsBuffer,
+        m_ShadowLeafDispatchArgsStaging.data(),
+        m_ShadowLeafDispatchArgsStaging.size() * sizeof(DispatchRecord));
 
     // Impostor indirect args reset: vertexCount=4, instanceCount=0 per asset.
     {
@@ -1372,6 +1677,38 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
                         0);
                 }
             }
+
+            // Leaves into the same cascade slice.
+            auto& L = m_StageResources.sceneLeaves;
+            if (L.shadowPipeline && L.shadowSignature && L.shadowBindingSet
+                && m_StageResources.cull.shadowLeafDispatchArgsBuffer) {
+                nvrhi::MeshletState leafMS;
+                leafMS.pipeline       = L.shadowPipeline;
+                leafMS.framebuffer    = m_StageResources.shadow.framebuffers[c];
+                leafMS.bindings       = { L.shadowBindingSet };
+                leafMS.indirectParams = m_StageResources.cull.shadowLeafDispatchArgsBuffer;
+                leafMS.viewport.addViewportAndScissorRect(
+                    nvrhi::Viewport(float(k_ShadowRes), float(k_ShadowRes)));
+                m_CommandList->setMeshletState(leafMS);
+
+                uint32_t placeholder = 0;
+                m_CommandList->setPushConstants(&placeholder, sizeof(uint32_t));
+
+                auto* leafArgBuf = static_cast<ID3D12Resource*>(
+                    m_StageResources.cull.shadowLeafDispatchArgsBuffer->getNativeObject(nvrhi::ObjectTypes::D3D12_Resource));
+                if (d3dList && leafArgBuf) {
+                    for (uint32_t ai = 0; ai < numAssets; ai++) {
+                        const uint32_t slot = ai * Render::c_NumCascades + c;
+                        d3dList->ExecuteIndirect(
+                            L.shadowSignature.Get(),
+                            1,
+                            leafArgBuf,
+                            slot * sizeof(DispatchRecord),
+                            nullptr,
+                            0);
+                    }
+                }
+            }
         }
         m_CommandList->endMarker();
     }
@@ -1433,6 +1770,32 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
                             0);
                     }
                 }
+            }
+        }
+
+        // Leaves: single PSO + binding set, ExecuteIndirect over all main slots.
+        auto& L = m_StageResources.sceneLeaves;
+        if (L.mainPipeline && L.mainSignature && L.mainBindingSet
+            && m_StageResources.cull.mainLeafDispatchArgsBuffer) {
+            nvrhi::MeshletState leafMS;
+            leafMS.pipeline       = L.mainPipeline;
+            leafMS.framebuffer    = framebuffer;
+            leafMS.bindings       = { L.mainBindingSet };
+            leafMS.indirectParams = m_StageResources.cull.mainLeafDispatchArgsBuffer;
+            leafMS.viewport.addViewportAndScissorRect(fbInfo.getViewport());
+            m_CommandList->setMeshletState(leafMS);
+
+            uint32_t placeholder = 0;
+            m_CommandList->setPushConstants(&placeholder, sizeof(uint32_t));
+
+            auto* d3dList = static_cast<ID3D12GraphicsCommandList6*>(
+                m_CommandList->getNativeObject(nvrhi::ObjectTypes::D3D12_GraphicsCommandList));
+            auto* leafArgBuf = static_cast<ID3D12Resource*>(
+                m_StageResources.cull.mainLeafDispatchArgsBuffer->getNativeObject(nvrhi::ObjectTypes::D3D12_Resource));
+            if (d3dList && leafArgBuf) {
+                d3dList->ExecuteIndirect(
+                    L.mainSignature.Get(),
+                    m_NumMainSlots, leafArgBuf, 0, nullptr, 0);
             }
         }
     }
@@ -1905,6 +2268,7 @@ void MeshShaderRenderPass::_EnsureHiZResources(uint32_t width, uint32_t height) 
     _RebuildCullBindingSet();
     _RebuildDrawBindingSet();
     _RebuildDepthPrepassBindingSet();
+    _RebuildLeafBindingSets();
 
     if (m_StageResources.sdsm.buildBindingLayout) {
         nvrhi::BindingSetDesc bsd;
@@ -2003,6 +2367,35 @@ void MeshShaderRenderPass::_RenderDepthPrepass() {
             d3dList->ExecuteIndirect(
                 m_StageResources.depthPrepass.dispatchMeshSignature.Get(),
                 m_NumMainSlots, argBuffer, 0, nullptr, 0);
+        }
+    }
+
+    // Leaves into the same depth target.
+    {
+        auto& L = m_StageResources.sceneLeaves;
+        if (L.depthPipeline && L.depthSignature && L.depthBindingSet
+            && m_StageResources.cull.mainLeafDispatchArgsBuffer) {
+            nvrhi::MeshletState meshState;
+            meshState.pipeline       = L.depthPipeline;
+            meshState.framebuffer    = m_StageResources.depthPrepass.framebuffer;
+            meshState.bindings       = { L.depthBindingSet };
+            meshState.indirectParams = m_StageResources.cull.mainLeafDispatchArgsBuffer;
+            meshState.viewport.addViewportAndScissorRect(
+                m_StageResources.depthPrepass.framebuffer->getFramebufferInfo().getViewport());
+            m_CommandList->setMeshletState(meshState);
+
+            uint32_t placeholder = 0;
+            m_CommandList->setPushConstants(&placeholder, sizeof(uint32_t));
+
+            auto* d3dList = static_cast<ID3D12GraphicsCommandList6*>(
+                m_CommandList->getNativeObject(nvrhi::ObjectTypes::D3D12_GraphicsCommandList));
+            auto* leafArgBuf = static_cast<ID3D12Resource*>(
+                m_StageResources.cull.mainLeafDispatchArgsBuffer->getNativeObject(nvrhi::ObjectTypes::D3D12_Resource));
+            if (d3dList && leafArgBuf) {
+                d3dList->ExecuteIndirect(
+                    L.depthSignature.Get(),
+                    m_NumMainSlots, leafArgBuf, 0, nullptr, 0);
+            }
         }
     }
 

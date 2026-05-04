@@ -41,6 +41,8 @@ public:
     void Animate(float seconds) override;
     void BackBufferResizing() override {
         m_StageResources.sceneTreeStage.pipeline = nullptr;
+        m_StageResources.leafStage.pipeline = nullptr;
+        m_StageResources.leafStage.shadowPipeline = nullptr;
         m_StageResources.impostorStage.pipeline = nullptr;
         m_StageResources.sceneTerrainStage.pipeline = nullptr;
         m_StageResources.shadowStage.treePipeline = nullptr;
@@ -95,6 +97,20 @@ private:
         nvrhi::BufferHandle                    slotOffsetBuffer;
     };
 
+    struct LeafPassResources {
+        nvrhi::ShaderHandle           vertexShader;
+        nvrhi::ShaderHandle           pixelShader;
+        nvrhi::ShaderHandle           shadowVS;
+        nvrhi::InputLayoutHandle      inputLayout;
+        nvrhi::InputLayoutHandle      shadowInputLayout;
+        nvrhi::BindingLayoutHandle    bindingLayout;
+        nvrhi::BindingLayoutHandle    shadowBindingLayout;
+        nvrhi::BindingSetHandle       bindingSet;
+        nvrhi::BindingSetHandle       shadowBindingSet;
+        nvrhi::GraphicsPipelineHandle pipeline;
+        nvrhi::GraphicsPipelineHandle shadowPipeline;
+    };
+
     // Shadow depth pass
     struct ShadowPassResources {
         nvrhi::TextureHandle                   depthTexture;
@@ -140,6 +156,7 @@ private:
         ShadowPassResources  shadowStage;
         SkyPassResources     skyStage;
         TreePassResources    sceneTreeStage;
+        LeafPassResources    leafStage;
         ImpostorPassResources impostorStage;
         TerrainPassResources sceneTerrainStage;
     };
@@ -189,6 +206,7 @@ private:
 
     bool _InitShared();
     bool _InitTreePass();
+    bool _InitLeafPass();
     bool _InitImpostorPass();
     bool _InitShadowPass();
     bool _InitTerrainPass(nvrhi::ICommandList* initCL);

@@ -90,6 +90,7 @@ private:
         nvrhi::BufferHandle              countBuffer;          // UAV uint32[numSlots]
         nvrhi::BufferHandle              visibilityBuffer;     // UAV uint32[visBufferSize]
         nvrhi::BufferHandle              indirectArgsBuffer;   // UAV DrawIndexedIndirectArguments[numSlots] (also indirect args)
+        nvrhi::BufferHandle              leafIndirectArgsBuffer; // UAV DrawIndirectArguments[numSlots]
         nvrhi::BufferHandle              impostorCountBuffer;        // UAV uint32[numAssets]
         nvrhi::BufferHandle              impostorVisBuffer;          // UAV uint32[impostorVisBufferSize]
         nvrhi::BufferHandle              impostorSlotOffsetBuffer;   // SRV uint32[numAssets]
@@ -98,6 +99,7 @@ private:
         nvrhi::BufferHandle              shadowVisBuffer;        // UAV uint32[shadowVisBufferSize]
         nvrhi::BufferHandle              shadowSlotOffsetBuffer; // SRV uint32[numAssets]
         nvrhi::BufferHandle              shadowIndirectArgsBuffer; // UAV DrawIndexedIndirectArguments[numAssets] (also indirect args)
+        nvrhi::BufferHandle              leafShadowIndirectArgsBuffer; // UAV DrawIndirectArguments[numAssets x cascades]
         nvrhi::BufferHandle              shadowUniqueCounter;    // UAV uint32 (single counter, raw); incremented once per instance visible in any cascade
         nvrhi::BufferHandle              regionVisibleBuffer;      // SRV uint32[numRegions], CPU-written each frame
     };
@@ -110,6 +112,22 @@ private:
         nvrhi::BindingLayoutHandle             bindingLayout;
         std::vector<nvrhi::BindingSetHandle>   bindingSets;
         nvrhi::GraphicsPipelineHandle          pipeline;
+    };
+
+    struct LeafPassResources {
+        nvrhi::ShaderHandle                    vertexShader;
+        nvrhi::ShaderHandle                    pixelShader;
+        nvrhi::ShaderHandle                    depthVS;
+        nvrhi::ShaderHandle                    shadowVS;
+        nvrhi::BindingLayoutHandle             bindingLayout;
+        nvrhi::BindingLayoutHandle             depthBindingLayout;
+        nvrhi::BindingLayoutHandle             shadowBindingLayout;
+        nvrhi::BindingSetHandle                bindingSet;
+        nvrhi::BindingSetHandle                depthBindingSet;
+        nvrhi::BindingSetHandle                shadowBindingSet;
+        nvrhi::GraphicsPipelineHandle          pipeline;
+        nvrhi::GraphicsPipelineHandle          depthPipeline;
+        nvrhi::GraphicsPipelineHandle          shadowPipeline;
     };
 
     // Impostor *render* side. The atlas, asset-dims buffer, debug atlas sheets,
@@ -209,9 +227,10 @@ private:
         SDSMPassResources     sdsm;
         CullPassResources     cull;
         ImpostorPassResources impostor;
-    ShadowPassResources   shadow;
+        ShadowPassResources   shadow;
         SkyPassResources      sky;
         TreePassResources     sceneTree;
+        LeafPassResources     sceneLeaves;
         TerrainPassResources  sceneTerrain;
     };
 
@@ -264,8 +283,10 @@ private:
 
     // Indirect args staging (pre-filled with indexCount, instanceCount=0)
     std::vector<nvrhi::DrawIndexedIndirectArguments>   m_IndirectArgsStaging;
+    std::vector<nvrhi::DrawIndirectArguments>          m_LeafIndirectArgsStaging;
     std::vector<nvrhi::DrawIndirectArguments>          m_ImpostorIndirectArgsStaging;
     std::vector<nvrhi::DrawIndexedIndirectArguments>   m_ShadowIndirectArgsStaging;
+    std::vector<nvrhi::DrawIndirectArguments>          m_LeafShadowIndirectArgsStaging;
 
     // Shadow slot layout (per-asset, no LOD axis)
     std::vector<uint32_t>                              m_ShadowSlotOffsets; // prefix sums [numAssets]
@@ -277,6 +298,7 @@ private:
     bool _InitShared();
     bool _InitCullPass(nvrhi::ICommandList* initCL);
     bool _InitTreePass(nvrhi::ICommandList* initCL, engine::CommonRenderPasses& commonPasses);
+    bool _InitLeafPass();
     bool _InitImpostorPass();
     bool _InitShadowPass();
     bool _InitTerrainPass(nvrhi::ICommandList* initCL);

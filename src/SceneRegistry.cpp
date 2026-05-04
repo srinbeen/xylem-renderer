@@ -47,6 +47,147 @@ struct SpatialGrid {
     }
 };
 
+constexpr uint32_t kLeavesPerMeshlet = 8;
+
+dm::float3 xyz(const dm::float4& v) {
+    return dm::float3(v.x, v.y, v.z);
+}
+
+void includePoint(dm::box3& box, const dm::float3& p) {
+    box.m_mins = dm::min(box.m_mins, p);
+    box.m_maxs = dm::max(box.m_maxs, p);
+}
+
+void includeLeafCorners(dm::box3& box, const Scene::LeafInstance& leaf) {
+    const dm::float3 center = xyz(leaf.centerHalfSize);
+    const dm::float3 spine  = xyz(leaf.spine);
+    const dm::float3 right  = xyz(leaf.right);
+    const dm::float3 q2     = dm::normalize(dm::cross(spine, right));
+    const float half        = leaf.centerHalfSize.w;
+
+    const dm::float3 axes[2] = { right, q2 };
+    for (const dm::float3& axis : axes) {
+        includePoint(box, center + axis * -half + spine * -half);
+        includePoint(box, center + axis *  half + spine * -half);
+        includePoint(box, center + axis *  half + spine *  half);
+        includePoint(box, center + axis * -half + spine *  half);
+    }
+}
+
+Scene::LeafMeshlet buildLeafMeshlet(const std::vector<Scene::LeafInstance>& leaves,
+                                    uint32_t firstLeaf,
+                                    uint32_t leafCount)
+{
+    dm::box3 bounds = dm::box3::empty();
+    for (uint32_t i = 0; i < leafCount; i++)
+        includeLeafCorners(bounds, leaves[firstLeaf + i]);
+
+    const dm::float3 center = (bounds.m_mins + bounds.m_maxs) * 0.5f;
+    const float radius = dm::length(bounds.diagonal()) * 0.5f;
+
+    Scene::LeafMeshlet meshlet{};
+    meshlet.meta   = dm::uint4(firstLeaf, leafCount, 0, 0);
+    meshlet.bounds = dm::float4(center, radius);
+    return meshlet;
+}
+
+Scene::LeafAssetDef buildLeafAsset(const std::vector<ProcGen::SCNode>& nodes,
+                                   const std::vector<uint32_t>&         terminals,
+                                   const LeafParams&                    params,
+                                   bool                                 hasLeaves,
+                                   uint32_t                             numLods,
+                                   uint32_t                             seed)
+{
+    Scene::LeafAssetDef out;
+    out.countByLod.assign(numLods, 0);
+    out.lodSlots.assign(numLods, {});
+
+    if (!hasLeaves || params.perTip == 0 || params.size <= 0.f || terminals.empty())
+        return out;
+
+    const float halfSize = params.size * 0.5f;
+
+    // LOD-prefix friendly order: emit the kth leaf for every terminal before
+    // moving to k+1, so lower LOD prefixes thin the canopy broadly.
+    for (uint32_t k = 0; k < params.perTip; ++k) {
+        for (size_t t = 0; t < terminals.size(); ++t) {
+            const uint32_t nodeIdx = terminals[t];
+            if (nodeIdx >= nodes.size()) continue;
+            const auto& n = nodes[nodeIdx];
+
+            dm::float3 forward = n.dir;
+            const float fLen = dm::length(forward);
+            forward = (fLen > 1e-6f) ? forward / fLen : ProcGen::unit_j;
+
+            dm::float3 right = n.right - forward * dm::dot(n.right, forward);
+            const float rLen = dm::length(right);
+            right = (rLen > 1e-6f) ? right / rLen
+                : ((std::abs(forward.y) < 0.9f) ? dm::normalize(dm::cross(forward, ProcGen::unit_j))
+                                                : dm::normalize(dm::cross(forward, ProcGen::unit_i)));
+            const dm::float3 up = dm::cross(forward, right);
+
+            const uint32_t streamIdx = static_cast<uint32_t>(t) * 1024u + k;
+            const float phi    = Xylem::hashToFloat(streamIdx, seed ^ 0xD0D0D0Du) * 2.f * dm::PI_f;
+            const float cosPhi = std::cos(phi);
+            const float sinPhi = std::sin(phi);
+            const dm::float3 rolledRight = right * cosPhi + up * sinPhi;
+            const dm::float3 rolledUp    = up    * cosPhi - right * sinPhi;
+
+            const float theta = Xylem::hashToFloat(streamIdx, seed ^ 0xB1A5FEEDu) * dm::PI_f * 0.5f;
+            const dm::float3 spine = dm::normalize(forward * std::cos(theta) + rolledUp * std::sin(theta));
+            const dm::float3 q2 = dm::normalize(dm::cross(spine, rolledRight));
+
+            dm::float3 center = n.pos;
+            if (k > 0) {
+                const float jx = (Xylem::hashToFloat(streamIdx * 3u + 0u, seed) - 0.5f) * params.size;
+                const float jy = (Xylem::hashToFloat(streamIdx * 3u + 1u, seed) - 0.5f) * params.size;
+                const float jz = (Xylem::hashToFloat(streamIdx * 3u + 2u, seed) - 0.5f) * params.size;
+                center = n.pos + rolledRight * jx + spine * jy + q2 * jz;
+            }
+
+            const float scaleHash = Xylem::hashToFloat(streamIdx, seed ^ 0xF01FA11u);
+            const float leafHalf  = halfSize * (0.5f + scaleHash);
+
+            Scene::LeafInstance leaf{};
+            leaf.centerHalfSize = dm::float4(center, leafHalf);
+            leaf.spine          = dm::float4(spine, 0.f);
+            leaf.right          = dm::float4(dm::normalize(rolledRight), 0.f);
+            leaf.color          = dm::float4(params.color, 1.f);
+            out.instances.push_back(leaf);
+            includeLeafCorners(out.localBbox, leaf);
+        }
+    }
+
+    const uint32_t fullCount = static_cast<uint32_t>(out.instances.size());
+    uint32_t previousCount = fullCount;
+    for (uint32_t lod = 0; lod < numLods; ++lod) {
+        const float mult = lod < params.lodMultipliers.size()
+            ? std::clamp(params.lodMultipliers[lod], 0.f, 1.f)
+            : 0.f;
+        uint32_t count = std::min(fullCount, static_cast<uint32_t>(std::round(fullCount * mult)));
+        if (lod > 0) count = std::min(count, previousCount);
+        out.countByLod[lod] = count;
+        previousCount = count;
+    }
+
+    for (uint32_t lod = 0; lod < numLods; ++lod) {
+        Scene::LeafSlot slot{};
+        slot.leafOffset    = 0;
+        slot.leafCount     = out.countByLod[lod];
+        slot.meshletOffset = static_cast<uint32_t>(out.meshlets.size());
+
+        for (uint32_t start = 0; start < slot.leafCount; start += kLeavesPerMeshlet) {
+            const uint32_t chunkCount = std::min(kLeavesPerMeshlet, slot.leafCount - start);
+            out.meshlets.push_back(buildLeafMeshlet(out.instances, start, chunkCount));
+        }
+
+        slot.meshletCount = static_cast<uint32_t>(out.meshlets.size()) - slot.meshletOffset;
+        out.lodSlots[lod] = slot;
+    }
+
+    return out;
+}
+
 } // anonymous namespace
 
 // ===========================================================================
@@ -312,20 +453,6 @@ void SceneRegistry::_rebuildAsset(TreeAssetDef& asset) {
 
         if (!sc.nodes().empty()) {
             m_TreeGenerator->emitColonizationCylinders(sc.nodes(), lod, m_LodSegments[j]);
-
-            // Leaves: one cross-billboard cluster per terminal SC node, scaled by the
-            // per-asset LOD multiplier. LOD3's default multiplier is 0 → distant trees lose
-            // leaves entirely. countPerTip is rounded; sub-1 values still yield 0 verts.
-            if (asset.hasLeaves && j < asset.leaf.lodMultipliers.size()) {
-                const float    mult        = asset.leaf.lodMultipliers[j];
-                const uint32_t countPerTip = static_cast<uint32_t>(std::round(asset.leaf.perTip * mult));
-                if (countPerTip > 0) {
-                    const uint32_t leafSeed = (asset.genParams.seed == 0 ? 1u : asset.genParams.seed) ^ 0x1EAF7E5Du;
-                    m_TreeGenerator->emitLeafCrosses(sc.nodes(), sc.terminals(),
-                                                     countPerTip, asset.leaf.size, asset.leaf.color,
-                                                     leafSeed, lod);
-                }
-            }
         }
 
         asset.lods[j].positions      = std::move(lod.positions);
@@ -336,6 +463,14 @@ void SceneRegistry::_rebuildAsset(TreeAssetDef& asset) {
         asset.lods[j].indices        = std::move(lod.indices);
         asset.lods[j].bbox           = lod.bbox;
         asset.lods[j].radialSegments = m_LodSegments[j];
+    }
+
+    const uint32_t leafSeed = (asset.genParams.seed == 0 ? 1u : asset.genParams.seed) ^ 0x1EAF7E5Du;
+    asset.leafAsset = buildLeafAsset(sc.nodes(), sc.terminals(), asset.leaf, asset.hasLeaves,
+                                     static_cast<uint32_t>(m_LodSegments.size()), leafSeed);
+    if (!asset.leafAsset.localBbox.isempty()) {
+        for (auto& lod : asset.lods)
+            lod.bbox |= asset.leafAsset.localBbox;
     }
 
     asset.genParams.radialSegments = savedSegments;
@@ -597,3 +732,4 @@ void SceneRegistry::clear() {
     m_AssetIdToIndex.clear();
     m_SceneBounds = dm::box3::empty();
 }
+

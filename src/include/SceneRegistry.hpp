@@ -41,6 +41,7 @@ struct TreeAssetDef {
     uint32_t                          textureSetIdx = 0;
     ProcGen::SCParams                 colonization;          // disabled when attractorCount == 0
     LeafParams                        leaf;
+    Scene::LeafAssetDef               leafAsset;
     bool                              hasLeaves = true;      // master switch for leaf emission
     bool                              dirty   = true;
     bool                              visible = true;  // render-time visibility toggle

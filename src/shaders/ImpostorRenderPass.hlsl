@@ -392,10 +392,7 @@ void impostor_ps(
          objectNormal2 * alphaWeights.z) / alphaWeightSum);
     float3 worldNormal = normalize(mul(objectNormal, instBuf[i.persistentId].normal));
     float3 lightDir = -normalize(sunLightDir);
-    // Wrap diffuse: softens the back-side falloff so cross-billboard leaves don't band
-    // sharply when tilted away from the sun. Must stay in lockstep with the leaf
-    // pixel shaders so impostor and runtime canopies look identical at the LOD swap.
-    float diffuse = saturate(dot(worldNormal, lightDir) * 0.5 + 0.5);
+    float diffuse = max(dot(worldNormal, lightDir), 0.0);
 
     float viewZ = mul(float4(depthWorldPos, 1.0), viewMatrix).z;
 

@@ -233,9 +233,8 @@ void leaf_ps(in LeafV2P i, out float4 o_color : SV_Target0)
 
     float3 lightDir = -normalize(sunLightDir);
     float notInShadow = SampleShadowCascade(i.worldPos, selectedCascade);
-    // Wrap diffuse: must match ImpostorRenderPass.hlsl so leaves and impostors
-    // shade identically across the LOD swap.
-    float diffuse = saturate(dot(normalize(i.normal), lightDir) * 0.5 + 0.5);
+    // Single-sided diffuse to match the trunk/impostor shading model.
+    float diffuse = max(dot(normalize(i.normal), lightDir), 0.0);
     float ambient = 0.20;
     float lighting = ambient + (1.0 - ambient) * diffuse * notInShadow;
     o_color = float4(lighting * i.color, 1.0);

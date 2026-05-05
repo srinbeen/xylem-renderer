@@ -79,6 +79,39 @@ SamplerState                         s_Sampler        : register(XY_REG_S_MESH_D
 SamplerComparisonState               s_ShadowSampler  : register(XY_REG_S_MESH_DRAW_SAMPLER_SHADOW);
 SamplerState                         s_HizSampler     : register(XY_REG_S_MESH_DRAW_SAMPLER_HI_Z);
 
+float FarthestHiZDepth(float a, float b)
+{
+#if XYLEM_USE_REVERSE_Z
+    return min(a, b);
+#else
+    return max(a, b);
+#endif
+}
+
+float LoadHiZFarthestForRect(float2 minUV, float2 maxUV, float mipLevel)
+{
+    uint mip = (uint)mipLevel;
+    uint mipWidth, mipHeight, mipCount;
+    t_HiZ.GetDimensions(mip, mipWidth, mipHeight, mipCount);
+
+    uint2 lastTexel = uint2(mipWidth - 1u, mipHeight - 1u);
+    float2 mipDims = float2((float)mipWidth, (float)mipHeight);
+
+    uint2 lo = min((uint2)floor(minUV * mipDims), lastTexel);
+    uint2 hi = min((uint2)floor(maxUV * mipDims), lastTexel);
+
+    float hiz = t_HiZ.Load(int3(lo.x, lo.y, mip)).r;
+
+    if (hi.x != lo.x)
+        hiz = FarthestHiZDepth(hiz, t_HiZ.Load(int3(hi.x, lo.y, mip)).r);
+    if (hi.y != lo.y)
+        hiz = FarthestHiZDepth(hiz, t_HiZ.Load(int3(lo.x, hi.y, mip)).r);
+    if ((hi.x != lo.x) && (hi.y != lo.y))
+        hiz = FarthestHiZDepth(hiz, t_HiZ.Load(int3(hi.x, hi.y, mip)).r);
+
+    return hiz;
+}
+
 uint3 LoadMeshletTriangle(uint triByteOffset)
 {
     uint alignedOffset = triByteOffset & ~3u;
@@ -178,8 +211,7 @@ bool MeshletHiZOccluded(MeshletDesc m, float4x4 model)
     float mipLevel = ceil(log2(max(footprint.x, footprint.y)));
     mipLevel = clamp(mipLevel, 0, g_MaxHiZMip);
 
-    float2 centerUV = (minUV + maxUV) * 0.5;
-    float hizDepth = t_HiZ.SampleLevel(s_HizSampler, centerUV, mipLevel).r;
+    float hizDepth = LoadHiZFarthestForRect(minUV, maxUV, mipLevel);
 
 #if XYLEM_USE_REVERSE_Z
     return (closestDepth < hizDepth);

@@ -80,6 +80,8 @@ bool DoesAABBIntersectFrustum(box3 bbox, frustum f);
 uint SelectLOD(box3 bbox);
 bool SelectImpostor(box3 bbox);
 bool IsOccludedByHiZ(box3 bbox);
+float FarthestHiZDepth(float a, float b);
+float LoadHiZFarthestForRect(float2 minUV, float2 maxUV, float mipLevel);
 
 [numthreads(64, 1, 1)]
 void MeshCullRegion(uint3 dtid : SV_DispatchThreadID)
@@ -286,12 +288,44 @@ bool IsOccludedByHiZ(box3 bbox)
     float mipLevel = ceil(log2(max(footprint.x, footprint.y)));
     mipLevel = clamp(mipLevel, 0, maxHiZMip);
 
-    float2 centerUV = (minUV + maxUV) * 0.5;
-    float hizDepth = hizTexture.SampleLevel(hizSampler, centerUV, mipLevel).r;
+    float hizDepth = LoadHiZFarthestForRect(minUV, maxUV, mipLevel);
 
 #if XYLEM_USE_REVERSE_Z
     return (closestDepth < hizDepth);
 #else
     return (closestDepth > hizDepth);
 #endif
+}
+
+float FarthestHiZDepth(float a, float b)
+{
+#if XYLEM_USE_REVERSE_Z
+    return min(a, b);
+#else
+    return max(a, b);
+#endif
+}
+
+float LoadHiZFarthestForRect(float2 minUV, float2 maxUV, float mipLevel)
+{
+    uint mip = (uint)mipLevel;
+    uint mipWidth, mipHeight, mipCount;
+    hizTexture.GetDimensions(mip, mipWidth, mipHeight, mipCount);
+
+    uint2 lastTexel = uint2(mipWidth - 1u, mipHeight - 1u);
+    float2 mipDims = float2((float)mipWidth, (float)mipHeight);
+
+    uint2 lo = min((uint2)floor(minUV * mipDims), lastTexel);
+    uint2 hi = min((uint2)floor(maxUV * mipDims), lastTexel);
+
+    float hiz = hizTexture.Load(int3(lo.x, lo.y, mip)).r;
+
+    if (hi.x != lo.x)
+        hiz = FarthestHiZDepth(hiz, hizTexture.Load(int3(hi.x, lo.y, mip)).r);
+    if (hi.y != lo.y)
+        hiz = FarthestHiZDepth(hiz, hizTexture.Load(int3(lo.x, hi.y, mip)).r);
+    if ((hi.x != lo.x) && (hi.y != lo.y))
+        hiz = FarthestHiZDepth(hiz, hizTexture.Load(int3(hi.x, hi.y, mip)).r);
+
+    return hiz;
 }

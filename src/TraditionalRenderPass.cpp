@@ -337,7 +337,9 @@ bool TraditionalRenderPass::LoadResources() {
     _RebuildBindingSets();
 
     uint32_t totalInstances = m_Registry.totalInstanceCount();
-    m_UI.totalInstanceCount = totalInstances;
+    m_UI.totalInstanceCount     = totalInstances;
+    m_UI.totalLeafInstanceCount = m_Registry.totalLeafInstanceCount();
+    m_UI.totalLeafMeshletCount  = m_Registry.totalLeafMeshletCount();
 
     m_VisibleInstanceReferences.clear();
     m_VisibleInstanceReferences.reserve(totalInstances);
@@ -424,7 +426,9 @@ void TraditionalRenderPass::onRegionsDirty(const std::vector<size_t>& /*dirtyReg
     _RebuildBindingSets();
 
     uint32_t newTotal = m_Registry.totalInstanceCount();
-    m_UI.totalInstanceCount = newTotal;
+    m_UI.totalInstanceCount     = newTotal;
+    m_UI.totalLeafInstanceCount = m_Registry.totalLeafInstanceCount();
+    m_UI.totalLeafMeshletCount  = m_Registry.totalLeafMeshletCount();
     m_VisibleInstanceReferences.reserve(newTotal);
 }
 
@@ -550,15 +554,36 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     const uint32_t impostorVisibleCount = static_cast<uint32_t>(m_VisibleImpostorReferences.size());
     const uint32_t visibleTotal = meshVisibleCount + impostorVisibleCount;
 
-    m_UI.totalInstanceCount   = m_Registry.totalInstanceCount();
-    m_UI.visibleInstanceCount = visibleTotal;
-    m_UI.impostorVisibleCount = impostorVisibleCount;
+    // P0: every visible instance renders all of its asset's leaves (no per-leaf
+    // cull). Summed across visible references for main, plus per-cascade refs
+    // for shadow (cascade-summed, matches what's actually drawn).
+    const auto& assets = m_Registry.getAssets();
+    uint32_t visibleLeafTotal       = 0;
+    uint32_t shadowVisibleLeafTotal = 0;
+    for (const auto& ref : m_VisibleInstanceReferences) {
+        if (ref.treeId < assets.size() && assets[ref.treeId].hasLeaves)
+            visibleLeafTotal += static_cast<uint32_t>(assets[ref.treeId].leafAsset.instances.size());
+    }
+    for (const auto& csd : m_CascadeShadowData) {
+        for (const auto& ref : csd.visibleRefs) {
+            if (ref.treeId < assets.size() && assets[ref.treeId].hasLeaves)
+                shadowVisibleLeafTotal += static_cast<uint32_t>(assets[ref.treeId].leafAsset.instances.size());
+        }
+    }
+
+    m_UI.totalInstanceCount     = m_Registry.totalInstanceCount();
+    m_UI.totalLeafInstanceCount = m_Registry.totalLeafInstanceCount();
+    m_UI.totalLeafMeshletCount  = m_Registry.totalLeafMeshletCount();
+    m_UI.visibleInstanceCount   = visibleTotal;
+    m_UI.impostorVisibleCount   = impostorVisibleCount;
     m_UI.culledInstanceCount  = (visibleTotal <= m_UI.totalInstanceCount)
         ? m_UI.totalInstanceCount - visibleTotal : 0;
     m_UI.drawCallCount        = static_cast<uint32_t>(m_DrawCmds.size()) + m_ImpostorDrawCallCount;
 
     m_UI.shadowVisibleCount   = m_TotalShadowInstancesDrawn;
     m_UI.shadowCulledCount    = m_UI.totalInstanceCount - m_TotalShadowInstancesDrawn;
+    m_UI.visibleLeafInstanceCount       = visibleLeafTotal;
+    m_UI.shadowVisibleLeafInstanceCount = shadowVisibleLeafTotal;
 
     m_VisibleInstanceReferences.clear();
     m_VisibleImpostorReferences.clear();

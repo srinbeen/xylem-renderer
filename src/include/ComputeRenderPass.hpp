@@ -192,9 +192,11 @@ private:
     };
 
     struct HiZPassResources {
-        nvrhi::TextureHandle                   hizTexture;         // RG32_FLOAT, mipchain, UAV.
-                                                                    // .r = farthest (Hi-Z occlusion)
-                                                                    // .g = nearest  (SDSM extrema)
+        nvrhi::TextureHandle                   hizTexture;         // RGBA32_FLOAT, mipchain, UAV.
+                                                                    // .r = raw farthest (Hi-Z occlusion, sky included)
+                                                                    // .g = nearest      (SDSM near)
+                                                                    // .b = sky-excluded farthest (SDSM far)
+                                                                    // .a = unused
         uint32_t                               numMips = 0;
         nvrhi::ShaderHandle                    copyCS;             // HiZCopy
         nvrhi::ShaderHandle                    buildCS;            // HiZDownsample
@@ -202,8 +204,7 @@ private:
         nvrhi::ComputePipelineHandle           buildPipeline;
         nvrhi::BindingLayoutHandle             buildBindingLayout; // PushConstants(0) + SRV(0) + UAV(0)
         std::vector<nvrhi::BindingSetHandle>   buildBindingSets;   // one per mip transition
-        nvrhi::SamplerHandle                   pointSampler;       // point/clamp for cull shader
-        // Debug view: one single-mip RG32_FLOAT texture per mip level, GPU-copied for ImGui display
+        // Debug view: one single-mip RGBA32_FLOAT texture per mip level, GPU-copied for ImGui display
         std::vector<nvrhi::TextureHandle>      debugMipTextures;
     };
 
@@ -322,8 +323,7 @@ private:
     void _BuildHiZMipChain();
     void _RunSDSMBuildCascades(const dm::box3& sceneBbox, float aspectRatio, float fovY,
                                float regionEnvelopeNear, float regionEnvelopeFar);
-    void _ComputeRegionEnvelope(const dm::frustum& viewFrustum,
-                                const dm::float3& camPos, const dm::float3& camDir,
+    void _ComputeRegionEnvelope(const dm::float3& camPos, const dm::float3& camDir,
                                 float& outNearZ, float& outFarZ) const;
     void _RenderSkyPass(nvrhi::IFramebuffer* framebuffer);
     void _RenderShadowPass();

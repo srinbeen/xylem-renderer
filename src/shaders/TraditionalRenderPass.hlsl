@@ -1,5 +1,6 @@
 #include "../include/macros.h"
 #include "ShaderRegisterMap.hlsli"
+#include "ShadowCascadeCommon.hlsli"
 
 #pragma pack_matrix(row_major)
 
@@ -115,10 +116,7 @@ void main_ps(
 	out float4 o_color : SV_Target0
 )
 {
-	uint cascadeIdx = 3;
-	if      (i_viewZ < cascadeSplits.x) cascadeIdx = 0;
-	else if (i_viewZ < cascadeSplits.y) cascadeIdx = 1;
-	else if (i_viewZ < cascadeSplits.z) cascadeIdx = 2;
+	uint cascadeIdx = SelectShadowCascade(i_viewZ, cascadeSplits);
 
 	float3 lightDir = -normalize(sunLightDir);
 	float notInShadow = SampleShadowCascade(i_worldPos, cascadeIdx);

@@ -571,7 +571,6 @@ void ComputeRenderPass::_RebuildCullBindings() {
         nvrhi::BindingSetItem::RawBuffer_UAV(12, m_StageResources.cull.leafShadowIndirectArgsBuffer),
 
         nvrhi::BindingSetItem::Texture_SRV(compute_reg::Cull::kSRV_HiZ, m_StageResources.hiz.hizTexture),
-        nvrhi::BindingSetItem::Sampler(compute_reg::Cull::kSampler_HiZ, m_StageResources.hiz.pointSampler),
     };
 
     m_StageResources.cull.bindingSet = device->createBindingSet(cullBSD, m_StageResources.cull.bindingLayout);
@@ -721,13 +720,17 @@ void ComputeRenderPass::_EnsureHiZResources(uint32_t width, uint32_t height) {
     m_StageResources.depthPrepass.treePipeline    = nullptr;
     m_StageResources.depthPrepass.terrainPipeline = nullptr;
 
-    // --- Hi-Z texture with full mip chain (RG32: .r=farthest for Hi-Z, .g=nearest for SDSM) ---
+    // --- Hi-Z texture with full mip chain ---
+    //   .r = raw min depth (sky included)  -> Hi-Z occluder pyramid
+    //   .g = raw max depth                 -> SDSM nearest
+    //   .b = sky-excluded min depth        -> SDSM farthest (sky=1 sentinel at mip 0)
+    //   .a = unused (RGBA32 needed because R32G32B32_FLOAT is not UAV-capable on D3D12)
     m_StageResources.hiz.numMips = static_cast<uint32_t>(std::floor(std::log2(std::max(width, height)))) + 1;
     m_StageResources.hiz.hizTexture = device->createTexture(
         nvrhi::TextureDesc()
             .setWidth(width).setHeight(height)
             .setMipLevels(m_StageResources.hiz.numMips)
-            .setFormat(nvrhi::Format::RG32_FLOAT)
+            .setFormat(nvrhi::Format::RGBA32_FLOAT)
             .setIsUAV(true)
             .setInitialState(nvrhi::ResourceStates::ShaderResource)
             .setKeepInitialState(true)
@@ -737,8 +740,8 @@ void ComputeRenderPass::_EnsureHiZResources(uint32_t width, uint32_t height) {
     // --- Per-mip binding sets for Hi-Z build ---
     m_StageResources.hiz.buildBindingSets.resize(m_StageResources.hiz.numMips);
 
-    // Set 0: copy from depth prepass (D32 read as R32_FLOAT) -> Hi-Z mip 0 (RG32)
-    // Shader seeds both channels from the single-channel source.
+    // Set 0: copy from depth prepass (D32 read as R32_FLOAT) -> Hi-Z mip 0 (RGBA32)
+    // Shader seeds .r=.g=raw, .b=sky-excluded (sky maps to 1 sentinel for min reduction).
     {
         nvrhi::BindingSetDesc bsd;
         bsd.bindings = {
@@ -747,28 +750,29 @@ void ComputeRenderPass::_EnsureHiZResources(uint32_t width, uint32_t height) {
                 nvrhi::Format::R32_FLOAT,
                 nvrhi::TextureSubresourceSet(0, 1, 0, 1)),
             nvrhi::BindingSetItem::Texture_UAV(compute_reg::HiZ::kUAV_Dest, m_StageResources.hiz.hizTexture,
-                nvrhi::Format::RG32_FLOAT,
+                nvrhi::Format::RGBA32_FLOAT,
                 nvrhi::TextureSubresourceSet(0, 1, 0, 1)),
         };
         m_StageResources.hiz.buildBindingSets[0] = device->createBindingSet(bsd, m_StageResources.hiz.buildBindingLayout);
     }
 
-    // Sets 1..N-1: downsample mip i-1 -> mip i (both RG32)
+    // Sets 1..N-1: downsample mip i-1 -> mip i (both RGBA32). HiZDownsample reads
+    // the source mip via texel indexing with explicit edge-clamp on odd tails.
     for (uint32_t mip = 1; mip < m_StageResources.hiz.numMips; mip++) {
         nvrhi::BindingSetDesc bsd;
         bsd.bindings = {
             nvrhi::BindingSetItem::PushConstants(compute_reg::HiZ::kPushC_DestDimensions, sizeof(uint32_t) * compute_reg::HiZ::kPushCDwordCount),
             nvrhi::BindingSetItem::Texture_SRV(compute_reg::HiZ::kSRV_Source, m_StageResources.hiz.hizTexture,
-                nvrhi::Format::RG32_FLOAT,
+                nvrhi::Format::RGBA32_FLOAT,
                 nvrhi::TextureSubresourceSet(mip - 1, 1, 0, 1)),
             nvrhi::BindingSetItem::Texture_UAV(compute_reg::HiZ::kUAV_Dest, m_StageResources.hiz.hizTexture,
-                nvrhi::Format::RG32_FLOAT,
+                nvrhi::Format::RGBA32_FLOAT,
                 nvrhi::TextureSubresourceSet(mip, 1, 0, 1)),
         };
         m_StageResources.hiz.buildBindingSets[mip] = device->createBindingSet(bsd, m_StageResources.hiz.buildBindingLayout);
     }
 
-    // --- Per-mip debug view textures (single-mip, RG32_FLOAT, for ImGui display) ---
+    // --- Per-mip debug view textures (single-mip, RGBA32_FLOAT, for ImGui display) ---
     m_StageResources.hiz.debugMipTextures.resize(m_StageResources.hiz.numMips);
     for (uint32_t mip = 0; mip < m_StageResources.hiz.numMips; mip++) {
         uint32_t mipW = std::max(1u, width  >> mip);
@@ -777,7 +781,7 @@ void ComputeRenderPass::_EnsureHiZResources(uint32_t width, uint32_t height) {
             nvrhi::TextureDesc()
                 .setWidth(mipW).setHeight(mipH)
                 .setMipLevels(1)
-                .setFormat(nvrhi::Format::RG32_FLOAT)
+                .setFormat(nvrhi::Format::RGBA32_FLOAT)
                 .setInitialState(nvrhi::ResourceStates::ShaderResource)
                 .setKeepInitialState(true)
                 .setDebugName(("HiZ_Debug_Mip" + std::to_string(mip)).c_str())
@@ -986,29 +990,21 @@ void ComputeRenderPass::_BuildHiZMipChain() {
 // SDSM - GPU cascade construction
 // ===========================================================================
 
-void ComputeRenderPass::_ComputeRegionEnvelope(const dm::frustum& viewFrustum,
-                                                    const dm::float3& camPos,
+void ComputeRenderPass::_ComputeRegionEnvelope(const dm::float3& camPos,
                                                     const dm::float3& camDir,
                                                     float& outNearZ, float& outFarZ) const {
     outNearZ = std::numeric_limits<float>::max();
     outFarZ  = std::numeric_limits<float>::lowest();
-    bool any = false;
 
-    for (const auto& region : m_Registry.getRegions()) {
-        if (!viewFrustum.intersectsWith(region.cullBox)) continue;
-        for (int i = 0; i < dm::box3::numCorners; i++) {
-            dm::float3 corner = region.cullBox.getCorner(i);
-            float vsZ = dm::dot(corner - camPos, camDir);
-            outNearZ = dm::min(outNearZ, vsZ);
-            outFarZ  = dm::max(outFarZ,  vsZ);
-            any = true;
-        }
+    // Scene bbox already unions tree regions and terrain; mirrors ViewHandler::computeCascades.
+    const dm::box3& sceneBbox = m_Registry.getSceneBounds();
+    for (int i = 0; i < dm::box3::numCorners; i++) {
+        dm::float3 corner = sceneBbox.getCorner(i);
+        float vsZ = dm::dot(corner - camPos, camDir);
+        outNearZ = dm::min(outNearZ, vsZ);
+        outFarZ  = dm::max(outFarZ,  vsZ);
     }
 
-    if (!any) {
-        outNearZ = 0.1f;
-        outFarZ  = 1.f;
-    }
     outNearZ = dm::max(outNearZ, 0.1f);
     outFarZ  = dm::max(outFarZ,  outNearZ + 1.f);
 }
@@ -1142,7 +1138,9 @@ bool ComputeRenderPass::LoadResources() {
     initCL->close();
     GetDevice()->executeCommandList(initCL);
 
-    m_UI.totalInstanceCount = m_Registry.totalInstanceCount();
+    m_UI.totalInstanceCount     = m_Registry.totalInstanceCount();
+    m_UI.totalLeafInstanceCount = m_Registry.totalLeafInstanceCount();
+    m_UI.totalLeafMeshletCount  = m_Registry.totalLeafMeshletCount();
     return true;
 }
 
@@ -1233,7 +1231,9 @@ void ComputeRenderPass::onRegionsDirty(const std::vector<size_t>& /*dirtyRegionI
     cl->close();
     GetDevice()->executeCommandList(cl);
 
-    m_UI.totalInstanceCount = m_Registry.totalInstanceCount();
+    m_UI.totalInstanceCount     = m_Registry.totalInstanceCount();
+    m_UI.totalLeafInstanceCount = m_Registry.totalLeafInstanceCount();
+    m_UI.totalLeafMeshletCount  = m_Registry.totalLeafMeshletCount();
 }
 
 // ===========================================================================
@@ -1347,8 +1347,7 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         // SDSM - GPU replaces cascade fields in the shared CB from the reduced depth.
         m_CommandList->beginMarker("SDSM");
         float regionNear, regionFar;
-        _ComputeRegionEnvelope(m_ViewHandler.view.GetViewFrustum(), camPos, camDir,
-                               regionNear, regionFar);
+        _ComputeRegionEnvelope(camPos, camDir, regionNear, regionFar);
         _RunSDSMBuildCascades(m_Registry.getSceneBounds(), aspectRatio, dm::radians(60.f),
                               regionNear, regionFar);
         m_CommandList->endMarker();
@@ -1470,7 +1469,9 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     //     m_UI.gpuFrameTimeMs = GetDevice()->getTimerQueryTime(m_GpuTimers[prevIdx]) * 1000.0f;
     // m_NextTimerIdx = (m_NextTimerIdx + 1) % k_QueuedFrames;
 
-    m_UI.totalInstanceCount = m_Registry.totalInstanceCount();
+    m_UI.totalInstanceCount     = m_Registry.totalInstanceCount();
+    m_UI.totalLeafInstanceCount = m_Registry.totalLeafInstanceCount();
+    m_UI.totalLeafMeshletCount  = m_Registry.totalLeafMeshletCount();
     m_UI.drawCallCount      = m_NumSlots;
 
     // Read back cull counts from oldest ring slot (2 frames ago, GPU-complete)
@@ -1497,6 +1498,26 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
 
             uint32_t shadowUnique = counts[shadowOffset + m_ReadbackShadowEntries];
 
+            // Visible leaf counts. P1 has no per-leaf cull — every visible
+            // instance renders all of its asset's leaves. So the count is
+            // exact: Σ slotCount × asset.leafCount.
+            const auto& assets = m_Registry.getAssets();
+            const uint32_t numLods = static_cast<uint32_t>(m_Registry.getLodSegments().size());
+            uint32_t visibleLeafTotal       = 0;
+            uint32_t shadowVisibleLeafTotal = 0;
+            for (uint32_t slot = 0; slot < m_ReadbackCountEntries; ++slot) {
+                const uint32_t ai = (numLods > 0) ? (slot / numLods) : 0;
+                if (ai >= assets.size() || !assets[ai].hasLeaves) continue;
+                visibleLeafTotal += counts[slot] *
+                    static_cast<uint32_t>(assets[ai].leafAsset.instances.size());
+            }
+            for (uint32_t slot = 0; slot < m_ReadbackShadowEntries; ++slot) {
+                const uint32_t ai = slot / Render::c_NumCascades;
+                if (ai >= assets.size() || !assets[ai].hasLeaves) continue;
+                shadowVisibleLeafTotal += counts[shadowOffset + slot] *
+                    static_cast<uint32_t>(assets[ai].leafAsset.instances.size());
+            }
+
             GetDevice()->unmapBuffer(m_ReadbackBuffers[readSlot]);
 
             const uint32_t visibleTotal = visibleSum + impostorVisibleSum;
@@ -1510,6 +1531,8 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
             m_UI.shadowCascadeDrawCount = shadowVisSum;
             m_UI.shadowOverdrawCount    = (shadowVisSum >= shadowUnique)
                 ? shadowVisSum - shadowUnique : 0;
+            m_UI.visibleLeafInstanceCount       = visibleLeafTotal;
+            m_UI.shadowVisibleLeafInstanceCount = shadowVisibleLeafTotal;
         }
     }
     m_ReadbackFrameIndex++;
@@ -1637,6 +1660,19 @@ void ComputeRenderPass::_RenderShadowPass() {
         m_StageResources.shadow.terrainPipeline = GetDevice()->createGraphicsPipeline(
             pso, m_StageResources.shadow.framebuffers[0]->getFramebufferInfo());
     }
+    if (!m_StageResources.sceneLeaves.shadowPipeline && m_StageResources.sceneLeaves.shadowVS) {
+        nvrhi::GraphicsPipelineDesc pso;
+        pso.VS             = m_StageResources.sceneLeaves.shadowVS;
+        pso.inputLayout    = nullptr;
+        pso.bindingLayouts = { m_StageResources.sceneLeaves.shadowBindingLayout };
+        pso.primType       = nvrhi::PrimitiveType::TriangleList;
+        pso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
+        pso.renderState.rasterState.setCullNone();
+        pso.renderState.rasterState.depthBias            = 2;
+        pso.renderState.rasterState.slopeScaledDepthBias = 2.5f;
+        m_StageResources.sceneLeaves.shadowPipeline = GetDevice()->createGraphicsPipeline(
+            pso, m_StageResources.shadow.framebuffers[0]->getFramebufferInfo());
+    }
 
     nvrhi::Viewport shadowVP(static_cast<float>(k_ShadowRes), static_cast<float>(k_ShadowRes));
     nvrhi::ViewportState shadowVPState;
@@ -1691,6 +1727,32 @@ void ComputeRenderPass::_RenderShadowPass() {
             m_CommandList->endMarker();
         }
         m_CommandList->endMarker();
+
+        // Leaves: indirect draw per asset using shadow vis buffer + leafShadowSlots,
+        // mirroring the per-(asset x cascade) slot layout populated by CullShadow.
+        if (m_StageResources.sceneLeaves.shadowPipeline && m_StageResources.sceneLeaves.shadowBindingSet) {
+            nvrhi::GraphicsState leafShadowState;
+            leafShadowState.pipeline       = m_StageResources.sceneLeaves.shadowPipeline;
+            leafShadowState.framebuffer    = m_StageResources.shadow.framebuffers[cascade];
+            leafShadowState.viewport       = shadowVPState;
+            leafShadowState.bindings       = { m_StageResources.sceneLeaves.shadowBindingSet };
+            leafShadowState.indirectParams = m_StageResources.cull.leafShadowIndirectArgsBuffer;
+
+            std::string leafMarker = "LC" + std::to_string(cascade);
+            m_CommandList->beginMarker(leafMarker.c_str());
+            for (uint32_t ai = 0; ai < m_GPUAssets.size(); ai++) {
+                if (m_MaxSlotCounts[ai * numLods] == 0) continue;
+                uint32_t slot = ai * Render::c_NumCascades + cascade;
+                if (slot >= m_LeafShadowIndirectArgsStaging.size()) continue;
+                if (m_LeafShadowIndirectArgsStaging[slot].vertexCount == 0) continue;
+
+                m_CommandList->setGraphicsState(leafShadowState);
+                uint32_t pc[2] = { ai, cascade };
+                m_CommandList->setPushConstants(pc, sizeof(pc));
+                m_CommandList->drawIndirect(slot * sizeof(nvrhi::DrawIndirectArguments));
+            }
+            m_CommandList->endMarker();
+        }
 
         // Terrain shadow. The CPU per-cascade intersection test would use the
         // CPU-computed cascade bbox, which can disagree with the SDSM-overridden
@@ -1953,7 +2015,6 @@ bool ComputeRenderPass::_InitCullPass(nvrhi::ICommandList* /*initCL*/) {
         nvrhi::BindingLayoutItem::RawBuffer_UAV(12),
 
         nvrhi::BindingLayoutItem::Texture_SRV(compute_reg::Cull::kSRV_HiZ),
-        nvrhi::BindingLayoutItem::Sampler(compute_reg::Cull::kSampler_HiZ),
     };
     m_StageResources.cull.bindingLayout = GetDevice()->createBindingLayout(cullLayoutDesc);
     if (!m_StageResources.cull.bindingLayout) return false;
@@ -2379,12 +2440,14 @@ bool ComputeRenderPass::_InitHiZShaders() {
 
     // --- Hi-Z build shaders ---
     m_StageResources.hiz.copyCS = m_ShaderFactory->CreateShader(
-        "app/HiZBuild.hlsl", "HiZCopy", nullptr, nvrhi::ShaderType::Compute);
+        "app/HiZCopy.hlsl", "HiZCopy", nullptr, nvrhi::ShaderType::Compute);
     m_StageResources.hiz.buildCS = m_ShaderFactory->CreateShader(
         "app/HiZBuild.hlsl", "HiZDownsample", nullptr, nvrhi::ShaderType::Compute);
     if (!m_StageResources.hiz.copyCS || !m_StageResources.hiz.buildCS) return false;
 
-    // Hi-Z build binding layout: push constants + SRV(source) + UAV(dest)
+    // Hi-Z build binding layout: push constants + SRV(source) + UAV(dest).
+    // Both HiZCopy and HiZDownsample read the source via texel indexing, so no
+    // sampler is needed here.
     nvrhi::BindingLayoutDesc hizBuildLayoutDesc;
     hizBuildLayoutDesc.visibility = nvrhi::ShaderType::Compute;
     hizBuildLayoutDesc.bindings = {
@@ -2408,20 +2471,12 @@ bool ComputeRenderPass::_InitHiZShaders() {
 
     if (!m_StageResources.hiz.copyPipeline || !m_StageResources.hiz.buildPipeline) return false;
 
-    // Point/clamp sampler for Hi-Z reads in the cull shader
-    m_StageResources.hiz.pointSampler = device->createSampler(
-        nvrhi::SamplerDesc()
-            .setAllFilters(false)
-            .setAllAddressModes(nvrhi::SamplerAddressMode::Clamp)
-    );
-    if (!m_StageResources.hiz.pointSampler) return false;
-
     // Create 1x1 placeholder Hi-Z texture so binding sets can reference it before first frame
     m_StageResources.hiz.hizTexture = device->createTexture(
         nvrhi::TextureDesc()
             .setWidth(1).setHeight(1)
             .setMipLevels(1)
-            .setFormat(nvrhi::Format::RG32_FLOAT)
+            .setFormat(nvrhi::Format::RGBA32_FLOAT)
             .setIsUAV(true)
             .setInitialState(nvrhi::ResourceStates::ShaderResource)
             .setKeepInitialState(true)

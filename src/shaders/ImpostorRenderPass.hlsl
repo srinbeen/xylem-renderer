@@ -3,6 +3,7 @@
 #include "../include/macros.h"
 #include "types.hlsli"
 #include "ShaderRegisterMap.hlsli"
+#include "ShadowCascadeCommon.hlsli"
 
 cbuffer CB : register(XY_REG_B_COMPUTE_IMPOSTOR_CB_FRAME)
 {
@@ -396,10 +397,7 @@ void impostor_ps(
 
     float viewZ = mul(float4(depthWorldPos, 1.0), viewMatrix).z;
 
-    uint cascadeIdx = 3;
-    if      (viewZ < cascadeSplits.x) cascadeIdx = 0;
-    else if (viewZ < cascadeSplits.y) cascadeIdx = 1;
-    else if (viewZ < cascadeSplits.z) cascadeIdx = 2;
+    uint cascadeIdx = SelectShadowCascade(viewZ, cascadeSplits);
 
     float notInShadow = SampleShadowCascade(depthWorldPos, cascadeIdx);
     float lighting = XYLEM_TREE_AMBIENT + (1.0 - XYLEM_TREE_AMBIENT) * diffuse * notInShadow;

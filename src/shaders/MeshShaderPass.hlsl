@@ -3,6 +3,7 @@
 #include "../include/macros.h"
 #include "meshlet_types.hlsli"
 #include "ShaderRegisterMap.hlsli"
+#include "ShadowCascadeCommon.hlsli"
 
 cbuffer CB : register(XY_REG_B_MESH_DRAW_CB_FRAME)
 {
@@ -73,11 +74,10 @@ StructuredBuffer<uint>               g_ASInvocsPerSlot  : register(XY_REG_T_MESH
 Texture2D                            t_Diffuse        : register(XY_REG_T_MESH_DRAW_TEX_DIFFUSE);
 Texture2D                            t_NormalMap      : register(XY_REG_T_MESH_DRAW_TEX_NORMAL_MAP);
 Texture2DArray                       t_ShadowMap      : register(XY_REG_T_MESH_DRAW_TEX_SHADOW_MAP);
-Texture2D<float2>                    t_HiZ            : register(XY_REG_T_MESH_DRAW_TEX_HI_Z);
+Texture2D<float4>                    t_HiZ            : register(XY_REG_T_MESH_DRAW_TEX_HI_Z);
 
 SamplerState                         s_Sampler        : register(XY_REG_S_MESH_DRAW_SAMPLER_MAIN);
 SamplerComparisonState               s_ShadowSampler  : register(XY_REG_S_MESH_DRAW_SAMPLER_SHADOW);
-SamplerState                         s_HizSampler     : register(XY_REG_S_MESH_DRAW_SAMPLER_HI_Z);
 
 float FarthestHiZDepth(float a, float b)
 {
@@ -487,7 +487,7 @@ void depth_ms(
 }
 
 // =============================================================================
-// Pixel Shader — ambient + Lambert + bark + normal map + 4-cascade PCF shadow
+// Pixel Shader — ambient + Lambert + bark + normal map + cascaded PCF shadow
 // =============================================================================
 
 float SampleShadowCascade(float3 worldPos, uint cascadeIdx)
@@ -529,10 +529,7 @@ float SampleShadowCascade(float3 worldPos, uint cascadeIdx)
 void main_ps(in V2P i_v, out float4 o_color : SV_Target0)
 {
     // Cascade selection (shared between trunk + leaf paths)
-    uint cascadeIdx = 3;
-    if      (i_v.viewZ < cascadeSplits.x) cascadeIdx = 0;
-    else if (i_v.viewZ < cascadeSplits.y) cascadeIdx = 1;
-    else if (i_v.viewZ < cascadeSplits.z) cascadeIdx = 2;
+    uint cascadeIdx = SelectShadowCascade(i_v.viewZ, cascadeSplits);
 
     float3 lightDir   = -normalize(sunLightDir);
     float  notInShadow = SampleShadowCascade(i_v.worldPos, cascadeIdx);

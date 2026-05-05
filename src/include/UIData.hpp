@@ -27,6 +27,14 @@ struct UIData {
     uint32_t shadowCascadeDrawCount = 0; // sum over all cascades of per-cascade visible (counts overdraw)
     uint32_t shadowOverdrawCount    = 0; // shadowCascadeDrawCount - shadowVisibleCount
 
+    // Scene-wide leaf totals (CPU-derived capacity) and per-frame visible counts
+    // (GPU readback from leaf_as / leaf_shadow_as atomics, mesh-shader pipeline only;
+    // 0 in P0/P1).
+    uint32_t totalLeafInstanceCount        = 0;  // Σ leafCount per instance
+    uint32_t totalLeafMeshletCount         = 0;  // Σ leafMeshletCount per instance
+    uint32_t visibleLeafInstanceCount      = 0;  // Σ meta.y over leaves passing eye AS cull
+    uint32_t shadowVisibleLeafInstanceCount = 0; // Σ meta.y over leaves dispatched in shadow path
+
     bool showDebugTopDown       = false;
     bool showDebugShadowTopDown = false;
     bool showShadowMap          = false;
@@ -59,9 +67,14 @@ struct UIData {
     // currently-selected cascade slice. UIRenderer drives selectedCascade via the slider.
     int      selectedCascade        = 0;
     void*    selectedCascadeTexture = nullptr;
-    // Hi-Z: one nvrhi::ITexture* per mip level (single-mip scratch textures), set by ComputeCullRenderPass
-    // Each entry is a separate R32_FLOAT texture containing exactly one mip, copied each frame.
+    // Hi-Z: one nvrhi::ITexture* per mip level (single-mip scratch textures), set by the active render pass.
+    // Each entry is a separate RGBA32_FLOAT texture containing exactly one mip, copied each frame.
+    //   .r = raw farthest (Hi-Z occlusion, sky included)
+    //   .g = nearest      (SDSM near)
+    //   .b = sky-excluded farthest (SDSM far)
     std::vector<void*> hizMipTextures;
+    enum class HiZDebugChannel : int { RGB = 0, R_Farthest = 1, G_Nearest = 2, B_SDSMFar = 3 };
+    HiZDebugChannel hizDebugChannel = HiZDebugChannel::RGB;
 
     // Impostor atlas debug: one entry per (asset, view) slice. Set by ComputeRenderPass after the
     // bake completes. Layout: index = assetIdx * impostorViewsPerAsset + viewIdx.

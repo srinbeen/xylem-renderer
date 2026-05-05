@@ -207,11 +207,9 @@ bool SceneLoader::Load(const std::filesystem::path& path, SceneRegistry& registr
             }
             lNode["size"]    >> lp.size;
             lNode["perTip"]  >> lp.perTip;
-            if (lNode.isMember("lodMultipliers") && lNode["lodMultipliers"].isArray()) {
-                const auto& arr = lNode["lodMultipliers"];
-                for (Json::ArrayIndex i = 0; i < arr.size() && i < lp.lodMultipliers.size(); ++i)
-                    lp.lodMultipliers[i] = arr[i].asFloat();
-            }
+            // `lodMultipliers` was a per-LOD count thinning knob in earlier versions;
+            // dropped from LeafParams. Tolerate (ignore) the field if it appears in
+            // older scene files so they still load.
 
             if (auto* a = registry.findAsset(stableId)) a->leaf = lp;
         }
@@ -449,9 +447,6 @@ bool SceneLoader::Save(const std::filesystem::path& path, const SceneRegistry& r
                 leaf["color"]  = color;
                 leaf["size"]   = lp.size;
                 leaf["perTip"] = lp.perTip;
-                Json::Value mults(Json::arrayValue);
-                for (float m : lp.lodMultipliers) mults.append(m);
-                leaf["lodMultipliers"] = mults;
                 a["leaf"] = leaf;
             }
 

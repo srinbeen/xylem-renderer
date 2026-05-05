@@ -20,13 +20,14 @@
 namespace Xylem {
 
 // Per-asset leaf rendering parameters. Leaf geometry (cross-billboards) is emitted
-// at every space-colonization terminal, scaled per-LOD by `lodMultipliers`.
+// at every space-colonization terminal. v1 has no per-LOD count thinning — every
+// pipeline renders the full leaf set; meshlet-level culling in P2 is the future
+// perf lever for distance-based reduction.
 struct LeafParams {
     dm::float3            color          = dm::float3(0.20f, 0.55f, 0.18f);
     float                 size           = 0.25f;
     uint32_t              perTip         = 1;          // 1 leaf per terminal by default — bumping
                                                        // produces clumping at SC-dense regions.
-    std::array<float, 4>  lodMultipliers = {1.0f, 0.5f, 0.25f, 0.0f};
 };
 
 // CPU-only asset definition — no GPU handles.
@@ -105,6 +106,11 @@ public:
     const dm::box3& getSceneBounds() const { return m_SceneBounds; }
 
     uint32_t totalInstanceCount() const;
+
+    // Scene-wide leaf totals: sum over every instance of its asset's leaf-set
+    // size (or meshlet count). O(total_instances) — cheap to call per frame.
+    uint32_t totalLeafInstanceCount() const;
+    uint32_t totalLeafMeshletCount() const;
 
     // Lookup asset by stable ID (returns nullptr if not found).
     TreeAssetDef*       findAsset(size_t id);

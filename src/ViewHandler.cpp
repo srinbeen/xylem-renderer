@@ -7,6 +7,9 @@ void ViewHandler::computeCascades(const dm::box3& sceneBbox, dm::float3 sunDirec
                                    float nearPlane, float farPlane, float aspectRatio, float fovY,
                                    uint32_t shadowRes, float pssmLambda)
 {
+    static_assert(Render::c_NumCascades >= 1 && Render::c_NumCascades <= 5,
+        "cascadeSplitDistances stores up to four split thresholds");
+
     worldToLight = dm::lookatZ(sunDirection, dm::float3(0,1,0)) * dm::scaling(dm::float3(1.f, 1.f, -1.f));
     dm::box3 sceneBboxLS = sceneBbox * worldToLight;
 
@@ -30,7 +33,10 @@ void ViewHandler::computeCascades(const dm::box3& sceneBbox, dm::float3 sunDirec
         splits[i] = lambda * logSplit + (1.0f - lambda) * linSplit;
     }
 
-    cascadeSplitDistances = dm::float4(splits[1], splits[2], splits[3], splits[4]);
+    cascadeSplitDistances = dm::float4(splits[N]);
+    constexpr uint32_t kPackedSplitCount = (N < 4u) ? N : 4u;
+    for (uint32_t i = 0; i < kPackedSplitCount; ++i)
+        cascadeSplitDistances[i] = splits[i + 1];
 
     float tanHalfFovY = std::tanf(fovY * 0.5f);
     float tanHalfFovX = tanHalfFovY * aspectRatio;

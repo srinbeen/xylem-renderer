@@ -34,7 +34,6 @@
     { "namespace": ["Compute", "Cull"], "name": "kUAV_ImpostorCount", "kind": "u", "slot": 8 },
     { "namespace": ["Compute", "Cull"], "name": "kUAV_ImpostorVis", "kind": "u", "slot": 9 },
     { "namespace": ["Compute", "Cull"], "name": "kUAV_ImpostorIndirectArgs", "kind": "u", "slot": 10 },
-    { "namespace": ["Compute", "Cull"], "name": "kSampler_HiZ", "kind": "s", "slot": 0 },
 
     { "namespace": ["Compute", "Impostor"], "name": "kCB_Frame", "kind": "b", "slot": 0 },
     { "namespace": ["Compute", "Impostor"], "name": "kPushC_AssetIndex", "kind": "b", "slot": 1 },
@@ -116,7 +115,6 @@
     { "namespace": ["Mesh", "Draw"], "name": "kTex_HiZ", "kind": "t", "slot": 17 },
     { "namespace": ["Mesh", "Draw"], "name": "kSampler_Main", "kind": "s", "slot": 0 },
     { "namespace": ["Mesh", "Draw"], "name": "kSampler_Shadow", "kind": "s", "slot": 1 },
-    { "namespace": ["Mesh", "Draw"], "name": "kSampler_HiZ", "kind": "s", "slot": 2 },
 
     { "namespace": ["Mesh", "Cull"], "name": "kCB_Frame", "kind": "b", "slot": 0 },
     { "namespace": ["Mesh", "Cull"], "name": "kSRV_RegionData", "kind": "t", "slot": 0 },
@@ -142,7 +140,6 @@
     { "namespace": ["Mesh", "Cull"], "name": "kUAV_ImpostorIndirectArgs", "kind": "u", "slot": 10 },
     { "namespace": ["Mesh", "Cull"], "name": "kUAV_MainLeafDispatch", "kind": "u", "slot": 11 },
     { "namespace": ["Mesh", "Cull"], "name": "kUAV_ShadowLeafDispatch", "kind": "u", "slot": 12 },
-    { "namespace": ["Mesh", "Cull"], "name": "kSampler_HiZ", "kind": "s", "slot": 0 },
 
     { "namespace": ["Mesh", "DepthPrepass"], "name": "kCB_Frame", "kind": "b", "slot": 0 },
     { "namespace": ["Mesh", "DepthPrepass"], "name": "kPushC_Slot", "kind": "b", "slot": 1 },

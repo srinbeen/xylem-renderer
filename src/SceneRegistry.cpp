@@ -91,6 +91,92 @@ Scene::LeafMeshlet buildLeafMeshlet(const std::vector<Scene::LeafInstance>& leav
     return meshlet;
 }
 
+// Tuning knob for cluster-radius cap. R_MAX = kClusterRadiusFactor * cbrt(K) *
+// cbrt(canopy_volume / leaf_count) — a multiple of the mean leaf spacing scaled
+// up to fit ~K leaves in a sphere. Larger values produce fewer, looser clusters
+// (more leaves per meshlet on average); smaller values produce more, tighter
+// clusters (better AS-side culling, more meshlet overhead).
+constexpr float kClusterRadiusFactor = 1.5f;
+
+// Greedy seeded nearest-neighbor cluster: starts from the lowest unassigned leaf
+// and pulls in nearest unassigned leaves one at a time, stopping when either the
+// cluster reaches kLeavesPerMeshlet members or adding the next nearest would
+// exceed `rMax`. A 7-leaf cluster with one far outlier becomes a tight 7-leaf
+// meshlet plus a 1-leaf meshlet, which is the right tradeoff: AS-side culling
+// benefits from tight bounds far more than from packing meshlets full.
+struct LeafCluster {
+    std::vector<uint32_t> indices;
+    dm::box3              bounds = dm::box3::empty();
+};
+
+bool tryAddToCluster(LeafCluster&                              c,
+                     const std::vector<Scene::LeafInstance>&   leaves,
+                     uint32_t                                  leafIdx,
+                     float                                     rMax)
+{
+    dm::box3 newBounds = c.bounds;
+    includeLeafCorners(newBounds, leaves[leafIdx]);
+    const float newRadius = dm::length(newBounds.diagonal()) * 0.5f;
+    if (newRadius > rMax) return false;
+    c.bounds = newBounds;
+    c.indices.push_back(leafIdx);
+    return true;
+}
+
+std::vector<LeafCluster> clusterLeaves(const std::vector<Scene::LeafInstance>& leaves,
+                                       float                                    rMax)
+{
+    std::vector<uint8_t> assigned(leaves.size(), 0);
+    std::vector<LeafCluster> clusters;
+
+    for (uint32_t seed = 0; seed < leaves.size(); ++seed) {
+        if (assigned[seed]) continue;
+
+        LeafCluster c;
+        includeLeafCorners(c.bounds, leaves[seed]);
+        c.indices.push_back(seed);
+        assigned[seed] = 1;
+
+        while (c.indices.size() < kLeavesPerMeshlet) {
+            const dm::float3 center = (c.bounds.m_mins + c.bounds.m_maxs) * 0.5f;
+
+            // O(N) nearest-unassigned-to-center scan. Total clustering cost is
+            // O(N^2 / kLeavesPerMeshlet); for typical asset sizes (~hundreds of
+            // leaves) this runs in well under a millisecond on a single thread.
+            float    bestDistSq = std::numeric_limits<float>::max();
+            uint32_t bestIdx    = UINT32_MAX;
+            for (uint32_t i = 0; i < leaves.size(); ++i) {
+                if (assigned[i]) continue;
+                const dm::float3 leafPos = xyz(leaves[i].centerHalfSize);
+                const dm::float3 d       = leafPos - center;
+                const float      distSq  = dm::dot(d, d);
+                if (distSq < bestDistSq) { bestDistSq = distSq; bestIdx = i; }
+            }
+            if (bestIdx == UINT32_MAX) break;
+            if (!tryAddToCluster(c, leaves, bestIdx, rMax)) break;
+            assigned[bestIdx] = 1;
+        }
+
+        clusters.push_back(std::move(c));
+    }
+    return clusters;
+}
+
+float computeClusterRadiusCap(const dm::box3& bbox, uint32_t leafCount)
+{
+    if (leafCount <= kLeavesPerMeshlet) {
+        // Whole canopy fits in one meshlet — cap at the canopy's own bounding sphere.
+        return dm::length(bbox.diagonal()) * 0.5f + 1e-3f;
+    }
+    const dm::float3 d      = bbox.diagonal();
+    const float      volume = std::max(d.x * d.y * d.z, 1e-6f);
+    // Mean spacing for a uniform distribution of `leafCount` points in `volume`.
+    const float meanSpacing  = std::cbrt(volume / static_cast<float>(leafCount));
+    // Radius that nominally encloses kLeavesPerMeshlet such points.
+    const float clusterScale = std::cbrt(static_cast<float>(kLeavesPerMeshlet));
+    return kClusterRadiusFactor * clusterScale * meanSpacing;
+}
+
 Scene::LeafAssetDef buildLeafAsset(const std::vector<ProcGen::SCNode>& nodes,
                                    const std::vector<uint32_t>&         terminals,
                                    const LeafParams&                    params,
@@ -107,8 +193,9 @@ Scene::LeafAssetDef buildLeafAsset(const std::vector<ProcGen::SCNode>& nodes,
 
     const float halfSize = params.size * 0.5f;
 
-    // LOD-prefix friendly order: emit the kth leaf for every terminal before
-    // moving to k+1, so lower LOD prefixes thin the canopy broadly.
+    // Generation pass: emit one leaf per (terminal, perTip rank). Order is irrelevant
+    // here since the cluster pass below reorders by spatial proximity anyway. v1 has
+    // no per-LOD count thinning — every pipeline renders the full set.
     for (uint32_t k = 0; k < params.perTip; ++k) {
         for (size_t t = 0; t < terminals.size(); ++t) {
             const uint32_t nodeIdx = terminals[t];
@@ -158,32 +245,49 @@ Scene::LeafAssetDef buildLeafAsset(const std::vector<ProcGen::SCNode>& nodes,
         }
     }
 
-    const uint32_t fullCount = static_cast<uint32_t>(out.instances.size());
-    uint32_t previousCount = fullCount;
-    for (uint32_t lod = 0; lod < numLods; ++lod) {
-        const float mult = lod < params.lodMultipliers.size()
-            ? std::clamp(params.lodMultipliers[lod], 0.f, 1.f)
-            : 0.f;
-        uint32_t count = std::min(fullCount, static_cast<uint32_t>(std::round(fullCount * mult)));
-        if (lod > 0) count = std::min(count, previousCount);
-        out.countByLod[lod] = count;
-        previousCount = count;
+    // Spatial clustering: greedy seeded nearest-neighbor with a density-adaptive
+    // radius cap. Each cluster becomes one variable-size leaf meshlet (1..K leaves).
+    const float rMax = computeClusterRadiusCap(out.localBbox,
+        static_cast<uint32_t>(out.instances.size()));
+    const std::vector<LeafCluster> clusters = clusterLeaves(out.instances, rMax);
+
+    // Reorder leaf instances so cluster K's leaves sit immediately after cluster K-1's.
+    // This is the invariant that lets `LeafSlot.leafCount = Σ meta.y` and the per-leaf
+    // prefix [leafOffset, leafOffset + leafCount) match the meshlet prefix exactly.
+    std::vector<Scene::LeafInstance> reordered;
+    reordered.reserve(out.instances.size());
+    out.meshlets.clear();
+    out.meshlets.reserve(clusters.size());
+
+    for (const auto& cluster : clusters) {
+        const uint32_t leafBase = static_cast<uint32_t>(reordered.size());
+        for (uint32_t idx : cluster.indices)
+            reordered.push_back(out.instances[idx]);
+
+        Scene::LeafMeshlet meshlet{};
+        meshlet.meta = dm::uint4(leafBase,
+                                 static_cast<uint32_t>(cluster.indices.size()),
+                                 0, 0);
+        const dm::float3 center = (cluster.bounds.m_mins + cluster.bounds.m_maxs) * 0.5f;
+        const float      radius = dm::length(cluster.bounds.diagonal()) * 0.5f;
+        meshlet.bounds = dm::float4(center, radius);
+        out.meshlets.push_back(meshlet);
     }
+    out.instances = std::move(reordered);
 
-    for (uint32_t lod = 0; lod < numLods; ++lod) {
-        Scene::LeafSlot slot{};
-        slot.leafOffset    = 0;
-        slot.leafCount     = out.countByLod[lod];
-        slot.meshletOffset = static_cast<uint32_t>(out.meshlets.size());
+    // No per-LOD thinning in v1 — every LOD slot is the full leaf set. Keeping the
+    // per-LOD slot array (rather than collapsing to a single slot) lets the existing
+    // SharedGPUAssets / render-pass code index by `slot = ai * numLods + li` without
+    // change. When AS-side leaf-meshlet culling lands as the perf lever, it operates
+    // on the meshlet array directly and still doesn't need per-LOD slots.
+    Scene::LeafSlot fullSlot{};
+    fullSlot.leafOffset    = 0;
+    fullSlot.leafCount     = static_cast<uint32_t>(out.instances.size());
+    fullSlot.meshletOffset = 0;
+    fullSlot.meshletCount  = static_cast<uint32_t>(out.meshlets.size());
 
-        for (uint32_t start = 0; start < slot.leafCount; start += kLeavesPerMeshlet) {
-            const uint32_t chunkCount = std::min(kLeavesPerMeshlet, slot.leafCount - start);
-            out.meshlets.push_back(buildLeafMeshlet(out.instances, start, chunkCount));
-        }
-
-        slot.meshletCount = static_cast<uint32_t>(out.meshlets.size()) - slot.meshletOffset;
-        out.lodSlots[lod] = slot;
-    }
+    out.countByLod.assign(numLods, fullSlot.leafCount);
+    out.lodSlots.assign(numLods, fullSlot);
 
     return out;
 }
@@ -198,6 +302,30 @@ uint32_t SceneRegistry::totalInstanceCount() const {
     uint32_t total = 0;
     for (const auto& r : m_Regions)
         total += r.instanceCount;
+    return total;
+}
+
+uint32_t SceneRegistry::totalLeafInstanceCount() const {
+    uint32_t total = 0;
+    for (const auto& r : m_Regions) {
+        for (const auto& inst : r.instances) {
+            const auto* asset = findAsset(inst.assetId);
+            if (asset && asset->hasLeaves)
+                total += static_cast<uint32_t>(asset->leafAsset.instances.size());
+        }
+    }
+    return total;
+}
+
+uint32_t SceneRegistry::totalLeafMeshletCount() const {
+    uint32_t total = 0;
+    for (const auto& r : m_Regions) {
+        for (const auto& inst : r.instances) {
+            const auto* asset = findAsset(inst.assetId);
+            if (asset && asset->hasLeaves)
+                total += static_cast<uint32_t>(asset->leafAsset.meshlets.size());
+        }
+    }
     return total;
 }
 

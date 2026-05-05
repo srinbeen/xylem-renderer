@@ -1,5 +1,6 @@
 #include "../include/macros.h"
 #include "ShaderRegisterMap.hlsli"
+#include "ShadowCascadeCommon.hlsli"
 
 #pragma pack_matrix(row_major)
 
@@ -62,11 +63,7 @@ void terrain_ps(
     float3 lightDir = -normalize(sunLightDir);
     float diffuse   = max(dot(N, lightDir), 0);
 
-    // Cascade selection by view-space depth
-    uint cascadeIdx = 3;
-    if      (i_viewZ < cascadeSplits.x) cascadeIdx = 0;
-    else if (i_viewZ < cascadeSplits.y) cascadeIdx = 1;
-    else if (i_viewZ < cascadeSplits.z) cascadeIdx = 2;
+    uint cascadeIdx = SelectShadowCascade(i_viewZ, cascadeSplits);
 
     float notInShadow = SampleShadowCascade(i_worldPos, cascadeIdx);
 

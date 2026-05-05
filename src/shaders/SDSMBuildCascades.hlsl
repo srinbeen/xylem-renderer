@@ -21,7 +21,10 @@ struct SDSMInput {
     float2   _pad;
 };
 ConstantBuffer<SDSMInput> cb : register(XY_REG_B_COMPUTE_SDSM_CB_INPUT);
-Texture2D<float2> hizTexture : register(XY_REG_T_COMPUTE_SDSM_SRV_HI_Z);
+// RGBA32_FLOAT: .r = Hi-Z occluder min (sky included, unused here),
+//               .g = nearest max (SDSM near),
+//               .b = sky-excluded min (SDSM far).
+Texture2D<float4> hizTexture : register(XY_REG_T_COMPUTE_SDSM_SRV_HI_Z);
 
 struct SDSMCascadeOut {
     float4x4 lightViewProj[XYLEM_NUM_CASCADES];
@@ -40,17 +43,26 @@ void BuildCascades(uint3 gtid : SV_GroupThreadID)
     uint c = gtid.x;
 
     if (c == 0) {
-        // Pull 1x1 min/max depth from top of Hi-Z chain.
-        float2 globalMinMax = hizTexture.Load(int3(0, 0, cb.maxHiZMip));
-        float farDepthVal  = globalMinMax.r;   // reverse-Z: min value -> farthest
-        float nearDepthVal = globalMinMax.g;   // reverse-Z: max value -> nearest
+        // Pull 1x1 reduced depth from top of Hi-Z chain.
+        // .g = nearest (max),  .b = sky-excluded farthest (min, sky encoded as 1).
+        float4 globalMinMax = hizTexture.Load(int3(0, 0, cb.maxHiZMip));
+        float nearDepthVal = globalMinMax.g;
+        float farDepthVal  = globalMinMax.b;
 
         // D3D-style perspective: depth_ndc = A + B/viewZ  ->  viewZ = B / (depth - A)
-        // Guard against degenerate/empty frame (depth==cleared == 0 in reverse-Z).
+        // Fallback when no geometry is visible: full-sky frame collapses .b to the
+        // sentinel 1.0, no-geometry frame collapses .g to 0.
         float sdsmFar;
         float sdsmNear;
-        if (farDepthVal <= 0.0 || nearDepthVal <= 0.0) {
-            // Empty depth buffer: fall back to region envelope
+        
+        // if not looking at scene, use regionEnvelope as bounds
+        #if XYLEM_USE_REVERSE_Z
+        const bool notInSceneBounds = farDepthVal == 1.0 || nearDepthVal == 0.0;
+        #else
+        const bool notInSceneBounds = nearDepthVal == 1.0 || farDepthVal == 0.0;
+        #endif
+        
+        if (notInSceneBounds) {
             sdsmFar  = cb.regionEnvelopeFar;
             sdsmNear = cb.regionEnvelopeNear;
         } else {
@@ -58,14 +70,15 @@ void BuildCascades(uint3 gtid : SV_GroupThreadID)
             sdsmNear = cb.projB / (nearDepthVal - cb.projA);
         }
 
-        // Safety expand SDSM bounds (within-region instance pop-in), then clamp
-        // outward against CPU region envelope (new-region pop-in).
-        float tightNear = min(sdsmNear * 0.95, cb.regionEnvelopeNear);
-        float tightFar  = max(sdsmFar  * 1.05, cb.regionEnvelopeFar);
+        // SDSM values based on pre-pass so frame N-1 objects
+        // fast camera movement might make bounds inaccurate for one frame
+        // add padding as a heuristic
+        float tightNear = max(sdsmNear * (1-XYLEM_SDSM_PADDING), cb.regionEnvelopeNear);
+        float tightFar  = min(sdsmFar * (1+XYLEM_SDSM_PADDING), cb.regionEnvelopeFar);
         tightNear = max(tightNear, cb.cameraNearPlane);
         tightFar  = max(tightFar,  tightNear + 1.0);    // incase they are very close or get swapped
 
-        // Log-split (constant far/near ratio) — mirrors ViewHandler::computeCascades.
+        // Log-split (constant far/near ratio)
         const float lambda = cb.pssmLambda;
         float pssmNear = tightNear;
 
@@ -78,7 +91,7 @@ void BuildCascades(uint3 gtid : SV_GroupThreadID)
             g_splits[i] = lambda * logSplit + (1.0 - lambda) * linSplit;
         }
 
-        // Diagnostic readback for debugging shadow swimming.
+        // readback values
         outBuffer[0].debugDepthExtents = float4(nearDepthVal, farDepthVal, tightNear, tightFar);
     }
 
@@ -159,6 +172,22 @@ void BuildCascades(uint3 gtid : SV_GroupThreadID)
     outBuffer[0].shadowCasterMaxLS[c] = float4(bboxMaxLS, 0.0);
 
     if (c == 0) {
-        outBuffer[0].cascadeSplits = float4(g_splits[1], g_splits[2], g_splits[3], g_splits[4]);
+        float4 packedSplits = float4(g_splits[XYLEM_NUM_CASCADES],
+                                     g_splits[XYLEM_NUM_CASCADES],
+                                     g_splits[XYLEM_NUM_CASCADES],
+                                     g_splits[XYLEM_NUM_CASCADES]);
+#if XYLEM_NUM_CASCADES > 0
+        packedSplits.x = g_splits[1];
+#endif
+#if XYLEM_NUM_CASCADES > 1
+        packedSplits.y = g_splits[2];
+#endif
+#if XYLEM_NUM_CASCADES > 2
+        packedSplits.z = g_splits[3];
+#endif
+#if XYLEM_NUM_CASCADES > 3
+        packedSplits.w = g_splits[4];
+#endif
+        outBuffer[0].cascadeSplits = packedSplits;
     }
 }

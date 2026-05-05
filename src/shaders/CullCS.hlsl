@@ -71,8 +71,7 @@ RWByteAddressBuffer                impostorIndirectArgs : register(XY_REG_U_COMP
 RWByteAddressBuffer                leafMainIndirectArgs : register(u11);
 RWByteAddressBuffer                leafShadowIndirectArgs : register(u12);
 
-Texture2D<float2>                  hizTexture           : register(XY_REG_T_COMPUTE_CULL_SRV_HI_Z);
-SamplerState                       hizSampler           : register(XY_REG_S_COMPUTE_CULL_SAMPLER_HI_Z);
+Texture2D<float4>                  hizTexture           : register(XY_REG_T_COMPUTE_CULL_SRV_HI_Z);
 
 bool DoesAABBIntersectFrustum(box3 bbox, frustum f);
 uint SelectLOD(box3 bbox);
@@ -265,6 +264,7 @@ bool IsOccludedByHiZ(box3 bbox)
     float closestDepth = 1.0;   // far plane in forward-Z
 #endif
 
+    // closestDepth: AABB point closest to near plane
     [unroll]
     for (int i = 0; i < 8; i++)
     {
@@ -278,9 +278,9 @@ bool IsOccludedByHiZ(box3 bbox)
         minUV = min(minUV, uv);
         maxUV = max(maxUV, uv);
 #if XYLEM_USE_REVERSE_Z
-        closestDepth = max(closestDepth, ndc.z);  // max = nearest in reverse-Z
+        closestDepth = max(closestDepth, ndc.z);
 #else
-        closestDepth = min(closestDepth, ndc.z);  // min = nearest in forward-Z
+        closestDepth = min(closestDepth, ndc.z);
 #endif
     }
 

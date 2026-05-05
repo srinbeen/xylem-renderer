@@ -28,7 +28,7 @@ using namespace donut;
 
 // GPU-driven mesh-shader pipeline. Mirrors ComputeRenderPass feature-for-feature:
 //   1. Depth prepass via mesh pipeline -> D32 depth target
-//   2. Hi-Z mip chain (RG32_FLOAT: .r=farthest, .g=nearest for SDSM)
+//   2. Hi-Z mip chain (RGBA32_FLOAT: .r=raw farthest for Hi-Z, .g=nearest for SDSM, .b=sky-excluded farthest for SDSM)
 //   3. SDSM cascade build (consumes reduced Hi-Z depth)
 //   4. GPU region + instance cull (MeshCullCS) -> per-slot DISPATCH_MESH args
 //   5. Shadow pass: 4 cascades into Texture2DArray via mesh pipeline
@@ -126,6 +126,13 @@ private:
         nvrhi::BufferHandle              shadowLeafDispatchArgsBuffer;
         nvrhi::BufferHandle              shadowUniqueCounter;   // UAV raw, single uint32
 
+        // Per-frame leaf survivor counters (single uint, raw UAV). leaf_as /
+        // leaf_shadow_as atomically accumulate Σ meshlet.meta.y over surviving
+        // meshlets. Cleared at frame start, copied to readback ring.
+        nvrhi::BufferHandle              mainLeafSurvivorCounter;
+        nvrhi::BufferHandle              depthLeafSurvivorScratch;  // bound to depth-prepass leaf set; never read
+        nvrhi::BufferHandle              shadowLeafSurvivorCounter;
+
         // Impostor terminal-LOD slot buffers (numAssets slots, one per asset)
         nvrhi::BufferHandle              impostorSlotOffsetBuffer;   // SRV uint32[numAssets]
         nvrhi::BufferHandle              impostorCountBuffer;        // UAV uint32[numAssets]
@@ -141,7 +148,6 @@ private:
         nvrhi::ShaderHandle              meshShader;
         nvrhi::ShaderHandle              pixelShader;
         nvrhi::SamplerHandle             shadowSampler;
-        nvrhi::SamplerHandle             hizSampler;
         nvrhi::BindingLayoutHandle       bindingLayout;
         std::vector<nvrhi::BindingSetHandle> bindingSets;
         nvrhi::MeshletPipelineHandle     pipeline;
@@ -154,6 +160,7 @@ private:
     // by leaf meshlet count for visible trees.
     struct LeafDrawResources {
         nvrhi::ShaderHandle              amplificationShader;
+        nvrhi::ShaderHandle              shadowAmplificationShader;  // leaf_shadow_as: no Hi-Z cull
         nvrhi::ShaderHandle              meshShader;
         nvrhi::ShaderHandle              depthMS;
         nvrhi::ShaderHandle              shadowMS;
@@ -227,7 +234,6 @@ private:
         nvrhi::ComputePipelineHandle           buildPipeline;
         nvrhi::BindingLayoutHandle             buildBindingLayout;
         std::vector<nvrhi::BindingSetHandle>   buildBindingSets;
-        nvrhi::SamplerHandle                   pointSampler;
         std::vector<nvrhi::TextureHandle>      debugMipTextures;
     };
 
@@ -381,8 +387,7 @@ private:
     void _BuildHiZMipChain();
     void _RunSDSMBuildCascades(const dm::box3& sceneBbox, float aspectRatio, float fovY,
                                float regionEnvelopeNear, float regionEnvelopeFar);
-    void _ComputeRegionEnvelope(const dm::frustum& viewFrustum,
-                                const dm::float3& camPos, const dm::float3& camDir,
+    void _ComputeRegionEnvelope(const dm::float3& camPos, const dm::float3& camDir,
                                 float& outNearZ, float& outFarZ) const;
     void _RenderSkyPass(nvrhi::IFramebuffer* framebuffer);
     void _RenderShadowPass();

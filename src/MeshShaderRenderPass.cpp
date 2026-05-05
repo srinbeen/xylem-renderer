@@ -127,8 +127,8 @@ bool MeshShaderRenderPass::_InitDrawResources() {
         return false;
     }
 
-    // Bark sampler now lives in SharedGPUAssets — only the shadow + Hi-Z samplers
-    // are pass-local since they're used outside the bark binding.
+    // Bark sampler now lives in SharedGPUAssets; the shadow sampler is pass-local
+    // since it is used outside the bark binding.
     m_StageResources.sceneDraw.shadowSampler = GetDevice()->createSampler(
         nvrhi::SamplerDesc()
             .setMinFilter(true)
@@ -138,11 +138,7 @@ bool MeshShaderRenderPass::_InitDrawResources() {
             .setAllAddressModes(nvrhi::SamplerAddressMode::Border)
             .setBorderColor(nvrhi::Color(1.f))
         );
-    m_StageResources.sceneDraw.hizSampler = GetDevice()->createSampler(
-        nvrhi::SamplerDesc()
-            .setAllAddressModes(nvrhi::SamplerAddressMode::Clamp)
-            .setAllFilters(false));
-    if (!m_StageResources.sceneDraw.shadowSampler || !m_StageResources.sceneDraw.hizSampler) return false;
+    if (!m_StageResources.sceneDraw.shadowSampler) return false;
 
     nvrhi::BindingLayoutDesc bld;
     bld.visibility = nvrhi::ShaderType::All;
@@ -173,7 +169,6 @@ bool MeshShaderRenderPass::_InitDrawResources() {
 
         nvrhi::BindingLayoutItem::Sampler(mesh_reg::Draw::kSampler_Main),
         nvrhi::BindingLayoutItem::Sampler(mesh_reg::Draw::kSampler_Shadow),
-        nvrhi::BindingLayoutItem::Sampler(mesh_reg::Draw::kSampler_HiZ),
     };
     m_StageResources.sceneDraw.bindingLayout = GetDevice()->createBindingLayout(bld);
     return m_StageResources.sceneDraw.bindingLayout != nullptr;
@@ -185,6 +180,8 @@ bool MeshShaderRenderPass::_InitLeafResources() {
     auto& L = m_StageResources.sceneLeaves;
     L.amplificationShader = m_ShaderFactory->CreateShader("app/MeshLeaves.hlsl",
         "leaf_as", nullptr, nvrhi::ShaderType::Amplification);
+    L.shadowAmplificationShader = m_ShaderFactory->CreateShader("app/MeshLeaves.hlsl",
+        "leaf_shadow_as", nullptr, nvrhi::ShaderType::Amplification);
     L.meshShader = m_ShaderFactory->CreateShader("app/MeshLeaves.hlsl",
         "leaf_ms", nullptr, nvrhi::ShaderType::Mesh);
     L.depthMS = m_ShaderFactory->CreateShader("app/MeshLeaves.hlsl",
@@ -193,17 +190,23 @@ bool MeshShaderRenderPass::_InitLeafResources() {
         "leaf_shadow_ms", nullptr, nvrhi::ShaderType::Mesh);
     L.pixelShader = m_ShaderFactory->CreateShader("app/MeshLeaves.hlsl",
         "leaf_ps", nullptr, nvrhi::ShaderType::Pixel);
-    if (!L.amplificationShader || !L.meshShader || !L.depthMS || !L.shadowMS || !L.pixelShader) {
+    if (!L.amplificationShader || !L.shadowAmplificationShader || !L.meshShader
+        || !L.depthMS || !L.shadowMS || !L.pixelShader) {
         log::error("MeshShaderRenderPass: leaf AS/MS/PS compile failed");
         return false;
     }
 
-    // Main color: b0 CB, b1 push, t0..t8 SRVs, s0 sampler. Mirrors MeshLeaves.hlsl.
+    // Main color binding layout — must match MeshLeaves.hlsl:
+    //   b0 CB (cull frame), b1 PushC (slotIdx), b2 ASCullCB (Hi-Z toggle/dims),
+    //   t0..t7 leaf SRVs, t8 shadow Tex2DArray, t9 Hi-Z,
+    //   u0 leaf survivor counter (raw),
+    //   s0 shadow sampler.
     nvrhi::BindingLayoutDesc mainBLD;
     mainBLD.visibility = nvrhi::ShaderType::All;
     mainBLD.bindings = {
         nvrhi::BindingLayoutItem::ConstantBuffer(0),
         nvrhi::BindingLayoutItem::PushConstants(1, sizeof(uint32_t)),
+        nvrhi::BindingLayoutItem::ConstantBuffer(2),
         nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0),
         nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1),
         nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2),
@@ -213,15 +216,41 @@ bool MeshShaderRenderPass::_InitLeafResources() {
         nvrhi::BindingLayoutItem::StructuredBuffer_SRV(6),
         nvrhi::BindingLayoutItem::StructuredBuffer_SRV(7),
         nvrhi::BindingLayoutItem::Texture_SRV(8),
+        nvrhi::BindingLayoutItem::Texture_SRV(9),
+        nvrhi::BindingLayoutItem::RawBuffer_UAV(0),
         nvrhi::BindingLayoutItem::Sampler(0),
     };
     L.mainLayout = GetDevice()->createBindingLayout(mainBLD);
     if (!L.mainLayout) return false;
 
-    // Depth prepass: same SRVs t0..t7, no shadow texture/sampler.
+    // Depth prepass: shares cull-side state (b0/b1/b2 + t0..t7 + t9 Hi-Z).
+    // No shadow tex/sampler since there's no PS lighting.
+    // Survivor counter is bound to a scratch buffer — values discarded.
     nvrhi::BindingLayoutDesc depthBLD;
     depthBLD.visibility = nvrhi::ShaderType::All;
     depthBLD.bindings = {
+        nvrhi::BindingLayoutItem::ConstantBuffer(0),
+        nvrhi::BindingLayoutItem::PushConstants(1, sizeof(uint32_t)),
+        nvrhi::BindingLayoutItem::ConstantBuffer(2),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(4),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(5),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(6),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(7),
+        nvrhi::BindingLayoutItem::Texture_SRV(9),
+        nvrhi::BindingLayoutItem::RawBuffer_UAV(0),
+    };
+    L.depthLayout = GetDevice()->createBindingLayout(depthBLD);
+    if (!L.depthLayout) return false;
+
+    // Shadow leaves use leaf_shadow_as (no Hi-Z / no eye-frustum cull) and bind
+    // to shadow vis/slot/count + shadow leaf slots. No b2 / Hi-Z.
+    nvrhi::BindingLayoutDesc shadowBLD;
+    shadowBLD.visibility = nvrhi::ShaderType::All;
+    shadowBLD.bindings = {
         nvrhi::BindingLayoutItem::ConstantBuffer(0),
         nvrhi::BindingLayoutItem::PushConstants(1, sizeof(uint32_t)),
         nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0),
@@ -232,12 +261,9 @@ bool MeshShaderRenderPass::_InitLeafResources() {
         nvrhi::BindingLayoutItem::StructuredBuffer_SRV(5),
         nvrhi::BindingLayoutItem::StructuredBuffer_SRV(6),
         nvrhi::BindingLayoutItem::StructuredBuffer_SRV(7),
+        nvrhi::BindingLayoutItem::RawBuffer_UAV(0),
     };
-    L.depthLayout = GetDevice()->createBindingLayout(depthBLD);
-    if (!L.depthLayout) return false;
-
-    // Shadow: same as depth but bound to shadow vis/slot/count buffers + shadow leaf slots.
-    L.shadowLayout = GetDevice()->createBindingLayout(depthBLD);
+    L.shadowLayout = GetDevice()->createBindingLayout(shadowBLD);
     return L.shadowLayout != nullptr;
 }
 
@@ -285,7 +311,6 @@ bool MeshShaderRenderPass::_InitCullResources() {
         nvrhi::BindingLayoutItem::RawBuffer_UAV(mesh_reg::Cull::kUAV_ShadowLeafDispatch),
 
         nvrhi::BindingLayoutItem::Texture_SRV(mesh_reg::Cull::kSRV_HiZ),
-        nvrhi::BindingLayoutItem::Sampler(mesh_reg::Cull::kSampler_HiZ),
     };
     m_StageResources.cull.bindingLayout = GetDevice()->createBindingLayout(bld);
     if (!m_StageResources.cull.bindingLayout) return false;
@@ -894,6 +919,18 @@ void MeshShaderRenderPass::_UploadCullBuffers(nvrhi::ICommandList* cl) {
         .setCanHaveRawViews(true)
         .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess));
 
+    auto makeLeafSurvivorBuf = [&](const char* name) {
+        return device->createBuffer(nvrhi::BufferDesc()
+            .setByteSize(sizeof(uint32_t))
+            .setDebugName(name)
+            .setCanHaveUAVs(true)
+            .setCanHaveRawViews(true)
+            .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess));
+    };
+    m_StageResources.cull.mainLeafSurvivorCounter   = makeLeafSurvivorBuf("Mesh_MainLeafSurvivorCounter");
+    m_StageResources.cull.depthLeafSurvivorScratch  = makeLeafSurvivorBuf("Mesh_DepthLeafSurvivorScratch");
+    m_StageResources.cull.shadowLeafSurvivorCounter = makeLeafSurvivorBuf("Mesh_ShadowLeafSurvivorCounter");
+
     // --- Impostor cull buffers (per-asset slots) ---
     const uint32_t numAssets = std::max(1u,
         static_cast<uint32_t>(m_Registry.getAssets().size()));
@@ -969,8 +1006,9 @@ void MeshShaderRenderPass::_UploadCullBuffers(nvrhi::ICommandList* cl) {
     m_ReadbackMainEntries     = m_NumMainSlots;
     m_ReadbackShadowEntries   = m_NumShadowSlots;
     m_ReadbackImpostorEntries = numAssets;
+    // Layout: [mainCounts][shadowCounts][impostorCounts][shadowUnique][mainLeafSurvivors][shadowLeafSurvivors]
     const uint64_t readbackSize =
-        (m_ReadbackMainEntries + m_ReadbackShadowEntries + m_ReadbackImpostorEntries + 1) * sizeof(uint32_t);
+        (m_ReadbackMainEntries + m_ReadbackShadowEntries + m_ReadbackImpostorEntries + 3) * sizeof(uint32_t);
     for (uint32_t i = 0; i < k_QueuedFrames; i++) {
         m_ReadbackBuffers[i] = device->createBuffer(nvrhi::BufferDesc()
             .setByteSize(readbackSize)
@@ -1017,7 +1055,6 @@ void MeshShaderRenderPass::_RebuildCullBindingSet() {
         nvrhi::BindingSetItem::RawBuffer_UAV(mesh_reg::Cull::kUAV_ShadowLeafDispatch,    m_StageResources.cull.shadowLeafDispatchArgsBuffer),
 
         nvrhi::BindingSetItem::Texture_SRV(mesh_reg::Cull::kSRV_HiZ, m_StageResources.hiz.hizTexture),
-        nvrhi::BindingSetItem::Sampler(mesh_reg::Cull::kSampler_HiZ, m_StageResources.hiz.pointSampler),
     };
     m_StageResources.cull.bindingSet = GetDevice()->createBindingSet(bsd, m_StageResources.cull.bindingLayout);
 }
@@ -1061,7 +1098,6 @@ void MeshShaderRenderPass::_RebuildDrawBindingSet() {
 
             nvrhi::BindingSetItem::Sampler(mesh_reg::Draw::kSampler_Main,   m_Shared->barkSampler()),
             nvrhi::BindingSetItem::Sampler(mesh_reg::Draw::kSampler_Shadow, m_StageResources.sceneDraw.shadowSampler),
-            nvrhi::BindingSetItem::Sampler(mesh_reg::Draw::kSampler_HiZ,    m_StageResources.sceneDraw.hizSampler),
         };
         m_StageResources.sceneDraw.bindingSets[texIdx] = GetDevice()->createBindingSet(bsd, m_StageResources.sceneDraw.bindingLayout);
     }
@@ -1100,15 +1136,18 @@ void MeshShaderRenderPass::_RebuildLeafBindingSets() {
         || !m_Shared->leafSlotsBuffer() || !m_Shared->leafShadowSlotsBuffer()
         || !m_Shared->leafMeshletsBuffer()) return;
 
-    // Main color leaves consume the trunk-cull main vis/count + leaf instance buffers.
-    // Layout matches MeshLeaves.hlsl: t0=Vis, t1=SlotOffsets, t2=SlotCounts, t3=Instances,
-    // t4=ASInvocsPerSlot, t5=Leaves, t6=LeafSlots, t7=LeafMeshlets, t8=ShadowMap.
+    // Main color leaves: trunk-cull main vis/count + leaf instance buffers + Hi-Z
+    // for AS-side meshlet cull. Layout matches MeshLeaves.hlsl:
+    //   b0=CB, b1=PushC, b2=ASCullCB, t0..t7 leaf SRVs,
+    //   t8=ShadowMap, t9=Hi-Z, s0=ShadowSampler.
     {
         nvrhi::BindingSetDesc bsd;
         bsd.bindings = {
             nvrhi::BindingSetItem::ConstantBuffer(0, m_StageResources.frameShared.constantBuffer,
                 nvrhi::BufferRange(0, shader_cb::kCullFrameSize)),
             nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t)),
+            nvrhi::BindingSetItem::ConstantBuffer(2, m_StageResources.frameShared.asCullCB,
+                nvrhi::BufferRange(0, shader_cb::kMeshASCullSize)),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_StageResources.cull.mainVisBuffer),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_StageResources.cull.mainSlotOffsetBuffer),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_StageResources.cull.mainCountBuffer),
@@ -1118,18 +1157,22 @@ void MeshShaderRenderPass::_RebuildLeafBindingSets() {
             nvrhi::BindingSetItem::StructuredBuffer_SRV(6, m_Shared->leafSlotsBuffer()),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(7, m_Shared->leafMeshletsBuffer()),
             nvrhi::BindingSetItem::Texture_SRV(8, m_StageResources.shadow.depthTexture),
+            nvrhi::BindingSetItem::Texture_SRV(9, m_StageResources.hiz.hizTexture),
+            nvrhi::BindingSetItem::RawBuffer_UAV(0, m_StageResources.cull.mainLeafSurvivorCounter),
             nvrhi::BindingSetItem::Sampler(0, m_StageResources.sceneDraw.shadowSampler),
         };
         L.mainBindingSet = GetDevice()->createBindingSet(bsd, L.mainLayout);
     }
 
-    // Depth prepass leaves: same as main but no shadow tex/sampler.
+    // Depth prepass leaves: cull-side state + Hi-Z, no shadow tex/sampler.
     {
         nvrhi::BindingSetDesc bsd;
         bsd.bindings = {
             nvrhi::BindingSetItem::ConstantBuffer(0, m_StageResources.frameShared.constantBuffer,
                 nvrhi::BufferRange(0, shader_cb::kCullFrameSize)),
             nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t)),
+            nvrhi::BindingSetItem::ConstantBuffer(2, m_StageResources.frameShared.asCullCB,
+                nvrhi::BufferRange(0, shader_cb::kMeshASCullSize)),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_StageResources.cull.mainVisBuffer),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_StageResources.cull.mainSlotOffsetBuffer),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_StageResources.cull.mainCountBuffer),
@@ -1138,6 +1181,8 @@ void MeshShaderRenderPass::_RebuildLeafBindingSets() {
             nvrhi::BindingSetItem::StructuredBuffer_SRV(5, m_Shared->leafInstancesBuffer()),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(6, m_Shared->leafSlotsBuffer()),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(7, m_Shared->leafMeshletsBuffer()),
+            nvrhi::BindingSetItem::Texture_SRV(9, m_StageResources.hiz.hizTexture),
+            nvrhi::BindingSetItem::RawBuffer_UAV(0, m_StageResources.cull.depthLeafSurvivorScratch),
         };
         L.depthBindingSet = GetDevice()->createBindingSet(bsd, L.depthLayout);
     }
@@ -1157,6 +1202,7 @@ void MeshShaderRenderPass::_RebuildLeafBindingSets() {
             nvrhi::BindingSetItem::StructuredBuffer_SRV(5, m_Shared->leafInstancesBuffer()),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(6, m_Shared->leafShadowSlotsBuffer()),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(7, m_Shared->leafMeshletsBuffer()),
+            nvrhi::BindingSetItem::RawBuffer_UAV(0, m_StageResources.cull.shadowLeafSurvivorCounter),
         };
         L.shadowBindingSet = GetDevice()->createBindingSet(bsd, L.shadowLayout);
     }
@@ -1338,10 +1384,10 @@ void MeshShaderRenderPass::_CreateLeafPipelinesIfNeeded(nvrhi::IFramebuffer* fra
             psoDesc, m_StageResources.depthPrepass.framebuffer->getFramebufferInfo());
     }
 
-    if (!L.shadowPipeline && L.shadowLayout && L.amplificationShader && L.shadowMS
+    if (!L.shadowPipeline && L.shadowLayout && L.shadowAmplificationShader && L.shadowMS
         && m_StageResources.shadow.framebuffers[0]) {
         nvrhi::MeshletPipelineDesc psoDesc;
-        psoDesc.AS = L.amplificationShader;
+        psoDesc.AS = L.shadowAmplificationShader;
         psoDesc.MS = L.shadowMS;
         psoDesc.primType = nvrhi::PrimitiveType::TriangleList;
         psoDesc.bindingLayouts = { L.shadowLayout };
@@ -1515,7 +1561,7 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     // ----- 1b. Fill AS-cull constants - hizEnabled=0 for the depth prepass (Hi-Z not yet built) -----
     shader_cb::MeshASCullConstants asCB = {};
     asCB.cameraPos         = camPos;
-    asCB.hizEnabled        = 1u;
+    asCB.hizEnabled        = 0u;
     asCB.hizDimensions     = dm::float2(static_cast<float>(fbW), static_cast<float>(fbH));
     asCB.maxHiZMip         = static_cast<float>((m_StageResources.hiz.numMips > 0) ? (m_StageResources.hiz.numMips - 1) : 0);
     asCB.asConeCullEnabled = 1u;
@@ -1539,8 +1585,7 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
 
         m_CommandList->beginMarker("SDSM");
         float regionNear, regionFar;
-        _ComputeRegionEnvelope(m_ViewHandler.view.GetViewFrustum(), camPos, camDir,
-                               regionNear, regionFar);
+        _ComputeRegionEnvelope(camPos, camDir, regionNear, regionFar);
         _RunSDSMBuildCascades(m_Registry.getSceneBounds(), aspectRatio, dm::radians(60.f),
                               regionNear, regionFar);
         m_CommandList->endMarker();
@@ -1555,6 +1600,12 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_CommandList->clearBufferUInt(m_StageResources.cull.shadowCountBuffer,   0);
     m_CommandList->clearBufferUInt(m_StageResources.cull.shadowUniqueCounter, 0);
     m_CommandList->clearBufferUInt(m_StageResources.cull.impostorCountBuffer, 0);
+    // Leaf survivor counters are cleared here too. The depth-prepass scratch
+    // counter ran first this frame using last-frame's indirect args; clearing
+    // it here keeps it bounded but its contents are never read.
+    m_CommandList->clearBufferUInt(m_StageResources.cull.mainLeafSurvivorCounter,   0);
+    m_CommandList->clearBufferUInt(m_StageResources.cull.shadowLeafSurvivorCounter, 0);
+    m_CommandList->clearBufferUInt(m_StageResources.cull.depthLeafSurvivorScratch,  0);
 
     m_CommandList->writeBuffer(m_StageResources.cull.mainDispatchArgsBuffer,
         m_MainDispatchArgsStaging.data(),
@@ -1814,12 +1865,32 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     if (m_UI.showImpostorAtlas && m_Shared)
         m_Shared->CopySelectedImpostorDebugAtlases(m_CommandList, m_UI.impostorSelectedAsset);
 
+    // ----- 6d. Leaf survivor readback copy. Has to run AFTER the shadow + main
+    // color leaf draws so the AS-side atomics are committed. The trunk readback
+    // copy at step 4 wrote into [main][shadow][impostor][shadowUnique]; the leaf
+    // counters land at the [mainLeafSurvivors][shadowLeafSurvivors] tail of the
+    // same ring slot.
+    {
+        const uint32_t ringSlot = m_ReadbackFrameIndex % k_QueuedFrames;
+        const uint64_t leafBaseOffset =
+            (m_ReadbackMainEntries + m_ReadbackShadowEntries + m_ReadbackImpostorEntries + 1)
+            * sizeof(uint32_t);
+        m_CommandList->copyBuffer(m_ReadbackBuffers[ringSlot], leafBaseOffset,
+                                  m_StageResources.cull.mainLeafSurvivorCounter, 0,
+                                  sizeof(uint32_t));
+        m_CommandList->copyBuffer(m_ReadbackBuffers[ringSlot], leafBaseOffset + sizeof(uint32_t),
+                                  m_StageResources.cull.shadowLeafSurvivorCounter, 0,
+                                  sizeof(uint32_t));
+    }
+
     m_CommandList->close();
     GetDevice()->executeCommandList(m_CommandList);
 
     // ----- 7. UI stats -----
-    m_UI.totalInstanceCount = static_cast<uint32_t>(m_Registry.totalInstanceCount());
-    m_UI.drawCallCount      = m_NumMainSlots + m_NumShadowSlots;
+    m_UI.totalInstanceCount     = static_cast<uint32_t>(m_Registry.totalInstanceCount());
+    m_UI.totalLeafInstanceCount = m_Registry.totalLeafInstanceCount();
+    m_UI.totalLeafMeshletCount  = m_Registry.totalLeafMeshletCount();
+    m_UI.drawCallCount          = m_NumMainSlots + m_NumShadowSlots;
     // Impostor atlas pointers + view-count metadata are published by SharedGPUAssets.
 
     if (m_ReadbackFrameIndex >= (k_QueuedFrames - 1)) {
@@ -1839,7 +1910,9 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
             for (uint32_t i = 0; i < m_ReadbackImpostorEntries; i++)
                 impostorVisSum += counts[impostorOffset + i];
 
-            uint32_t shadowUnique = counts[impostorOffset + m_ReadbackImpostorEntries];
+            uint32_t shadowUnique       = counts[impostorOffset + m_ReadbackImpostorEntries];
+            uint32_t leafMainSurvivors  = counts[impostorOffset + m_ReadbackImpostorEntries + 1];
+            uint32_t leafShadowSurvivors= counts[impostorOffset + m_ReadbackImpostorEntries + 2];
 
             GetDevice()->unmapBuffer(m_ReadbackBuffers[readSlot]);
 
@@ -1848,6 +1921,8 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
             m_UI.culledInstanceCount  = (totalVisible <= m_UI.totalInstanceCount)
                 ? m_UI.totalInstanceCount - totalVisible : 0;
             m_UI.impostorVisibleCount   = impostorVisSum;
+            m_UI.visibleLeafInstanceCount       = leafMainSurvivors;
+            m_UI.shadowVisibleLeafInstanceCount = leafShadowSurvivors;
             m_UI.shadowVisibleCount     = shadowUnique;
             m_UI.shadowCulledCount      = (shadowUnique <= m_UI.totalInstanceCount)
                 ? m_UI.totalInstanceCount - shadowUnique : 0;
@@ -1951,7 +2026,7 @@ bool MeshShaderRenderPass::_InitDepthPrepass() {
 bool MeshShaderRenderPass::_InitHiZShaders() {
     auto device = GetDevice();
 
-    m_StageResources.hiz.copyCS = m_ShaderFactory->CreateShader("app/HiZBuild.hlsl",
+    m_StageResources.hiz.copyCS = m_ShaderFactory->CreateShader("app/HiZCopy.hlsl",
         "HiZCopy", nullptr, nvrhi::ShaderType::Compute);
     m_StageResources.hiz.buildCS = m_ShaderFactory->CreateShader("app/HiZBuild.hlsl",
         "HiZDownsample", nullptr, nvrhi::ShaderType::Compute);
@@ -1978,15 +2053,10 @@ bool MeshShaderRenderPass::_InitHiZShaders() {
     m_StageResources.hiz.buildPipeline = device->createComputePipeline(buildPso);
     if (!m_StageResources.hiz.copyPipeline || !m_StageResources.hiz.buildPipeline) return false;
 
-    m_StageResources.hiz.pointSampler = device->createSampler(nvrhi::SamplerDesc()
-        .setAllFilters(false)
-        .setAllAddressModes(nvrhi::SamplerAddressMode::Clamp));
-    if (!m_StageResources.hiz.pointSampler) return false;
-
     // 1x1 placeholder so binding sets resolve before first _EnsureHiZResources.
     m_StageResources.hiz.hizTexture = device->createTexture(nvrhi::TextureDesc()
         .setWidth(1).setHeight(1).setMipLevels(1)
-        .setFormat(nvrhi::Format::RG32_FLOAT)
+        .setFormat(nvrhi::Format::RGBA32_FLOAT)
         .setIsUAV(true)
         .setInitialState(nvrhi::ResourceStates::ShaderResource)
         .setKeepInitialState(true)
@@ -2214,7 +2284,7 @@ void MeshShaderRenderPass::_EnsureHiZResources(uint32_t width, uint32_t height) 
     m_StageResources.hiz.hizTexture = device->createTexture(nvrhi::TextureDesc()
         .setWidth(width).setHeight(height)
         .setMipLevels(m_StageResources.hiz.numMips)
-        .setFormat(nvrhi::Format::RG32_FLOAT)
+        .setFormat(nvrhi::Format::RGBA32_FLOAT)
         .setIsUAV(true)
         .setInitialState(nvrhi::ResourceStates::ShaderResource)
         .setKeepInitialState(true)
@@ -2222,7 +2292,8 @@ void MeshShaderRenderPass::_EnsureHiZResources(uint32_t width, uint32_t height) 
 
     m_StageResources.hiz.buildBindingSets.resize(m_StageResources.hiz.numMips);
 
-    // Mip 0 - copy depth prepass (D32 -> R32_FLOAT view) into RG32 mip 0.
+    // Mip 0 - copy depth prepass (D32 -> R32_FLOAT view) into RGBA32 mip 0.
+    // .r = raw min (Hi-Z), .g = raw max (SDSM near), .b = sky-excluded min (SDSM far).
     {
         nvrhi::BindingSetDesc bsd;
         bsd.bindings = {
@@ -2231,22 +2302,23 @@ void MeshShaderRenderPass::_EnsureHiZResources(uint32_t width, uint32_t height) 
                 nvrhi::Format::R32_FLOAT,
                 nvrhi::TextureSubresourceSet(0, 1, 0, 1)),
             nvrhi::BindingSetItem::Texture_UAV(mesh_reg::HiZ::kUAV_Dest, m_StageResources.hiz.hizTexture,
-                nvrhi::Format::RG32_FLOAT,
+                nvrhi::Format::RGBA32_FLOAT,
                 nvrhi::TextureSubresourceSet(0, 1, 0, 1)),
         };
         m_StageResources.hiz.buildBindingSets[0] = device->createBindingSet(bsd, m_StageResources.hiz.buildBindingLayout);
     }
 
-    // Mips 1..N-1 - downsample i-1 -> i.
+    // Mips 1..N-1 - downsample i-1 -> i. HiZDownsample reads the source mip via
+    // texel indexing with explicit edge-clamp on odd tails.
     for (uint32_t mip = 1; mip < m_StageResources.hiz.numMips; mip++) {
         nvrhi::BindingSetDesc bsd;
         bsd.bindings = {
             nvrhi::BindingSetItem::PushConstants(mesh_reg::HiZ::kPushC_DestDimensions, sizeof(uint32_t) * mesh_reg::HiZ::kPushCDwordCount),
             nvrhi::BindingSetItem::Texture_SRV(mesh_reg::HiZ::kSRV_Source, m_StageResources.hiz.hizTexture,
-                nvrhi::Format::RG32_FLOAT,
+                nvrhi::Format::RGBA32_FLOAT,
                 nvrhi::TextureSubresourceSet(mip - 1, 1, 0, 1)),
             nvrhi::BindingSetItem::Texture_UAV(mesh_reg::HiZ::kUAV_Dest, m_StageResources.hiz.hizTexture,
-                nvrhi::Format::RG32_FLOAT,
+                nvrhi::Format::RGBA32_FLOAT,
                 nvrhi::TextureSubresourceSet(mip, 1, 0, 1)),
         };
         m_StageResources.hiz.buildBindingSets[mip] = device->createBindingSet(bsd, m_StageResources.hiz.buildBindingLayout);
@@ -2258,7 +2330,7 @@ void MeshShaderRenderPass::_EnsureHiZResources(uint32_t width, uint32_t height) 
         uint32_t mipH = std::max(1u, height >> mip);
         m_StageResources.hiz.debugMipTextures[mip] = device->createTexture(nvrhi::TextureDesc()
             .setWidth(mipW).setHeight(mipH).setMipLevels(1)
-            .setFormat(nvrhi::Format::RG32_FLOAT)
+            .setFormat(nvrhi::Format::RGBA32_FLOAT)
             .setInitialState(nvrhi::ResourceStates::ShaderResource)
             .setKeepInitialState(true)
             .setDebugName(("MeshHiZ_DebugMip" + std::to_string(mip)).c_str()));
@@ -2474,26 +2546,21 @@ void MeshShaderRenderPass::_BuildHiZMipChain() {
     }
 }
 
-void MeshShaderRenderPass::_ComputeRegionEnvelope(const dm::frustum& viewFrustum,
-                                                  const dm::float3& camPos,
+void MeshShaderRenderPass::_ComputeRegionEnvelope(const dm::float3& camPos,
                                                   const dm::float3& camDir,
                                                   float& outNearZ, float& outFarZ) const {
     outNearZ = std::numeric_limits<float>::max();
     outFarZ  = std::numeric_limits<float>::lowest();
-    bool any = false;
 
-    for (const auto& region : m_Registry.getRegions()) {
-        if (!viewFrustum.intersectsWith(region.cullBox)) continue;
-        for (int i = 0; i < dm::box3::numCorners; i++) {
-            dm::float3 corner = region.cullBox.getCorner(i);
-            float vsZ = dm::dot(corner - camPos, camDir);
-            outNearZ = dm::min(outNearZ, vsZ);
-            outFarZ  = dm::max(outFarZ,  vsZ);
-            any = true;
-        }
+    // Scene bbox already unions tree regions and terrain; mirrors ViewHandler::computeCascades.
+    const dm::box3& sceneBbox = m_Registry.getSceneBounds();
+    for (int i = 0; i < dm::box3::numCorners; i++) {
+        dm::float3 corner = sceneBbox.getCorner(i);
+        float vsZ = dm::dot(corner - camPos, camDir);
+        outNearZ = dm::min(outNearZ, vsZ);
+        outFarZ  = dm::max(outFarZ,  vsZ);
     }
 
-    if (!any) { outNearZ = 0.1f; outFarZ = 1.f; }
     outNearZ = dm::max(outNearZ, 0.1f);
     outFarZ  = dm::max(outFarZ,  outNearZ + 1.f);
 }

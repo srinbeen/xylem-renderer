@@ -73,8 +73,7 @@ RWByteAddressBuffer                impostorIndirectArgs   : register(XY_REG_U_ME
 RWByteAddressBuffer                mainLeafDispatchArgs   : register(XY_REG_U_MESH_CULL_UAV_MAIN_LEAF_DISPATCH);
 RWByteAddressBuffer                shadowLeafDispatchArgs : register(XY_REG_U_MESH_CULL_UAV_SHADOW_LEAF_DISPATCH);
 
-Texture2D<float2>                  hizTexture             : register(XY_REG_T_MESH_CULL_SRV_HI_Z);
-SamplerState                       hizSampler             : register(XY_REG_S_MESH_CULL_SAMPLER_HI_Z);
+Texture2D<float4>                  hizTexture             : register(XY_REG_T_MESH_CULL_SRV_HI_Z);
 
 bool DoesAABBIntersectFrustum(box3 bbox, frustum f);
 uint SelectLOD(box3 bbox);

@@ -9,6 +9,7 @@ namespace Xylem {
     #define XYLEM_NUM_CASCADES                     3
     // Shared ambient term used by tree + impostor shading across pipelines.
     #define XYLEM_TREE_AMBIENT                     0.18f
+    #define XYLEM_SDSM_PADDING                     0.05f
 
 }
 

@@ -52,18 +52,34 @@ void UIRenderer::buildUI() {
             ImGui::TextDisabled("GPU pass:   (pending)");
 
         ImGui::Separator();
+        ImGui::Text("Trees");
         if (m_ui.impostorVisibleCount > 0) {
-            ImGui::Text("Instances  visible: %u / %u  (impostors: %u, culled: %u)",
+            ImGui::Text("  visible: %u / %u  (impostors: %u, culled: %u)",
                 m_ui.visibleInstanceCount, m_ui.totalInstanceCount,
                 m_ui.impostorVisibleCount, m_ui.culledInstanceCount);
         } else {
-            ImGui::Text("Instances  visible: %u / %u  (culled: %u)",
+            ImGui::Text("  visible: %u / %u  (culled: %u)",
                 m_ui.visibleInstanceCount, m_ui.totalInstanceCount, m_ui.culledInstanceCount);
         }
-        ImGui::Text("Shadow casters:    %u / %u  (culled: %u)",
+        ImGui::Text("  shadow casters: %u / %u  (culled: %u)",
             m_ui.shadowVisibleCount, m_ui.totalInstanceCount, m_ui.shadowCulledCount);
-        ImGui::Text("Cascade draws:     %u  (overdraw: %u)",
+        ImGui::Text("  cascade draws:  %u  (overdraw: %u)",
             m_ui.shadowCascadeDrawCount, m_ui.shadowOverdrawCount);
+
+        ImGui::Text("Leaves");
+        if (m_ui.visibleLeafInstanceCount > 0 || m_ui.shadowVisibleLeafInstanceCount > 0) {
+            const uint32_t culledLeaves = (m_ui.visibleLeafInstanceCount <= m_ui.totalLeafInstanceCount)
+                ? m_ui.totalLeafInstanceCount - m_ui.visibleLeafInstanceCount : 0;
+            ImGui::Text("  visible: %u / %u  (culled: %u)",
+                m_ui.visibleLeafInstanceCount, m_ui.totalLeafInstanceCount, culledLeaves);
+            ImGui::Text("  shadow:  %u",
+                m_ui.shadowVisibleLeafInstanceCount);
+        } else {
+            ImGui::Text("  total: %u  (no per-frame readback in this pipeline)",
+                m_ui.totalLeafInstanceCount);
+        }
+        ImGui::Text("  meshlets total: %u", m_ui.totalLeafMeshletCount);
+
         ImGui::Text("Draw calls: %u", m_ui.drawCallCount);
     }
 
@@ -333,11 +349,6 @@ void UIRenderer::_buildAssetsSection() {
                     ImGui::ColorEdit3 ("Leaf Color",    &state.leaf.color.x);
                     ImGui::SliderFloat("Leaf Size",     &state.leaf.size,        0.05f, 2.0f);
                     ImGui::SliderInt  ("Leaves / Tip",  &leavesPerTip,           0,     16);
-
-                    ImGui::SliderFloat("LOD0 Mult",     &state.leaf.lodMultipliers[0], 0.f, 1.f);
-                    ImGui::SliderFloat("LOD1 Mult",     &state.leaf.lodMultipliers[1], 0.f, 1.f);
-                    ImGui::SliderFloat("LOD2 Mult",     &state.leaf.lodMultipliers[2], 0.f, 1.f);
-                    ImGui::SliderFloat("LOD3 Mult",     &state.leaf.lodMultipliers[3], 0.f, 1.f);
 
                     state.leaf.perTip = static_cast<uint32_t>(std::max(0, leavesPerTip));
 
@@ -857,13 +868,32 @@ void UIRenderer::_buildHiZSection() {
     ImGui::TextDisabled("(%d mips total)", numMips);
     ImGui::TextDisabled("Resolution halves each mip. Mip 0 = full framebuffer.");
 
+    // Channel layout (RGBA32_FLOAT):
+    //   .r = raw farthest          -> Hi-Z occlusion (sky included)
+    //   .g = nearest                -> SDSM near
+    //   .b = sky-excluded farthest -> SDSM far
+    int chan = static_cast<int>(m_ui.hizDebugChannel);
+    const char* channels[] = { "All (RGB)", "R: Hi-Z (sky inc.)", "G: Nearest", "B: SDSM far (sky excl.)" };
+    ImGui::Text("Channel:");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(220.f);
+    if (ImGui::Combo("##hizchan", &chan, channels, IM_ARRAYSIZE(channels)))
+        m_ui.hizDebugChannel = static_cast<UIData::HiZDebugChannel>(chan);
+
     ImGui::Separator();
 
     void* tex = m_ui.hizMipTextures[selectedMip];
     if (tex) {
+        ImVec4 tint;
         ImVec2 avail = ImGui::GetContentRegionAvail();
         float size  = std::max(std::min(avail.x, avail.y), 64.f);
-        ImGui::Image(ImTextureRef(tex), ImVec2(size, size));
+        switch (m_ui.hizDebugChannel) {
+            case UIData::HiZDebugChannel::R_Farthest: tint = ImVec4(1, 0, 0, 1); break;
+            case UIData::HiZDebugChannel::G_Nearest:  tint = ImVec4(0, 1, 0, 1); break;
+            case UIData::HiZDebugChannel::B_SDSMFar:  tint = ImVec4(0, 0, 1, 1); break;
+            case UIData::HiZDebugChannel::RGB:        tint = ImVec4(1, 1, 1, 1); break;
+        }
+        ImGui::ImageWithBg(ImTextureRef(tex), ImVec2(size, size), ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), tint);
     } else {
         ImGui::TextDisabled("(not yet available — enable Hi-Z panel before first frame)");
     }

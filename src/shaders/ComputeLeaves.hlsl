@@ -1,5 +1,6 @@
 #include "../include/macros.h"
 #include "LeafCommon.hlsli"
+#include "ShadowCascadeCommon.hlsli"
 
 #pragma pack_matrix(row_major)
 
@@ -121,10 +122,7 @@ float SampleShadowCascade(float3 worldPos, uint selectedCascade)
 
 void leaf_ps(in V2P i, out float4 o_color : SV_Target0)
 {
-    uint selectedCascade = XYLEM_NUM_CASCADES - 1;
-    if      (i.viewZ < cascadeSplits.x) selectedCascade = 0;
-    else if (i.viewZ < cascadeSplits.y) selectedCascade = 1;
-    else if (i.viewZ < cascadeSplits.z) selectedCascade = 2;
+    uint selectedCascade = SelectShadowCascade(i.viewZ, cascadeSplits);
 
     float3 lightDir = -normalize(sunLightDir);
     float notInShadow = SampleShadowCascade(i.worldPos, selectedCascade);

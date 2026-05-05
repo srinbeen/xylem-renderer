@@ -3,6 +3,7 @@
 #include "types.hlsli"
 #include "ShaderRegisterMap.hlsli"
 #include "../include/macros.h"
+#include "ShadowCascadeCommon.hlsli"
 
 cbuffer CB : register(XY_REG_B_COMPUTE_SCENE_CB_FRAME)
 {
@@ -133,10 +134,7 @@ void main_ps(
 )
 {
     // Cascade selection (shared between trunk + leaf paths)
-    uint cascadeIdx = 3;
-    if      (i_viewZ < cascadeSplits.x) cascadeIdx = 0;
-    else if (i_viewZ < cascadeSplits.y) cascadeIdx = 1;
-    else if (i_viewZ < cascadeSplits.z) cascadeIdx = 2;
+    uint cascadeIdx = SelectShadowCascade(i_viewZ, cascadeSplits);
 
     float3 lightDir = -normalize(sunLightDir);
     float notInShadow = SampleShadowCascade(i_worldPos, cascadeIdx);

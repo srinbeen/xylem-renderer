@@ -1560,6 +1560,15 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
                 m_UI.sdsmCascadeSplits[2] = out->cascadeSplits.z;
                 m_UI.sdsmCascadeSplits[3] = out->cascadeSplits.w;
 
+                for (uint32_t c = 0; c < Render::c_NumCascades; ++c) {
+                    m_UI.sdsmShadowCasterMinLS[c][0] = out->shadowCasterMinLS[c].x;
+                    m_UI.sdsmShadowCasterMinLS[c][1] = out->shadowCasterMinLS[c].y;
+                    m_UI.sdsmShadowCasterMinLS[c][2] = out->shadowCasterMinLS[c].z;
+                    m_UI.sdsmShadowCasterMaxLS[c][0] = out->shadowCasterMaxLS[c].x;
+                    m_UI.sdsmShadowCasterMaxLS[c][1] = out->shadowCasterMaxLS[c].y;
+                    m_UI.sdsmShadowCasterMaxLS[c][2] = out->shadowCasterMaxLS[c].z;
+                }
+
                 GetDevice()->unmapBuffer(m_SDSMReadbackBuffers[readSlot]);
             }
             m_SDSMReadbackPending[readSlot] = false;

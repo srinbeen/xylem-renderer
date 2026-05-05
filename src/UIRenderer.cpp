@@ -743,7 +743,7 @@ void UIRenderer::_buildDebugShadowTopDownSection() {
         { 1.00f, 0.90f, 0.20f },  // yellow
         { 0.30f, 1.00f, 0.40f },  // green
         { 0.30f, 0.70f, 1.00f },  // cyan
-        // { 0.80f, 0.40f, 1.00f },  // purple
+        { 0.80f, 0.40f, 1.00f },  // purple
     };
     auto packColor = [](dm::float3 rgb, float a) -> ImU32 {
         auto clamp01 = [](float v) { return v < 0.f ? 0.f : (v > 1.f ? 1.f : v); };
@@ -754,13 +754,28 @@ void UIRenderer::_buildDebugShadowTopDownSection() {
 
     const dm::affine3& worldToLight = m_ViewHandler->worldToLight;
 
+    // Cascade source: SDSM (GPU) when available, else CPU PSSM seed (Traditional pipeline,
+    // pre-first-readback frames). Both share m_ViewHandler->worldToLight so the instance
+    // transform is identical.
+    dm::box3 cascadeBboxLS[Render::c_NumCascades];
+    if (m_ui.sdsmDebugValid) {
+        for (uint32_t c = 0; c < Render::c_NumCascades; ++c) {
+            cascadeBboxLS[c] = dm::box3{
+                dm::float3(m_ui.sdsmShadowCasterMinLS[c][0], m_ui.sdsmShadowCasterMinLS[c][1], m_ui.sdsmShadowCasterMinLS[c][2]),
+                dm::float3(m_ui.sdsmShadowCasterMaxLS[c][0], m_ui.sdsmShadowCasterMaxLS[c][1], m_ui.sdsmShadowCasterMaxLS[c][2])
+            };
+        }
+    } else {
+        for (uint32_t c = 0; c < Render::c_NumCascades; ++c)
+            cascadeBboxLS[c] = m_ViewHandler->cascades[c].shadowCasterBboxLS;
+    }
+
     // Lowest-index cascade whose light-space shadow-caster bbox overlaps this instance's
     // world-space bbox transformed into light space. Mirrors CullShadow in CullCS.hlsl.
     auto firstCascadeFor = [&](const dm::box3& wsBbox) -> int {
         dm::box3 lsBbox = wsBbox * worldToLight;
         for (uint32_t c = 0; c < Render::c_NumCascades; ++c) {
-            const dm::box3& lsCasc = m_ViewHandler->cascades[c].shadowCasterBboxLS;
-            if (!lsCasc.isempty() && lsBbox.intersects(lsCasc)) return int(c);
+            if (!cascadeBboxLS[c].isempty() && lsBbox.intersects(cascadeBboxLS[c])) return int(c);
         }
         return -1;
     };

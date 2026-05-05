@@ -61,6 +61,10 @@ struct UIData {
     float    sdsmTightNear        = 0.f;
     float    sdsmTightFar         = 0.f;
     float    sdsmCascadeSplits[4] = { 0.f, 0.f, 0.f, 0.f };
+    // Per-cascade light-space shadow caster AABB written by SDSMBuildCascades.hlsl
+    // (xyz min/max). Used by the shadow top-down debug visualizer.
+    float    sdsmShadowCasterMinLS[4][3] = {};
+    float    sdsmShadowCasterMaxLS[4][3] = {};
 
     void*    shadowMapTexture = nullptr;  // nvrhi::ITexture*, set by active render pass
     // Single per-pass scratch texture into which the active pass copies the

@@ -6,7 +6,7 @@ namespace Xylem {
     #define XYLEM_IMPOSTOR_AZIMUTH_VIEWS           8
     #define XYLEM_IMPOSTOR_ELEVATION_VIEWS         8
     #define XYLEM_IMPOSTOR_VIEW_COUNT              (XYLEM_IMPOSTOR_AZIMUTH_VIEWS * XYLEM_IMPOSTOR_ELEVATION_VIEWS)
-    #define XYLEM_NUM_CASCADES                     3
+    #define XYLEM_NUM_CASCADES                     4
     // Shared ambient term used by tree + impostor shading across pipelines.
     #define XYLEM_TREE_AMBIENT                     0.18f
     #define XYLEM_SDSM_PADDING                     0.05f

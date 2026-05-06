@@ -33,7 +33,9 @@ cbuffer CB : register(XY_REG_B_MESH_CULL_CB_FRAME)
     float    maxHiZMip;
     uint     hizEnabled;
     float    impostorAlphaClip;
-    float3   _pad2;
+    uint     showShadowImpostors;
+    float    shadowImpostorBias;
+    float    _pad2;
 };
 
 struct CullInstanceData
@@ -58,6 +60,7 @@ StructuredBuffer<uint>             shadowInvocsPerSlot      : register(XY_REG_T_
 StructuredBuffer<uint>             impostorSlotOffsets      : register(XY_REG_T_MESH_CULL_SRV_IMPOSTOR_SLOT_OFFSETS);
 StructuredBuffer<uint>             mainLeafInvocsPerSlot    : register(XY_REG_T_MESH_CULL_SRV_MAIN_LEAF_INVOCATIONS);
 StructuredBuffer<uint>             shadowLeafInvocsPerSlot  : register(XY_REG_T_MESH_CULL_SRV_SHADOW_LEAF_INVOCATIONS);
+StructuredBuffer<uint>             shadowImpostorSlotOffsets : register(XY_REG_T_MESH_CULL_SRV_SHADOW_IMPOSTOR_SLOT_OFFSETS);
 
 RWStructuredBuffer<uint>           mainRegionVisBuf       : register(XY_REG_U_MESH_CULL_UAV_MAIN_REGION_VIS);
 RWStructuredBuffer<uint>           mainSlotCountBuf       : register(XY_REG_U_MESH_CULL_UAV_MAIN_COUNT);
@@ -72,6 +75,10 @@ RWStructuredBuffer<uint>           impostorVisBuf         : register(XY_REG_U_ME
 RWByteAddressBuffer                impostorIndirectArgs   : register(XY_REG_U_MESH_CULL_UAV_IMPOSTOR_INDIRECT_ARGS);
 RWByteAddressBuffer                mainLeafDispatchArgs   : register(XY_REG_U_MESH_CULL_UAV_MAIN_LEAF_DISPATCH);
 RWByteAddressBuffer                shadowLeafDispatchArgs : register(XY_REG_U_MESH_CULL_UAV_SHADOW_LEAF_DISPATCH);
+
+RWStructuredBuffer<uint>           shadowImpostorCountBuf    : register(XY_REG_U_MESH_CULL_UAV_SHADOW_IMPOSTOR_COUNT);
+RWStructuredBuffer<uint>           shadowImpostorVisBuf      : register(XY_REG_U_MESH_CULL_UAV_SHADOW_IMPOSTOR_VIS);
+RWByteAddressBuffer                shadowImpostorIndirectArgs : register(XY_REG_U_MESH_CULL_UAV_SHADOW_IMPOSTOR_INDIRECT_ARGS);
 
 Texture2D<float4>                  hizTexture             : register(XY_REG_T_MESH_CULL_SRV_HI_Z);
 
@@ -175,16 +182,30 @@ void MeshCullShadow(uint3 dtid : SV_DispatchThreadID)
         if (any(cMin > cMax)) continue;
         if (any(bboxMinLS > cMax) || any(bboxMaxLS < cMin)) continue;
 
-        uint slot = ai * XYLEM_NUM_CASCADES + c;
-        uint writeIdx;
-        InterlockedAdd(shadowSlotCountBuf[slot], 1, writeIdx);
-        shadowVisBuf[shadowSlotOffsets[slot] + writeIdx] = idx;
+        if (showShadowImpostors && SelectImpostor(inst.bbox))
+        {
+            uint slot = ai * XYLEM_NUM_CASCADES + c;
+            uint writeIdx;
+            InterlockedAdd(shadowImpostorCountBuf[slot], 1, writeIdx);
+            shadowImpostorVisBuf[shadowImpostorSlotOffsets[slot] + writeIdx] = idx;
 
-        UpdateDispatchMeshArgs(shadowDispatchArgs, slot, (writeIdx + 1u) * shadowInvocsPerSlot[slot]);
+            // DrawIndirectArguments instanceCount at offset 4 of 16-byte record
+            uint dummy;
+            shadowImpostorIndirectArgs.InterlockedAdd(slot * 16 + 4, 1, dummy);
+        }
+        else
+        {
+            uint slot = ai * XYLEM_NUM_CASCADES + c;
+            uint writeIdx;
+            InterlockedAdd(shadowSlotCountBuf[slot], 1, writeIdx);
+            shadowVisBuf[shadowSlotOffsets[slot] + writeIdx] = idx;
 
-        uint leafInvocs = shadowLeafInvocsPerSlot[slot];
-        if (leafInvocs > 0)
-            UpdateDispatchMeshArgs(shadowLeafDispatchArgs, slot, (writeIdx + 1u) * leafInvocs);
+            UpdateDispatchMeshArgs(shadowDispatchArgs, slot, (writeIdx + 1u) * shadowInvocsPerSlot[slot]);
+
+            uint leafInvocs = shadowLeafInvocsPerSlot[slot];
+            if (leafInvocs > 0)
+                UpdateDispatchMeshArgs(shadowLeafDispatchArgs, slot, (writeIdx + 1u) * leafInvocs);
+        }
         anyCascade = true;
     }
 

@@ -63,6 +63,7 @@ void UIRenderer::buildUI() {
         }
         ImGui::Text("  shadow casters: %u / %u  (culled: %u)",
             m_ui.shadowVisibleCount, m_ui.totalInstanceCount, m_ui.shadowCulledCount);
+        ImGui::Text("  shadow impostors: %u", m_ui.shadowImpostorVisibleCount);
         ImGui::Text("  cascade draws:  %u  (overdraw: %u)",
             m_ui.shadowCascadeDrawCount, m_ui.shadowOverdrawCount);
 
@@ -99,6 +100,13 @@ void UIRenderer::buildUI() {
         ImGui::TextDisabled(m_ui.hizActiveThisFrame ? "(active)" : "(bypassed)");
         ImGui::SliderFloat("PSSM Lambda", &m_ui.pssmLambda, 0.f, 1.f, "%.2f");
         ImGui::SliderFloat("Impostor Alpha Clip", &m_ui.impostorAlphaClip, 0.01f, 0.95f, "%.2f");
+        ImGui::Checkbox("Shadow Impostors", &m_ui.showShadowImpostors);
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Distant trees cast billboard shadows instead of full geometry. Off = geometry-only shadows.");
+        }
+        ImGui::SliderFloat("Shadow Impostor Bias", &m_ui.shadowImpostorBias, 0.0f, 3.0f, "%.3f");
 
         if (ImGui::TreeNode("SDSM Debug")) {
             if (!m_ui.sdsmDebugValid) {
@@ -743,7 +751,7 @@ void UIRenderer::_buildDebugShadowTopDownSection() {
         { 1.00f, 0.90f, 0.20f },  // yellow
         { 0.30f, 1.00f, 0.40f },  // green
         { 0.30f, 0.70f, 1.00f },  // cyan
-        { 0.80f, 0.40f, 1.00f },  // purple
+        // { 0.80f, 0.40f, 1.00f },  // purple
     };
     auto packColor = [](dm::float3 rgb, float a) -> ImU32 {
         auto clamp01 = [](float v) { return v < 0.f ? 0.f : (v > 1.f ? 1.f : v); };

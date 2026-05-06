@@ -115,7 +115,9 @@ struct CullConstantBufferEntry {
     float        maxHiZMip;        // numMips - 1
     uint32_t     hizEnabled;       // 0 = skip Hi-Z test, 1 = enabled
     float        impostorAlphaClip;
-    float        _pad2[3];
+    uint32_t     showShadowImpostors  = 1;
+    float        shadowImpostorBias   = 0.05f;
+    float        _pad2                = 0.0f;
 };
 
 static constexpr size_t c_CullConstantBufferSize =

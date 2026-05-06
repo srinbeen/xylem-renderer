@@ -139,6 +139,12 @@ private:
         nvrhi::BufferHandle              impostorVisBuffer;          // UAV uint32[impostorVisBufferSize]
         nvrhi::BufferHandle              impostorIndirectArgsBuffer; // UAV DrawIndirectArguments[numAssets]
 
+        // Shadow impostor cull buffers (per-(asset, cascade) slots)
+        nvrhi::BufferHandle              shadowImpostorSlotOffsetBuffer;   // SRV uint32[numAssets * numCascades]
+        nvrhi::BufferHandle              shadowImpostorCountBuffer;        // UAV uint32[numAssets * numCascades]
+        nvrhi::BufferHandle              shadowImpostorVisBuffer;          // UAV uint32[shadowImpostorVisBufferSize]
+        nvrhi::BufferHandle              shadowImpostorIndirectArgsBuffer; // UAV DrawIndirectArguments[numAssets * numCascades]
+
         nvrhi::BufferHandle              regionVisibleBuffer;
     };
 
@@ -189,6 +195,18 @@ private:
         nvrhi::SamplerHandle                   depthSampler;
         std::vector<nvrhi::BindingSetHandle>   bindingSets;     // one per shared texture set
         nvrhi::GraphicsPipelineHandle          pipeline;
+    };
+
+    // Shadow-pass impostor *render* side. Handles shadow depth writes for
+    // terminal-LOD instances using the hemi-octahedral atlas for alpha cutout.
+    struct ShadowImpostorPassResources {
+        nvrhi::ShaderHandle                    vertexShader;
+        nvrhi::ShaderHandle                    pixelShader;
+        nvrhi::BindingLayoutHandle             bindingLayout;
+        std::vector<nvrhi::BindingSetHandle>   bindingSets;  // size 1 — single binding set
+        nvrhi::GraphicsPipelineHandle          pipeline;
+        nvrhi::SamplerHandle                   sampler;
+        nvrhi::SamplerHandle                   depthSampler;
     };
 
     struct ShadowPassResources {
@@ -276,8 +294,9 @@ private:
         CullPassResources     cull;
         DrawResources         sceneDraw;
         LeafDrawResources     sceneLeaves;
-        ImpostorPassResources impostor;
-        ShadowPassResources   shadow;
+        ImpostorPassResources       impostor;
+        ShadowImpostorPassResources shadowImpostor;
+        ShadowPassResources         shadow;
         DepthPrepassResources depthPrepass;
         HiZPassResources      hiz;
         SDSMPassResources     sdsm;
@@ -329,6 +348,11 @@ private:
     std::vector<uint32_t>                             m_ImpostorMaxSlotCounts;
     uint32_t                                          m_ImpostorVisBufferSize = 0;
 
+    // Shadow impostor slot layout: numAssets * numCascades
+    std::vector<uint32_t>                             m_ShadowImpostorSlotOffsets;
+    std::vector<uint32_t>                             m_ShadowImpostorMaxSlotCounts;
+    uint32_t                                          m_ShadowImpostorVisBufferSize = 0;
+
     // Dispatch arg templates (re-uploaded each frame to reset groupsX to 0).
     struct DispatchRecord { uint32_t slotIdx; uint32_t gx; uint32_t gy; uint32_t gz; };
     std::vector<DispatchRecord>                       m_MainDispatchArgsStaging;
@@ -338,10 +362,11 @@ private:
 
     // Readback ring: [main counts][shadow counts][impostor counts][shadow unique]
     nvrhi::BufferHandle                               m_ReadbackBuffers[k_QueuedFrames];
-    uint32_t                                          m_ReadbackFrameIndex      = 0;
-    uint32_t                                          m_ReadbackMainEntries     = 0;
-    uint32_t                                          m_ReadbackShadowEntries   = 0;
-    uint32_t                                          m_ReadbackImpostorEntries = 0;
+    uint32_t                                          m_ReadbackFrameIndex            = 0;
+    uint32_t                                          m_ReadbackMainEntries           = 0;
+    uint32_t                                          m_ReadbackShadowEntries         = 0;
+    uint32_t                                          m_ReadbackImpostorEntries       = 0;
+    uint32_t                                          m_ReadbackShadowImpostorEntries = 0;
 
     // Readback ring for SDSM debug (mirrors ComputeRenderPass)
     nvrhi::BufferHandle                               m_SDSMReadbackBuffers[k_QueuedFrames];
@@ -362,6 +387,7 @@ private:
     bool _InitTerrainPass(nvrhi::ICommandList* initCL);
     bool _InitSkyPass();
     bool _InitImpostorPass();
+    bool _InitShadowImpostorPass();
 
     void _RebuildMeshletMegabuffers(nvrhi::ICommandList* cl);
     void _UploadMeshletMegabuffers(nvrhi::ICommandList* cl);
@@ -394,6 +420,8 @@ private:
     void _RenderScenePass(nvrhi::IFramebuffer* framebuffer);
     void _RenderImpostorPass(nvrhi::IFramebuffer* framebuffer);
     void _RebuildImpostorBindingSets();
+    void _RenderShadowImpostorPass(uint32_t cascade);
+    void _RebuildShadowImpostorBindingSets();
 };
 
 } // namespace Xylem

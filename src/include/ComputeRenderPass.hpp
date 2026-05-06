@@ -95,6 +95,10 @@ private:
         nvrhi::BufferHandle              impostorVisBuffer;          // UAV uint32[impostorVisBufferSize]
         nvrhi::BufferHandle              impostorSlotOffsetBuffer;   // SRV uint32[numAssets]
         nvrhi::BufferHandle              impostorIndirectArgsBuffer; // UAV DrawIndirectArguments[numAssets]
+        nvrhi::BufferHandle              shadowImpostorSlotOffsetBuffer;   // SRV uint32[numAssets * numCascades]
+        nvrhi::BufferHandle              shadowImpostorCountBuffer;        // UAV uint32[numAssets * numCascades]
+        nvrhi::BufferHandle              shadowImpostorVisBuffer;          // UAV uint32[shadowImpostorVisBufferSize]
+        nvrhi::BufferHandle              shadowImpostorIndirectArgsBuffer; // UAV DrawIndirectArguments[numAssets * numCascades]
         nvrhi::BufferHandle              shadowCountBuffer;      // UAV uint32[numAssets]
         nvrhi::BufferHandle              shadowVisBuffer;        // UAV uint32[shadowVisBufferSize]
         nvrhi::BufferHandle              shadowSlotOffsetBuffer; // SRV uint32[numAssets]
@@ -140,6 +144,18 @@ private:
         nvrhi::SamplerHandle                   depthSampler;
         std::vector<nvrhi::BindingSetHandle>   bindingSets;
         nvrhi::GraphicsPipelineHandle          pipeline;
+    };
+
+    // Shadow-pass impostor *render* side. Handles shadow depth writes for
+    // terminal-LOD instances using the hemi-octahedral atlas for alpha cutout.
+    struct ShadowImpostorPassResources {
+        nvrhi::ShaderHandle                    vertexShader;
+        nvrhi::ShaderHandle                    pixelShader;
+        nvrhi::BindingLayoutHandle             bindingLayout;
+        std::vector<nvrhi::BindingSetHandle>   bindingSets;  // size 1 (single binding set)
+        nvrhi::GraphicsPipelineHandle          pipeline;
+        nvrhi::SamplerHandle                   sampler;
+        nvrhi::SamplerHandle                   depthSampler;
     };
 
     struct ShadowPassResources {
@@ -222,17 +238,18 @@ private:
     // Members
     // -----------------------------------------------------------------------
     struct StageOwnedResources {
-        SharedResources       frameShared;
-        DepthPrepassResources depthPrepass;
-        HiZPassResources      hiz;
-        SDSMPassResources     sdsm;
-        CullPassResources     cull;
-        ImpostorPassResources impostor;
-        ShadowPassResources   shadow;
-        SkyPassResources      sky;
-        TreePassResources     sceneTree;
-        LeafPassResources     sceneLeaves;
-        TerrainPassResources  sceneTerrain;
+        SharedResources             frameShared;
+        DepthPrepassResources       depthPrepass;
+        HiZPassResources            hiz;
+        SDSMPassResources           sdsm;
+        CullPassResources           cull;
+        ImpostorPassResources       impostor;
+        ShadowImpostorPassResources shadowImpostor;
+        ShadowPassResources         shadow;
+        SkyPassResources            sky;
+        TreePassResources           sceneTree;
+        LeafPassResources           sceneLeaves;
+        TerrainPassResources        sceneTerrain;
     };
 
     StageOwnedResources                                m_StageResources;
@@ -279,6 +296,12 @@ private:
     std::vector<uint32_t>                              m_ImpostorMaxSlotCounts;
     uint32_t                                           m_ImpostorVisBufferSize = 0;
 
+    // Shadow impostor slot layout: numAssets * numCascades
+    std::vector<uint32_t>                              m_ShadowImpostorSlotOffsets;
+    std::vector<uint32_t>                              m_ShadowImpostorMaxSlotCounts;
+    uint32_t                                           m_ShadowImpostorVisBufferSize = 0;
+    uint32_t                                           m_ReadbackShadowImpostorEntries = 0;
+
     // Region CPU-frustum-cull visibility (written each frame, uploaded to regionVisibleBuffer)
     std::vector<uint32_t>                              m_RegionVisibleStaging;
 
@@ -286,6 +309,7 @@ private:
     std::vector<nvrhi::DrawIndexedIndirectArguments>   m_IndirectArgsStaging;
     std::vector<nvrhi::DrawIndirectArguments>          m_LeafIndirectArgsStaging;
     std::vector<nvrhi::DrawIndirectArguments>          m_ImpostorIndirectArgsStaging;
+    std::vector<nvrhi::DrawIndirectArguments>          m_ShadowImpostorIndirectArgsStaging;
     std::vector<nvrhi::DrawIndexedIndirectArguments>   m_ShadowIndirectArgsStaging;
     std::vector<nvrhi::DrawIndirectArguments>          m_LeafShadowIndirectArgsStaging;
 
@@ -301,6 +325,7 @@ private:
     bool _InitTreePass(nvrhi::ICommandList* initCL, engine::CommonRenderPasses& commonPasses);
     bool _InitLeafPass();
     bool _InitImpostorPass();
+    bool _InitShadowImpostorPass();
     bool _InitShadowPass();
     bool _InitTerrainPass(nvrhi::ICommandList* initCL);
     bool _InitSkyPass();
@@ -314,6 +339,7 @@ private:
     void _BuildSlotLayout();
     void _UploadCullBuffers(nvrhi::ICommandList* commandList);
     void _RebuildCullBindings();
+    void _RebuildShadowImpostorBindingSets();
 
     // -----------------------------------------------------------------------
     // Render helpers
@@ -329,6 +355,7 @@ private:
     void _RenderShadowPass();
     void _RenderScenePass(nvrhi::IFramebuffer* framebuffer);
     void _RenderImpostorPass(nvrhi::IFramebuffer* framebuffer);
+    void _RenderShadowImpostorPass(uint32_t cascade);
 };
 
 } // namespace Xylem

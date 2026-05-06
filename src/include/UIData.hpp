@@ -47,6 +47,12 @@ struct UIData {
     float pssmLambda       = 0.85f; // PSSM/SDSM blend: 0=linear splits, 1=logarithmic splits
     float impostorAlphaClip = 0.25f;
 
+    // Shadow impostor tier (P1 + P2). When false, cull falls back to
+    // geometry-only shadows for A/B comparison.
+    bool     showShadowImpostors      = true;
+    float    shadowImpostorBias       = 0.05f;   // world units along sun direction
+    uint32_t shadowImpostorVisibleCount = 0;     // total across (asset, cascade)
+
     // Mesh-shader pipeline stats
     uint32_t asMeshletsDispatched = 0;
     uint32_t asMeshletsCulled     = 0;

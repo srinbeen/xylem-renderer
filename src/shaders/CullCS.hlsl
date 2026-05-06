@@ -33,7 +33,9 @@ cbuffer CB : register(XY_REG_B_COMPUTE_CULL_CB_FRAME)
     float    maxHiZMip;
     uint     hizEnabled;
     float    impostorAlphaClip;
-    float3   _pad2;
+    uint     showShadowImpostors;
+    float    shadowImpostorBias;
+    float    _pad2;
 };
 
 struct CullInstanceData
@@ -68,8 +70,12 @@ RWByteAddressBuffer                shadowUniqueCounter  : register(XY_REG_U_COMP
 RWStructuredBuffer<uint>           impostorSlotCountBuf : register(XY_REG_U_COMPUTE_CULL_UAV_IMPOSTOR_COUNT);
 RWStructuredBuffer<uint>           impostorVisBuf       : register(XY_REG_U_COMPUTE_CULL_UAV_IMPOSTOR_VIS);
 RWByteAddressBuffer                impostorIndirectArgs : register(XY_REG_U_COMPUTE_CULL_UAV_IMPOSTOR_INDIRECT_ARGS);
-RWByteAddressBuffer                leafMainIndirectArgs : register(u11);
-RWByteAddressBuffer                leafShadowIndirectArgs : register(u12);
+StructuredBuffer<uint>             shadowImpostorSlotOffsets : register(XY_REG_T_COMPUTE_CULL_SRV_SHADOW_IMPOSTOR_SLOT_OFFSETS);
+RWStructuredBuffer<uint>           shadowImpostorCountBuf   : register(XY_REG_U_COMPUTE_CULL_UAV_SHADOW_IMPOSTOR_COUNT);
+RWStructuredBuffer<uint>           shadowImpostorVisBuf     : register(XY_REG_U_COMPUTE_CULL_UAV_SHADOW_IMPOSTOR_VIS);
+RWByteAddressBuffer                shadowImpostorIndirectArgs : register(XY_REG_U_COMPUTE_CULL_UAV_SHADOW_IMPOSTOR_INDIRECT_ARGS);
+RWByteAddressBuffer                leafMainIndirectArgs : register(u14);
+RWByteAddressBuffer                leafShadowIndirectArgs : register(u15);
 
 Texture2D<float4>                  hizTexture           : register(XY_REG_T_COMPUTE_CULL_SRV_HI_Z);
 
@@ -182,16 +188,29 @@ void CullShadow(uint3 dtid : SV_DispatchThreadID)
         // AABB-vs-AABB intersection test in light space
         if (any(bboxMinLS > cMax) || any(bboxMaxLS < cMin)) continue;
 
-        uint slot = ai * XYLEM_NUM_CASCADES + c;
+        if (showShadowImpostors && SelectImpostor(inst.bbox))
+        {
+            uint slot = ai * XYLEM_NUM_CASCADES + c;
+            uint writeIdx;
+            InterlockedAdd(shadowImpostorCountBuf[slot], 1, writeIdx);
+            shadowImpostorVisBuf[shadowImpostorSlotOffsets[slot] + writeIdx] = idx;
 
-        uint writeIdx;
-        InterlockedAdd(shadowSlotCountBuf[slot], 1, writeIdx);
-        shadowVisBuf[shadowSlotOffsets[slot] + writeIdx] = idx;
+            // DrawIndirectArguments instanceCount at offset 4 of 16-byte record
+            uint dummy;
+            shadowImpostorIndirectArgs.InterlockedAdd(slot * 16 + 4, 1, dummy);
+        }
+        else
+        {
+            uint slot = ai * XYLEM_NUM_CASCADES + c;
+            uint writeIdx;
+            InterlockedAdd(shadowSlotCountBuf[slot], 1, writeIdx);
+            shadowVisBuf[shadowSlotOffsets[slot] + writeIdx] = idx;
 
-        // Atomically increment instanceCount in shadow indirect draw args for this slot.
-        uint dummy;
-        shadowIndirectArgs.InterlockedAdd(slot * 20 + 4, 1, dummy);
-        leafShadowIndirectArgs.InterlockedAdd(slot * 16 + 4, 1, dummy);
+            // P1 uses DrawIndexedIndirect (20-byte stride) for trunk shadows
+            uint dummy;
+            shadowIndirectArgs.InterlockedAdd(slot * 20 + 4, 1, dummy);
+            leafShadowIndirectArgs.InterlockedAdd(slot * 16 + 4, 1, dummy);
+        }
 
         anyCascadeVisible = true;
     }

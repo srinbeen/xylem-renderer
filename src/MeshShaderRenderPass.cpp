@@ -48,7 +48,8 @@ bool MeshShaderRenderPass::Init() {
     if (!_InitHiZShaders())     return false;
     if (!_InitSDSMPass())       return false;
     if (!_InitSkyPass())        return false;
-    if (!_InitImpostorPass())   return false;
+    if (!_InitImpostorPass())         return false;
+    if (!_InitShadowImpostorPass())   return false;
 
     m_CommandList = GetDevice()->createCommandList();
 
@@ -74,6 +75,7 @@ bool MeshShaderRenderPass::LoadResources() {
     _RebuildDepthPrepassBindingSet();
     _RebuildLeafBindingSets();
     _RebuildImpostorBindingSets();
+    _RebuildShadowImpostorBindingSets();
 
     initCL->close();
     GetDevice()->executeCommandList(initCL);
@@ -295,6 +297,7 @@ bool MeshShaderRenderPass::_InitCullResources() {
         nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Cull::kSRV_ImpostorSlotOffsets),
         nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Cull::kSRV_MainLeafInvocations),
         nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Cull::kSRV_ShadowLeafInvocations),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Cull::kSRV_ShadowImpostorSlotOffsets),
 
         nvrhi::BindingLayoutItem::StructuredBuffer_UAV(mesh_reg::Cull::kUAV_MainRegionVis),
         nvrhi::BindingLayoutItem::StructuredBuffer_UAV(mesh_reg::Cull::kUAV_MainCount),
@@ -309,6 +312,9 @@ bool MeshShaderRenderPass::_InitCullResources() {
         nvrhi::BindingLayoutItem::RawBuffer_UAV(mesh_reg::Cull::kUAV_ImpostorIndirectArgs),
         nvrhi::BindingLayoutItem::RawBuffer_UAV(mesh_reg::Cull::kUAV_MainLeafDispatch),
         nvrhi::BindingLayoutItem::RawBuffer_UAV(mesh_reg::Cull::kUAV_ShadowLeafDispatch),
+        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(mesh_reg::Cull::kUAV_ShadowImpostorCount),
+        nvrhi::BindingLayoutItem::StructuredBuffer_UAV(mesh_reg::Cull::kUAV_ShadowImpostorVis),
+        nvrhi::BindingLayoutItem::RawBuffer_UAV(mesh_reg::Cull::kUAV_ShadowImpostorIndirectArgs),
 
         nvrhi::BindingLayoutItem::Texture_SRV(mesh_reg::Cull::kSRV_HiZ),
     };
@@ -744,6 +750,21 @@ void MeshShaderRenderPass::_BuildSlotLayout() {
         m_ImpostorVisBufferSize    += livePerAsset[ai];
     }
     m_ImpostorVisBufferSize = std::max(1u, m_ImpostorVisBufferSize);
+
+    // Shadow impostor slots: numAssets * numCascades, each sized livePerAsset[ai]
+    const uint32_t numShadowImpostorSlots = std::max(1u, numAssets * nCasc);
+    m_ShadowImpostorSlotOffsets.assign(numShadowImpostorSlots, 0);
+    m_ShadowImpostorMaxSlotCounts.assign(numShadowImpostorSlots, 0);
+    m_ShadowImpostorVisBufferSize = 0;
+    for (uint32_t ai = 0; ai < numAssets; ai++) {
+        for (uint32_t c = 0; c < nCasc; c++) {
+            const uint32_t slot = ai * nCasc + c;
+            m_ShadowImpostorMaxSlotCounts[slot] = livePerAsset[ai];
+            m_ShadowImpostorSlotOffsets[slot]   = m_ShadowImpostorVisBufferSize;
+            m_ShadowImpostorVisBufferSize      += livePerAsset[ai];
+        }
+    }
+    m_ShadowImpostorVisBufferSize = std::max(1u, m_ShadowImpostorVisBufferSize);
 }
 
 void MeshShaderRenderPass::_UploadCullBuffers(nvrhi::ICommandList* cl) {
@@ -1002,13 +1023,66 @@ void MeshShaderRenderPass::_UploadCullBuffers(nvrhi::ICommandList* cl) {
             impostorArgs.data(), numAssets * sizeof(nvrhi::DrawIndirectArguments));
     }
 
-    // Readback ring: [mainCounts][shadowCounts][impostorCounts][shadowUnique]
-    m_ReadbackMainEntries     = m_NumMainSlots;
-    m_ReadbackShadowEntries   = m_NumShadowSlots;
-    m_ReadbackImpostorEntries = numAssets;
-    // Layout: [mainCounts][shadowCounts][impostorCounts][shadowUnique][mainLeafSurvivors][shadowLeafSurvivors]
+    // --- Shadow impostor cull buffers (per (asset, cascade)) ---
+    const uint32_t numShadowImpostorSlots =
+        std::max(1u, static_cast<uint32_t>(m_ShadowImpostorSlotOffsets.size()));
+
+    m_StageResources.cull.shadowImpostorSlotOffsetBuffer = device->createBuffer(nvrhi::BufferDesc()
+        .setByteSize(numShadowImpostorSlots * sizeof(uint32_t))
+        .setStructStride(sizeof(uint32_t))
+        .setDebugName("Mesh_ShadowImpostorSlotOffsetBuffer")
+        .setInitialState(nvrhi::ResourceStates::CopyDest));
+    cl->beginTrackingBufferState(m_StageResources.cull.shadowImpostorSlotOffsetBuffer, nvrhi::ResourceStates::CopyDest);
+    cl->writeBuffer(m_StageResources.cull.shadowImpostorSlotOffsetBuffer,
+        m_ShadowImpostorSlotOffsets.data(),
+        numShadowImpostorSlots * sizeof(uint32_t));
+    cl->setPermanentBufferState(m_StageResources.cull.shadowImpostorSlotOffsetBuffer,
+        nvrhi::ResourceStates::ShaderResource);
+
+    m_StageResources.cull.shadowImpostorCountBuffer = device->createBuffer(nvrhi::BufferDesc()
+        .setByteSize(numShadowImpostorSlots * sizeof(uint32_t))
+        .setStructStride(sizeof(uint32_t))
+        .setCanHaveUAVs(true)
+        .setDebugName("Mesh_ShadowImpostorCountBuffer")
+        .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess));
+
+    m_StageResources.cull.shadowImpostorVisBuffer = device->createBuffer(nvrhi::BufferDesc()
+        .setByteSize(m_ShadowImpostorVisBufferSize * sizeof(uint32_t))
+        .setStructStride(sizeof(uint32_t))
+        .setCanHaveUAVs(true)
+        .setDebugName("Mesh_ShadowImpostorVisBuffer")
+        .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess));
+
+    m_StageResources.cull.shadowImpostorIndirectArgsBuffer = device->createBuffer(nvrhi::BufferDesc()
+        .setByteSize(numShadowImpostorSlots * sizeof(nvrhi::DrawIndirectArguments))
+        .setDebugName("Mesh_ShadowImpostorIndirectArgsBuffer")
+        .setIsDrawIndirectArgs(true)
+        .setCanHaveUAVs(true)
+        .setCanHaveRawViews(true)
+        .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess));
+
+    // Pre-fill shadow impostor indirect args: vertexCount=4, instanceCount=0 per (asset, cascade)
+    {
+        std::vector<nvrhi::DrawIndirectArguments> args(numShadowImpostorSlots);
+        for (uint32_t i = 0; i < numShadowImpostorSlots; i++) {
+            auto& a = args[i];
+            a.vertexCount   = 4;
+            a.instanceCount = 0;
+            a.startVertexLocation   = 0;
+            a.startInstanceLocation = 0;
+        }
+        cl->writeBuffer(m_StageResources.cull.shadowImpostorIndirectArgsBuffer,
+            args.data(), numShadowImpostorSlots * sizeof(nvrhi::DrawIndirectArguments));
+    }
+
+    // Readback ring: [mainCounts][shadowCounts][impostorCounts][shadowImpostorCounts][shadowUnique][...]
+    m_ReadbackMainEntries           = m_NumMainSlots;
+    m_ReadbackShadowEntries         = m_NumShadowSlots;
+    m_ReadbackImpostorEntries       = numAssets;
+    m_ReadbackShadowImpostorEntries = numAssets * XYLEM_NUM_CASCADES;
+    // Layout: [mainCounts][shadowCounts][impostorCounts][shadowImpostorCounts][shadowUnique][mainLeafSurvivors][shadowLeafSurvivors]
     const uint64_t readbackSize =
-        (m_ReadbackMainEntries + m_ReadbackShadowEntries + m_ReadbackImpostorEntries + 3) * sizeof(uint32_t);
+        (m_ReadbackMainEntries + m_ReadbackShadowEntries + m_ReadbackImpostorEntries + m_ReadbackShadowImpostorEntries + 3) * sizeof(uint32_t);
     for (uint32_t i = 0; i < k_QueuedFrames; i++) {
         m_ReadbackBuffers[i] = device->createBuffer(nvrhi::BufferDesc()
             .setByteSize(readbackSize)
@@ -1039,6 +1113,7 @@ void MeshShaderRenderPass::_RebuildCullBindingSet() {
         nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Cull::kSRV_ImpostorSlotOffsets, m_StageResources.cull.impostorSlotOffsetBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Cull::kSRV_MainLeafInvocations, m_StageResources.cull.mainLeafASInvocsPerSlotBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Cull::kSRV_ShadowLeafInvocations, m_StageResources.cull.shadowLeafASInvocsPerSlotBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Cull::kSRV_ShadowImpostorSlotOffsets, m_StageResources.cull.shadowImpostorSlotOffsetBuffer),
 
         nvrhi::BindingSetItem::StructuredBuffer_UAV(mesh_reg::Cull::kUAV_MainRegionVis,  m_StageResources.cull.regionVisibleBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_UAV(mesh_reg::Cull::kUAV_MainCount,      m_StageResources.cull.mainCountBuffer),
@@ -1053,6 +1128,9 @@ void MeshShaderRenderPass::_RebuildCullBindingSet() {
         nvrhi::BindingSetItem::RawBuffer_UAV(mesh_reg::Cull::kUAV_ImpostorIndirectArgs,  m_StageResources.cull.impostorIndirectArgsBuffer),
         nvrhi::BindingSetItem::RawBuffer_UAV(mesh_reg::Cull::kUAV_MainLeafDispatch,      m_StageResources.cull.mainLeafDispatchArgsBuffer),
         nvrhi::BindingSetItem::RawBuffer_UAV(mesh_reg::Cull::kUAV_ShadowLeafDispatch,    m_StageResources.cull.shadowLeafDispatchArgsBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(mesh_reg::Cull::kUAV_ShadowImpostorCount,       m_StageResources.cull.shadowImpostorCountBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(mesh_reg::Cull::kUAV_ShadowImpostorVis,         m_StageResources.cull.shadowImpostorVisBuffer),
+        nvrhi::BindingSetItem::RawBuffer_UAV(mesh_reg::Cull::kUAV_ShadowImpostorIndirectArgs,       m_StageResources.cull.shadowImpostorIndirectArgsBuffer),
 
         nvrhi::BindingSetItem::Texture_SRV(mesh_reg::Cull::kSRV_HiZ, m_StageResources.hiz.hizTexture),
     };
@@ -1232,6 +1310,7 @@ void MeshShaderRenderPass::onAssetsDirty(const std::vector<size_t>&) {
     _RebuildDepthPrepassBindingSet();
     _RebuildLeafBindingSets();
     _RebuildImpostorBindingSets();
+    _RebuildShadowImpostorBindingSets();
 }
 
 void MeshShaderRenderPass::onRegionsDirty(const std::vector<size_t>&) {
@@ -1251,6 +1330,7 @@ void MeshShaderRenderPass::onRegionsDirty(const std::vector<size_t>&) {
     _RebuildDepthPrepassBindingSet();
     _RebuildLeafBindingSets();
     _RebuildImpostorBindingSets();
+    _RebuildShadowImpostorBindingSets();
 }
 
 // ===========================================================================
@@ -1554,7 +1634,9 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     cb.hizDimensions = dm::float2(static_cast<float>(fbW), static_cast<float>(fbH));
     cb.maxHiZMip     = static_cast<float>((m_StageResources.hiz.numMips > 0) ? (m_StageResources.hiz.numMips - 1) : 0);
     cb.hizEnabled    = hizActive ? 1u : 0u;
-    cb.impostorAlphaClip = m_UI.impostorAlphaClip;
+    cb.impostorAlphaClip    = m_UI.impostorAlphaClip;
+    cb.showShadowImpostors  = m_UI.showShadowImpostors ? 1u : 0u;
+    cb.shadowImpostorBias   = m_UI.shadowImpostorBias;
 
     m_CommandList->writeBuffer(m_StageResources.frameShared.constantBuffer, &cb, shader_cb::kCullFrameSize);
 
@@ -1600,6 +1682,7 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_CommandList->clearBufferUInt(m_StageResources.cull.shadowCountBuffer,   0);
     m_CommandList->clearBufferUInt(m_StageResources.cull.shadowUniqueCounter, 0);
     m_CommandList->clearBufferUInt(m_StageResources.cull.impostorCountBuffer, 0);
+    m_CommandList->clearBufferUInt(m_StageResources.cull.shadowImpostorCountBuffer, 0);
     // Leaf survivor counters are cleared here too. The depth-prepass scratch
     // counter ran first this frame using last-frame's indirect args; clearing
     // it here keeps it bounded but its contents are never read.
@@ -1636,6 +1719,23 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
             impostorArgs.data(), numAssets * sizeof(nvrhi::DrawIndirectArguments));
     }
 
+    // Shadow impostor indirect args reset: vertexCount=4, instanceCount=0 per (asset, cascade)
+    {
+        const uint32_t numSlots = static_cast<uint32_t>(m_ShadowImpostorSlotOffsets.size());
+        if (numSlots > 0) {
+            std::vector<nvrhi::DrawIndirectArguments> args(numSlots);
+            for (uint32_t i = 0; i < numSlots; i++) {
+                auto& a = args[i];
+                a.vertexCount   = 4;
+                a.instanceCount = 0;
+                a.startVertexLocation   = 0;
+                a.startInstanceLocation = 0;
+            }
+            m_CommandList->writeBuffer(m_StageResources.cull.shadowImpostorIndirectArgsBuffer,
+                args.data(), numSlots * sizeof(nvrhi::DrawIndirectArguments));
+        }
+    }
+
     // ----- 4. GPU cull dispatches -----
     m_CommandList->beginMarker("MeshCull");
     {
@@ -1662,7 +1762,7 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     }
     m_CommandList->endMarker();
 
-    // Readback ring copy: [main counts][shadow counts][impostor counts][shadow unique]
+    // Readback ring copy: [main counts][shadow counts][impostor counts][shadowImpostor counts][shadow unique]
     {
         uint32_t ringSlot = m_ReadbackFrameIndex % k_QueuedFrames;
         uint64_t offset = 0;
@@ -1678,6 +1778,10 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
                                   m_StageResources.cull.impostorCountBuffer, 0,
                                   m_ReadbackImpostorEntries * sizeof(uint32_t));
         offset += m_ReadbackImpostorEntries * sizeof(uint32_t);
+        m_CommandList->copyBuffer(m_ReadbackBuffers[ringSlot], offset,
+                                  m_StageResources.cull.shadowImpostorCountBuffer, 0,
+                                  m_ReadbackShadowImpostorEntries * sizeof(uint32_t));
+        offset += m_ReadbackShadowImpostorEntries * sizeof(uint32_t);
         m_CommandList->copyBuffer(m_ReadbackBuffers[ringSlot], offset,
                                   m_StageResources.cull.shadowUniqueCounter, 0,
                                   sizeof(uint32_t));
@@ -1759,6 +1863,12 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
                             0);
                     }
                 }
+            }
+
+            if (m_UI.showShadowImpostors) {
+                m_CommandList->beginMarker("ShadowImpostors");
+                _RenderShadowImpostorPass(c);
+                m_CommandList->endMarker();
             }
         }
         m_CommandList->endMarker();
@@ -1867,13 +1977,13 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
 
     // ----- 6d. Leaf survivor readback copy. Has to run AFTER the shadow + main
     // color leaf draws so the AS-side atomics are committed. The trunk readback
-    // copy at step 4 wrote into [main][shadow][impostor][shadowUnique]; the leaf
+    // copy at step 4 wrote into [main][shadow][impostor][shadowImpostor][shadowUnique]; the leaf
     // counters land at the [mainLeafSurvivors][shadowLeafSurvivors] tail of the
     // same ring slot.
     {
         const uint32_t ringSlot = m_ReadbackFrameIndex % k_QueuedFrames;
         const uint64_t leafBaseOffset =
-            (m_ReadbackMainEntries + m_ReadbackShadowEntries + m_ReadbackImpostorEntries + 1)
+            (m_ReadbackMainEntries + m_ReadbackShadowEntries + m_ReadbackImpostorEntries + m_ReadbackShadowImpostorEntries + 1)
             * sizeof(uint32_t);
         m_CommandList->copyBuffer(m_ReadbackBuffers[ringSlot], leafBaseOffset,
                                   m_StageResources.cull.mainLeafSurvivorCounter, 0,
@@ -1910,9 +2020,14 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
             for (uint32_t i = 0; i < m_ReadbackImpostorEntries; i++)
                 impostorVisSum += counts[impostorOffset + i];
 
-            uint32_t shadowUnique       = counts[impostorOffset + m_ReadbackImpostorEntries];
-            uint32_t leafMainSurvivors  = counts[impostorOffset + m_ReadbackImpostorEntries + 1];
-            uint32_t leafShadowSurvivors= counts[impostorOffset + m_ReadbackImpostorEntries + 2];
+            const uint32_t shadowImpostorOffset = impostorOffset + m_ReadbackImpostorEntries;
+            uint32_t shadowImpostorVisSum = 0;
+            for (uint32_t i = 0; i < m_ReadbackShadowImpostorEntries; i++)
+                shadowImpostorVisSum += counts[shadowImpostorOffset + i];
+
+            uint32_t shadowUnique       = counts[shadowImpostorOffset + m_ReadbackShadowImpostorEntries];
+            uint32_t leafMainSurvivors  = counts[shadowImpostorOffset + m_ReadbackShadowImpostorEntries + 1];
+            uint32_t leafShadowSurvivors= counts[shadowImpostorOffset + m_ReadbackShadowImpostorEntries + 2];
 
             GetDevice()->unmapBuffer(m_ReadbackBuffers[readSlot]);
 
@@ -1920,7 +2035,8 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
             m_UI.visibleInstanceCount = totalVisible;
             m_UI.culledInstanceCount  = (totalVisible <= m_UI.totalInstanceCount)
                 ? m_UI.totalInstanceCount - totalVisible : 0;
-            m_UI.impostorVisibleCount   = impostorVisSum;
+            m_UI.impostorVisibleCount         = impostorVisSum;
+            m_UI.shadowImpostorVisibleCount   = shadowImpostorVisSum;
             m_UI.visibleLeafInstanceCount       = leafMainSurvivors;
             m_UI.shadowVisibleLeafInstanceCount = leafShadowSurvivors;
             m_UI.shadowVisibleCount     = shadowUnique;
@@ -2797,6 +2913,43 @@ bool MeshShaderRenderPass::_InitImpostorPass() {
     return imp.sampler != nullptr && imp.depthSampler != nullptr;
 }
 
+bool MeshShaderRenderPass::_InitShadowImpostorPass() {
+    auto& sip = m_StageResources.shadowImpostor;
+
+    sip.vertexShader = m_ShaderFactory->CreateShader(
+        "app/ShadowImpostorPass.hlsl", "shadow_impostor_vs", nullptr, nvrhi::ShaderType::Vertex);
+    sip.pixelShader = m_ShaderFactory->CreateShader(
+        "app/ShadowImpostorPass.hlsl", "shadow_impostor_ps", nullptr, nvrhi::ShaderType::Pixel);
+    if (!sip.vertexShader || !sip.pixelShader) {
+        log::error("MeshShaderRenderPass: shadow impostor shaders failed to compile");
+        return false;
+    }
+
+    nvrhi::BindingLayoutDesc layoutDesc;
+    layoutDesc.visibility = nvrhi::ShaderType::All;
+    layoutDesc.bindings = {
+        nvrhi::BindingLayoutItem::ConstantBuffer(compute_reg::ShadowImpostor::kCB_Frame),
+        nvrhi::BindingLayoutItem::PushConstants(compute_reg::ShadowImpostor::kPushC_AssetCascade, sizeof(uint32_t) * 2),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(compute_reg::ShadowImpostor::kSRV_Vis),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(compute_reg::ShadowImpostor::kSRV_Instances),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(compute_reg::ShadowImpostor::kSRV_SlotOffsets),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(compute_reg::ShadowImpostor::kSRV_CullData),
+        nvrhi::BindingLayoutItem::Texture_SRV(compute_reg::ShadowImpostor::kTex_Albedo),
+        nvrhi::BindingLayoutItem::Texture_SRV(compute_reg::ShadowImpostor::kTex_Depth),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(compute_reg::ShadowImpostor::kSRV_AssetDims),
+        nvrhi::BindingLayoutItem::Sampler(compute_reg::ShadowImpostor::kSampler_Main),
+        nvrhi::BindingLayoutItem::Sampler(compute_reg::ShadowImpostor::kSampler_Depth),
+    };
+    sip.bindingLayout = GetDevice()->createBindingLayout(layoutDesc);
+    if (!sip.bindingLayout) return false;
+
+    // Reuse the color impostor pass's samplers — same filter/clamp settings work for shadow.
+    sip.sampler      = m_StageResources.impostor.sampler;
+    sip.depthSampler = m_StageResources.impostor.depthSampler;
+
+    return sip.sampler != nullptr && sip.depthSampler != nullptr;
+}
+
 void MeshShaderRenderPass::_RebuildImpostorBindingSets() {
     auto& imp = m_StageResources.impostor;
     if (!imp.bindingLayout) return;
@@ -2835,6 +2988,38 @@ void MeshShaderRenderPass::_RebuildImpostorBindingSets() {
         imp.bindingSets[i] = device->createBindingSet(bsd, imp.bindingLayout);
     }
     imp.pipeline = nullptr;  // resolution-dependent; recreate next render
+}
+
+void MeshShaderRenderPass::_RebuildShadowImpostorBindingSets() {
+    auto& sip = m_StageResources.shadowImpostor;
+    sip.bindingSets.clear();
+    if (!sip.bindingLayout) return;
+    if (!m_Shared || !m_Shared->impostorAlbedo() || !m_Shared->impostorDepth()) return;
+    if (!m_Shared->assetDimsBuffer()) return;
+    if (!m_StageResources.cull.shadowImpostorVisBuffer ||
+        !m_StageResources.cull.shadowImpostorSlotOffsetBuffer) return;
+
+    nvrhi::BindingSetDesc setDesc;
+    setDesc.bindings = {
+        nvrhi::BindingSetItem::ConstantBuffer(compute_reg::ShadowImpostor::kCB_Frame,
+            m_StageResources.frameShared.constantBuffer,
+            nvrhi::BufferRange(0, shader_cb::kCullFrameSize)),
+        nvrhi::BindingSetItem::PushConstants(compute_reg::ShadowImpostor::kPushC_AssetCascade, sizeof(uint32_t) * 2),
+
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::ShadowImpostor::kSRV_Vis,         m_StageResources.cull.shadowImpostorVisBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::ShadowImpostor::kSRV_Instances,   m_StageResources.cull.persistentInstBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::ShadowImpostor::kSRV_SlotOffsets, m_StageResources.cull.shadowImpostorSlotOffsetBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::ShadowImpostor::kSRV_CullData,    m_StageResources.cull.cullDataBuffer),
+
+        nvrhi::BindingSetItem::Texture_SRV(compute_reg::ShadowImpostor::kTex_Albedo, m_Shared->impostorAlbedo()),
+        nvrhi::BindingSetItem::Texture_SRV(compute_reg::ShadowImpostor::kTex_Depth,  m_Shared->impostorDepth(), nvrhi::Format::R32_FLOAT),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::ShadowImpostor::kSRV_AssetDims,  m_Shared->assetDimsBuffer()),
+
+        nvrhi::BindingSetItem::Sampler(compute_reg::ShadowImpostor::kSampler_Main,  sip.sampler),
+        nvrhi::BindingSetItem::Sampler(compute_reg::ShadowImpostor::kSampler_Depth, sip.depthSampler),
+    };
+    sip.bindingSets.push_back(GetDevice()->createBindingSet(setDesc, sip.bindingLayout));
+    sip.pipeline = nullptr;  // resolution-dependent; recreate next render
 }
 
 void MeshShaderRenderPass::_RenderImpostorPass(nvrhi::IFramebuffer* framebuffer) {
@@ -2880,6 +3065,57 @@ void MeshShaderRenderPass::_RenderImpostorPass(nvrhi::IFramebuffer* framebuffer)
         m_CommandList->setGraphicsState(state);
         m_CommandList->setPushConstants(&ai, sizeof(ai));
         m_CommandList->drawIndirect(ai * sizeof(nvrhi::DrawIndirectArguments));
+    }
+}
+
+void MeshShaderRenderPass::_RenderShadowImpostorPass(uint32_t cascade) {
+    auto& sip = m_StageResources.shadowImpostor;
+    const auto& assets = m_Registry.getAssets();
+    if (assets.empty() || sip.bindingSets.empty()) return;
+
+    auto framebuffer = m_StageResources.shadow.framebuffers[cascade];
+    if (!framebuffer) return;
+
+    const nvrhi::FramebufferInfoEx& fbinfo = framebuffer->getFramebufferInfo();
+
+    if (!sip.pipeline) {
+        nvrhi::GraphicsPipelineDesc psoDesc;
+        psoDesc.VS = sip.vertexShader;
+        psoDesc.PS = sip.pixelShader;
+        psoDesc.inputLayout = nullptr;
+        psoDesc.bindingLayouts = { sip.bindingLayout };
+        psoDesc.primType = nvrhi::PrimitiveType::TriangleStrip;
+        // Shadow framebuffer uses standard Z (cleared to 1.0, smaller depth = closer to light),
+        // matching the meshlet shadow pipeline at line 1379. Not reverse-Z.
+        psoDesc.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
+        psoDesc.renderState.depthStencilState.setDepthWriteEnable(true);
+        psoDesc.renderState.rasterState.setCullNone();
+        sip.pipeline = GetDevice()->createGraphicsPipeline(psoDesc, fbinfo);
+    }
+
+    nvrhi::GraphicsState state;
+    state.pipeline = sip.pipeline;
+    state.framebuffer = framebuffer;
+
+    nvrhi::ViewportState vp;
+    vp.addViewportAndScissorRect(nvrhi::Viewport(
+        (float)fbinfo.width, (float)fbinfo.height));
+    state.viewport = vp;
+
+    state.indirectParams = m_StageResources.cull.shadowImpostorIndirectArgsBuffer;
+    state.bindings = { sip.bindingSets[0] };
+    m_CommandList->setGraphicsState(state);
+
+    const uint32_t numAssets = static_cast<uint32_t>(assets.size());
+    const uint32_t nCasc = XYLEM_NUM_CASCADES;
+    for (uint32_t ai = 0; ai < numAssets; ai++) {
+        const uint32_t slot = ai * nCasc + cascade;
+        if (slot >= m_ShadowImpostorMaxSlotCounts.size() ||
+            m_ShadowImpostorMaxSlotCounts[slot] == 0) continue;
+
+        uint32_t pc[2] = { ai, cascade };
+        m_CommandList->setPushConstants(pc, sizeof(pc));
+        m_CommandList->drawIndirect(slot * sizeof(nvrhi::DrawIndirectArguments));
     }
 }
 

@@ -16,6 +16,7 @@ inline constexpr uint32_t kSRV_ImpostorSlotOffsets = 5;
 inline constexpr uint32_t kSRV_InstanceData = 1;
 inline constexpr uint32_t kSRV_MainSlotOffsets = 2;
 inline constexpr uint32_t kSRV_RegionData = 0;
+inline constexpr uint32_t kSRV_ShadowImpostorSlotOffsets = 6;
 inline constexpr uint32_t kSRV_ShadowSlotOffsets = 3;
 inline constexpr uint32_t kUAV_ImpostorCount = 8;
 inline constexpr uint32_t kUAV_ImpostorIndirectArgs = 10;
@@ -24,6 +25,9 @@ inline constexpr uint32_t kUAV_MainIndirectArgs = 5;
 inline constexpr uint32_t kUAV_MainRegionVis = 0;
 inline constexpr uint32_t kUAV_MainSlotCount = 1;
 inline constexpr uint32_t kUAV_MainVis = 2;
+inline constexpr uint32_t kUAV_ShadowImpostorCount = 11;
+inline constexpr uint32_t kUAV_ShadowImpostorIndirectArgs = 13;
+inline constexpr uint32_t kUAV_ShadowImpostorVis = 12;
 inline constexpr uint32_t kUAV_ShadowIndirectArgs = 6;
 inline constexpr uint32_t kUAV_ShadowSlotCount = 3;
 inline constexpr uint32_t kUAV_ShadowUniqueCounter = 7;
@@ -87,6 +91,20 @@ inline constexpr uint32_t kTex_NormalMap = 4;
 inline constexpr uint32_t kTex_ShadowMap = 5;
 } // namespace Scene
 
+namespace ShadowImpostor {
+inline constexpr uint32_t kCB_Frame = 0;
+inline constexpr uint32_t kPushC_AssetCascade = 1;
+inline constexpr uint32_t kSRV_AssetDims = 6;
+inline constexpr uint32_t kSRV_CullData = 3;
+inline constexpr uint32_t kSRV_Instances = 1;
+inline constexpr uint32_t kSRV_SlotOffsets = 2;
+inline constexpr uint32_t kSRV_Vis = 0;
+inline constexpr uint32_t kSampler_Depth = 1;
+inline constexpr uint32_t kSampler_Main = 0;
+inline constexpr uint32_t kTex_Albedo = 4;
+inline constexpr uint32_t kTex_Depth = 5;
+} // namespace ShadowImpostor
+
 namespace Shadow {
 inline constexpr uint32_t kCB_Frame = 0;
 inline constexpr uint32_t kPushC_AssetCascade = 1;
@@ -117,6 +135,7 @@ inline constexpr uint32_t kSRV_MainInvocations = 3;
 inline constexpr uint32_t kSRV_MainLeafInvocations = 8;
 inline constexpr uint32_t kSRV_MainSlotOffsets = 2;
 inline constexpr uint32_t kSRV_RegionData = 0;
+inline constexpr uint32_t kSRV_ShadowImpostorSlotOffsets = 10;
 inline constexpr uint32_t kSRV_ShadowInvocations = 5;
 inline constexpr uint32_t kSRV_ShadowLeafInvocations = 9;
 inline constexpr uint32_t kSRV_ShadowSlotOffsets = 4;
@@ -130,6 +149,9 @@ inline constexpr uint32_t kUAV_MainRegionVis = 0;
 inline constexpr uint32_t kUAV_MainVis = 2;
 inline constexpr uint32_t kUAV_ShadowCount = 4;
 inline constexpr uint32_t kUAV_ShadowDispatch = 6;
+inline constexpr uint32_t kUAV_ShadowImpostorCount = 13;
+inline constexpr uint32_t kUAV_ShadowImpostorIndirectArgs = 15;
+inline constexpr uint32_t kUAV_ShadowImpostorVis = 14;
 inline constexpr uint32_t kUAV_ShadowLeafDispatch = 12;
 inline constexpr uint32_t kUAV_ShadowUnique = 7;
 inline constexpr uint32_t kUAV_ShadowVis = 5;

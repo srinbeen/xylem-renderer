@@ -44,6 +44,21 @@ struct ConstantBufferEntry {
 
 static constexpr size_t c_ConstantBufferSize = (sizeof(ConstantBufferEntry) + (nvrhi::c_ConstantBufferOffsetSizeAlignment - 1)) & ~(nvrhi::c_ConstantBufferOffsetSizeAlignment - 1);
 
+struct TerrainShadingCBEntry {
+    float tileSize;
+    float forestToDirtY;
+    float dirtToSnowY;
+    float bandWidth;
+    float slopeLo;
+    float slopeHi;
+    float macroNoiseAmp;
+    float _pad0;
+};
+
+static constexpr size_t c_TerrainShadingCBSize =
+    (sizeof(TerrainShadingCBEntry) + (nvrhi::c_ConstantBufferOffsetSizeAlignment - 1))
+    & ~(nvrhi::c_ConstantBufferOffsetSizeAlignment - 1);
+
 struct VertexBufferSet {
     nvrhi::BufferHandle position;
     nvrhi::BufferHandle normal;

@@ -1,6 +1,7 @@
 #ifndef XYLEM_SHARED_GPU_ASSETS_H
 #define XYLEM_SHARED_GPU_ASSETS_H
 
+#include <array>
 #include <memory>
 #include <vector>
 
@@ -52,6 +53,14 @@ public:
     const std::vector<TextureSet>& barkTextures() const { return m_BarkTextures; }
     nvrhi::SamplerHandle           barkSampler()  const { return m_BarkSampler; }
 
+    const std::array<TextureSet, 4>& terrainTextures()  const { return m_TerrainTextures; }
+    const nvrhi::BufferHandle&       terrainShadingCB() const { return m_TerrainShadingCB; }
+
+    // Re-runs bark + terrain texture loading and re-bakes impostors. Called
+    // by RenderOrchestrator after a runtime scene swap. Caller MUST have done
+    // device->waitForIdle() and SceneRegistry::clear() + reload first.
+    bool OnSceneReloaded();
+
     nvrhi::ITexture* impostorAlbedo() const { return m_AlbedoAlphaTexture; }
     nvrhi::ITexture* impostorNormal() const { return m_NormalTexture; }
     nvrhi::ITexture* impostorDepth()  const { return m_DepthTexture; }
@@ -70,6 +79,8 @@ public:
 private:
     bool _InitBakePipeline();
     bool _LoadBarkTextures(nvrhi::ICommandList* cl, donut::engine::CommonRenderPasses& commonPasses);
+    bool _LoadTerrainTextures(nvrhi::ICommandList* cl,
+                              donut::engine::CommonRenderPasses& commonPasses);
     bool _RebuildLeafBuffers(nvrhi::ICommandList* cl);
     bool _BakeImpostors(nvrhi::ICommandList* cl);
     bool _RebuildAssetDimsBuffer(nvrhi::ICommandList* cl);
@@ -82,6 +93,10 @@ private:
     // Bark textures (one TextureSet per registered bark material)
     std::vector<TextureSet>                          m_BarkTextures;
     nvrhi::SamplerHandle                             m_BarkSampler;
+
+    // Terrain textures (4 layers: forestFloor, dirt, rock, snow) + shading CB
+    std::array<TextureSet, 4>                        m_TerrainTextures;
+    nvrhi::BufferHandle                              m_TerrainShadingCB;
 
     // Impostor bake pipeline
     nvrhi::ShaderHandle                              m_BakeVS;

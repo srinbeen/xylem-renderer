@@ -1482,7 +1482,7 @@
       0.486664
     ]
   },
-  "terrain" : 
+  "terrain" :
   {
     "amplitude" : 50.0,
     "frequency" : 0.02,
@@ -1490,6 +1490,12 @@
     "lacunarity" : 2.0,
     "octaves" : 13,
     "persistence" : 0.5,
-    "seed" : 12
+    "seed" : 12,
+    "textures" : {
+      "forestFloor" : "brown_mud_leaves_01_1k",
+      "dirt"        : "dry_ground_rocks_1k",
+      "rock"        : "rocky_terrain_02_1k",
+      "snow"        : "snow_02_1k"
+    }
   }
 }

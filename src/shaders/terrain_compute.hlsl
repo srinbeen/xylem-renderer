@@ -1,10 +1,11 @@
 #include "../include/macros.h"
 #include "ShaderRegisterMap.hlsli"
 #include "ShadowCascadeCommon.hlsli"
+#include "terrain_shading.hlsli"
 
 #pragma pack_matrix(row_major)
 
-cbuffer CB : register(XY_REG_B_COMPUTE_TERRAIN_CB_FRAME)
+cbuffer FrameCB : register(XY_REG_B_COMPUTE_TERRAIN_CB_FRAME)
 {
     float4x4 viewProj;
     float4x4 viewMatrix;
@@ -12,6 +13,18 @@ cbuffer CB : register(XY_REG_B_COMPUTE_TERRAIN_CB_FRAME)
     float3   sunLightDir;
     float    _pad0;
     float4   cascadeSplits;
+};
+
+cbuffer ShadingCB : register(XY_REG_B_COMPUTE_TERRAIN_CB_SHADING)
+{
+    float g_TileSize;
+    float g_ForestToDirtY;
+    float g_DirtToSnowY;
+    float g_BandWidth;
+    float g_SlopeLo;
+    float g_SlopeHi;
+    float g_MacroNoiseAmp;
+    float g_Pad0;
 };
 
 void terrain_vs(
@@ -38,48 +51,64 @@ void terrain_vs(
 Texture2DArray         t_ShadowMap     : register(XY_REG_T_COMPUTE_TERRAIN_TEX_SHADOW_MAP);
 SamplerComparisonState s_ShadowSampler : register(XY_REG_S_COMPUTE_TERRAIN_SAMPLER_SHADOW);
 
+Texture2D    t_ForestDiff : register(XY_REG_T_COMPUTE_TERRAIN_TEX_FOREST_DIFF);
+Texture2D    t_ForestNor  : register(XY_REG_T_COMPUTE_TERRAIN_TEX_FOREST_NOR);
+Texture2D    t_DirtDiff   : register(XY_REG_T_COMPUTE_TERRAIN_TEX_DIRT_DIFF);
+Texture2D    t_DirtNor    : register(XY_REG_T_COMPUTE_TERRAIN_TEX_DIRT_NOR);
+Texture2D    t_RockDiff   : register(XY_REG_T_COMPUTE_TERRAIN_TEX_ROCK_DIFF);
+Texture2D    t_RockNor    : register(XY_REG_T_COMPUTE_TERRAIN_TEX_ROCK_NOR);
+Texture2D    t_SnowDiff   : register(XY_REG_T_COMPUTE_TERRAIN_TEX_SNOW_DIFF);
+Texture2D    t_SnowNor    : register(XY_REG_T_COMPUTE_TERRAIN_TEX_SNOW_NOR);
+SamplerState s_Aniso      : register(XY_REG_S_COMPUTE_TERRAIN_SAMPLER_ANISO);
+
 float SampleShadowCascade(float3 worldPos, uint cascadeIdx)
 {
-    float4 posLS = mul(float4(worldPos, 1), lightViewProj[cascadeIdx]);
+    float4 posLS    = mul(float4(worldPos, 1), lightViewProj[cascadeIdx]);
     float2 shadowUV = posLS.xy * float2(0.5, -0.5) + 0.5;
     return t_ShadowMap.SampleCmpLevelZero(s_ShadowSampler,
         float3(shadowUV, float(cascadeIdx)), posLS.z);
 }
 
 void terrain_ps(
-    in float4 i_pos      : SV_Position,
-    in float3 i_worldPos : WORLD_POS,
-    in float  i_viewZ    : VIEW_Z,
-    in float3 i_normal   : NORMAL,
-    in float2 i_uv       : UV,
-    in float  i_height   : HEIGHT,
+    in float4  i_pos      : SV_Position,
+    in float3  i_worldPos : WORLD_POS,
+    in float   i_viewZ    : VIEW_Z,
+    in float3  i_normal   : NORMAL,
+    in float2  i_uv       : UV,
+    in float   i_height   : HEIGHT,
 
-    out float4 o_color : SV_Target0
+    out float4 o_color    : SV_Target0
 )
 {
-    float3 N = normalize(i_normal);
+    float3 vertN = normalize(i_normal);
 
-    float3 lightDir = -normalize(sunLightDir);
-    float  diffuse  = max(dot(N, lightDir), 0);
+    TerrainShadingParams p;
+    p.tileSize       = g_TileSize;
+    p.forestToDirtY  = g_ForestToDirtY;
+    p.dirtToSnowY    = g_DirtToSnowY;
+    p.bandWidth      = g_BandWidth;
+    p.slopeLo        = g_SlopeLo;
+    p.slopeHi        = g_SlopeHi;
+    p.macroNoiseAmp  = g_MacroNoiseAmp;
 
-    uint cascadeIdx = SelectShadowCascade(i_viewZ, cascadeSplits);
+    float4 weights = ComputeLayerWeights(i_worldPos, vertN, i_height, p);
+    float3 triW    = ComputeTriplanarWeights(vertN);
+    float3 worldPosScaled = i_worldPos / max(g_TileSize, 1e-3);
 
-    float notInShadow = SampleShadowCascade(i_worldPos, cascadeIdx);
+    float3 albedoSum = 0.0;
+    float3 normalSum = 0.0;
+    AccumulateLayer(t_ForestDiff, t_ForestNor, s_Aniso, worldPosScaled, triW, vertN, weights.x, albedoSum, normalSum);
+    AccumulateLayer(t_DirtDiff,   t_DirtNor,   s_Aniso, worldPosScaled, triW, vertN, weights.y, albedoSum, normalSum);
+    AccumulateLayer(t_RockDiff,   t_RockNor,   s_Aniso, worldPosScaled, triW, vertN, weights.z, albedoSum, normalSum);
+    AccumulateLayer(t_SnowDiff,   t_SnowNor,   s_Aniso, worldPosScaled, triW, vertN, weights.w, albedoSum, normalSum);
 
-    float ambient  = 0.15;
-    float lighting = ambient + (1.0 - ambient) * diffuse * notInShadow;
+    float3 worldN = normalize(normalSum + 1e-5 * vertN);
 
-    float slope = 1.0 - N.y;
+    float3 lightDir    = -normalize(sunLightDir);
+    float  diffuse     = max(dot(worldN, lightDir), 0);
+    uint   cascadeIdx  = SelectShadowCascade(i_viewZ, cascadeSplits);
+    float  notInShadow = SampleShadowCascade(i_worldPos, cascadeIdx);
+    float  lighting    = 0.15 + 0.85 * diffuse * notInShadow;
 
-    float3 grassColor = float3(0.15, 0.35, 0.08);
-    float3 dirtColor  = float3(0.45, 0.35, 0.2);
-    float3 rockColor  = float3(0.5, 0.48, 0.45);
-
-    float heightFactor = saturate(i_height * 0.1 + 0.3);
-    float3 baseColor   = lerp(grassColor, dirtColor, heightFactor);
-
-    float slopeFactor = saturate(slope * 4.0);
-    float3 color      = lerp(baseColor, rockColor, slopeFactor);
-
-    o_color = float4(lighting * color, 1);
+    o_color = float4(lighting * albedoSum, 1);
 }

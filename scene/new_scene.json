@@ -624,7 +624,13 @@
     "octaves": 13,
     "frequency": 0.02,
     "amplitude": 50.0,
-    "gridSpacing": 5.0
+    "gridSpacing": 5.0,
+    "textures": {
+      "forestFloor": "brown_mud_leaves_01_1k",
+      "dirt":        "dry_ground_rocks_1k",
+      "rock":        "rocky_terrain_02_1k",
+      "snow":        "snow_02_1k"
+    }
   },
   "regions": [
     {

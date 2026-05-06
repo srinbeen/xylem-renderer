@@ -290,6 +290,34 @@ bool SceneLoader::Load(const std::filesystem::path& path, SceneRegistry& registr
             tNode["lacunarity"]  >> terrainConfig.lacunarity;
             tNode["persistence"] >> terrainConfig.persistence;
             tNode["gridSpacing"] >> terrainConfig.gridSpacing;
+
+            // Required: textures block with all four named slots.
+            if (!tNode.isMember("textures")) {
+                donut::log::error("SceneLoader: terrain block missing required 'textures' sub-block");
+                return false;
+            }
+            const auto& texNode = tNode["textures"];
+            const char* slotKeys[4] = { "forestFloor", "dirt", "rock", "snow" };
+            for (int i = 0; i < 4; i++) {
+                if (!texNode.isMember(slotKeys[i]) || !texNode[slotKeys[i]].isString()) {
+                    donut::log::error("SceneLoader: terrain.textures missing or non-string slot '%s'",
+                                      slotKeys[i]);
+                    return false;
+                }
+                terrainConfig.shading.textureSetNames[i] = texNode[slotKeys[i]].asString();
+            }
+
+            // Optional: shading block — per-field defaults.
+            if (tNode.isMember("shading")) {
+                const auto& sNode = tNode["shading"];
+                if (sNode.isMember("tileSize"))      sNode["tileSize"]      >> terrainConfig.shading.tileSize;
+                if (sNode.isMember("forestToDirtY")) sNode["forestToDirtY"] >> terrainConfig.shading.forestToDirtY;
+                if (sNode.isMember("dirtToSnowY"))   sNode["dirtToSnowY"]   >> terrainConfig.shading.dirtToSnowY;
+                if (sNode.isMember("bandWidth"))     sNode["bandWidth"]     >> terrainConfig.shading.bandWidth;
+                if (sNode.isMember("slopeLo"))       sNode["slopeLo"]       >> terrainConfig.shading.slopeLo;
+                if (sNode.isMember("slopeHi"))       sNode["slopeHi"]       >> terrainConfig.shading.slopeHi;
+                if (sNode.isMember("macroNoiseAmp")) sNode["macroNoiseAmp"] >> terrainConfig.shading.macroNoiseAmp;
+            }
         }
 
         auto terrain = std::make_unique<Terrain>();
@@ -474,6 +502,26 @@ bool SceneLoader::Save(const std::filesystem::path& path, const SceneRegistry& r
             t["persistence"] = cfg.persistence;
             t["gridSpacing"] = cfg.gridSpacing;
             // worldMin/Max are derived from region bounds at load time, so don't save them.
+
+            // textures
+            Json::Value tex(Json::objectValue);
+            tex["forestFloor"] = cfg.shading.textureSetNames[0];
+            tex["dirt"]        = cfg.shading.textureSetNames[1];
+            tex["rock"]        = cfg.shading.textureSetNames[2];
+            tex["snow"]        = cfg.shading.textureSetNames[3];
+            t["textures"] = tex;
+
+            // shading
+            Json::Value shd(Json::objectValue);
+            shd["tileSize"]       = cfg.shading.tileSize;
+            shd["forestToDirtY"]  = cfg.shading.forestToDirtY;
+            shd["dirtToSnowY"]    = cfg.shading.dirtToSnowY;
+            shd["bandWidth"]      = cfg.shading.bandWidth;
+            shd["slopeLo"]        = cfg.shading.slopeLo;
+            shd["slopeHi"]        = cfg.shading.slopeHi;
+            shd["macroNoiseAmp"]  = cfg.shading.macroNoiseAmp;
+            t["shading"] = shd;
+
             root["terrain"] = t;
         }
     }

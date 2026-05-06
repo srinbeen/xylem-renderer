@@ -122,8 +122,9 @@ bool SharedGPUAssets::Init()
     nvrhi::CommandListHandle initCL = m_Device->createCommandList();
     initCL->open();
 
-    if (!_LoadBarkTextures(initCL, commonPasses)) { initCL->close(); return false; }
-    if (!_RebuildLeafBuffers(initCL))             { initCL->close(); return false; }
+    if (!_LoadBarkTextures(initCL, commonPasses))    { initCL->close(); return false; }
+    if (!_LoadTerrainTextures(initCL, commonPasses)) { initCL->close(); return false; }
+    if (!_RebuildLeafBuffers(initCL))                { initCL->close(); return false; }
     if (!_BakeImpostors(initCL))                  { initCL->close(); return false; }
 
     initCL->close();
@@ -164,6 +165,27 @@ bool SharedGPUAssets::OnAssetsDirty()
     m_UI.impostorNormalAtlasTexture = m_DebugNormalAtlasTexture;
     m_UI.impostorDepthAtlasTexture  = m_DebugDepthAtlasTexture;
 
+    return true;
+}
+
+bool SharedGPUAssets::OnSceneReloaded()
+{
+    nvrhi::CommandListHandle cl = m_Device->createCommandList();
+    cl->open();
+
+    engine::CommonRenderPasses commonPasses(m_Device, m_ShaderFactory);
+    if (!_LoadBarkTextures(cl, commonPasses))    { cl->close(); return false; }
+    if (!_LoadTerrainTextures(cl, commonPasses)) { cl->close(); return false; }
+    if (!_RebuildLeafBuffers(cl))                { cl->close(); return false; }
+    if (!_BakeImpostors(cl))                     { cl->close(); return false; }
+
+    cl->close();
+    m_Device->executeCommandList(cl);
+
+    m_UI.impostorAssetCount         = static_cast<uint32_t>(m_Registry.getAssets().size());
+    m_UI.impostorAlbedoAtlasTexture = m_DebugAlbedoAtlasTexture;
+    m_UI.impostorNormalAtlasTexture = m_DebugNormalAtlasTexture;
+    m_UI.impostorDepthAtlasTexture  = m_DebugDepthAtlasTexture;
     return true;
 }
 
@@ -283,6 +305,73 @@ bool SharedGPUAssets::_LoadBarkTextures(nvrhi::ICommandList* cl, engine::CommonR
             return false;
         }
     }
+    return true;
+}
+
+bool SharedGPUAssets::_LoadTerrainTextures(nvrhi::ICommandList* cl,
+                                           engine::CommonRenderPasses& commonPasses)
+{
+    const auto* terrain = m_Registry.getTerrain();
+    if (!terrain) {
+        donut::log::error("SharedGPUAssets: _LoadTerrainTextures called with no terrain");
+        return false;
+    }
+    const auto& names = terrain->getConfig().shading.textureSetNames;
+
+    engine::TextureCache textureCache(m_Device,
+        std::make_shared<vfs::NativeFileSystem>(), nullptr);
+
+    for (size_t i = 0; i < 4; i++) {
+        std::filesystem::path texDir = g_ProjectDirectory / "media" / names[i] / "textures";
+        std::filesystem::path diffPath, normPath;
+
+        for (const auto& entry : std::filesystem::directory_iterator(texDir)) {
+            std::string filename = entry.path().filename().string();
+            if (entry.path().extension() != ".jpg") continue;
+            if (filename.find("_diff_")    != std::string::npos) diffPath = entry.path();
+            if (filename.find("_nor_dx_") != std::string::npos) normPath = entry.path();
+        }
+        if (diffPath.empty() || normPath.empty()) {
+            donut::log::error("SharedGPUAssets: terrain set '%s' missing _diff_ or _nor_dx_ jpg",
+                              names[i].c_str());
+            return false;
+        }
+
+        auto diffLoaded = textureCache.LoadTextureFromFile(diffPath, true,  &commonPasses, cl);
+        auto normLoaded = textureCache.LoadTextureFromFile(normPath, false, &commonPasses, cl);
+        m_TerrainTextures[i].diffuse   = diffLoaded ? diffLoaded->texture : nullptr;
+        m_TerrainTextures[i].normalMap = normLoaded ? normLoaded->texture : nullptr;
+        if (!m_TerrainTextures[i].diffuse || !m_TerrainTextures[i].normalMap) {
+            donut::log::error("SharedGPUAssets: terrain texture load failed for '%s'",
+                              names[i].c_str());
+            return false;
+        }
+    }
+
+    // Create the shading CB if not yet allocated, then upload current params.
+    if (!m_TerrainShadingCB) {
+        m_TerrainShadingCB = m_Device->createBuffer(
+            nvrhi::BufferDesc()
+                .setByteSize(Render::c_TerrainShadingCBSize)
+                .setIsConstantBuffer(true)
+                .setIsVolatile(false)
+                .setKeepInitialState(true)
+                .setInitialState(nvrhi::ResourceStates::ConstantBuffer)
+                .setDebugName("Shared_TerrainShadingCB"));
+        if (!m_TerrainShadingCB) return false;
+    }
+
+    Render::TerrainShadingCBEntry cb{};
+    const auto& s = terrain->getConfig().shading;
+    cb.tileSize       = s.tileSize;
+    cb.forestToDirtY  = s.forestToDirtY;
+    cb.dirtToSnowY    = s.dirtToSnowY;
+    cb.bandWidth      = s.bandWidth;
+    cb.slopeLo        = s.slopeLo;
+    cb.slopeHi        = s.slopeHi;
+    cb.macroNoiseAmp  = s.macroNoiseAmp;
+    cl->writeBuffer(m_TerrainShadingCB, &cb, sizeof(cb));
+
     return true;
 }
 

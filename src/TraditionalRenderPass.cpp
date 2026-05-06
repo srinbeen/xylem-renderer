@@ -1549,12 +1549,23 @@ bool TraditionalRenderPass::_InitTerrainPass(nvrhi::ICommandList* initCL) {
     initCL->writeBuffer(m_StageResources.sceneTerrainStage.indexBuffer, indices.data(), ibDesc.byteSize);
     initCL->setPermanentBufferState(m_StageResources.sceneTerrainStage.indexBuffer, nvrhi::ResourceStates::IndexBuffer);
 
+    const auto& terrainTex = m_Shared->terrainTextures();
     nvrhi::BindingSetDesc bsd;
     bsd.bindings = {
         nvrhi::BindingSetItem::ConstantBuffer(traditional_reg::Terrain::kCB_Frame, m_StageResources.frameShared.constantBuffer,
             nvrhi::BufferRange(0, shader_cb::kFrameSize)),
-        nvrhi::BindingSetItem::Sampler(traditional_reg::Terrain::kSampler_Shadow, m_StageResources.shadowStage.comparisonSampler),
+        nvrhi::BindingSetItem::ConstantBuffer(traditional_reg::Terrain::kCB_Shading, m_Shared->terrainShadingCB()),
         nvrhi::BindingSetItem::Texture_SRV(traditional_reg::Terrain::kTex_ShadowMap, m_StageResources.shadowStage.depthTexture),
+        nvrhi::BindingSetItem::Texture_SRV(traditional_reg::Terrain::kTex_ForestDiff, terrainTex[0].diffuse),
+        nvrhi::BindingSetItem::Texture_SRV(traditional_reg::Terrain::kTex_ForestNor,  terrainTex[0].normalMap),
+        nvrhi::BindingSetItem::Texture_SRV(traditional_reg::Terrain::kTex_DirtDiff,   terrainTex[1].diffuse),
+        nvrhi::BindingSetItem::Texture_SRV(traditional_reg::Terrain::kTex_DirtNor,    terrainTex[1].normalMap),
+        nvrhi::BindingSetItem::Texture_SRV(traditional_reg::Terrain::kTex_RockDiff,   terrainTex[2].diffuse),
+        nvrhi::BindingSetItem::Texture_SRV(traditional_reg::Terrain::kTex_RockNor,    terrainTex[2].normalMap),
+        nvrhi::BindingSetItem::Texture_SRV(traditional_reg::Terrain::kTex_SnowDiff,   terrainTex[3].diffuse),
+        nvrhi::BindingSetItem::Texture_SRV(traditional_reg::Terrain::kTex_SnowNor,    terrainTex[3].normalMap),
+        nvrhi::BindingSetItem::Sampler(traditional_reg::Terrain::kSampler_Shadow, m_StageResources.shadowStage.comparisonSampler),
+        nvrhi::BindingSetItem::Sampler(traditional_reg::Terrain::kSampler_Aniso,  m_Shared->barkSampler()),
     };
     if (!nvrhi::utils::CreateBindingSetAndLayout(GetDevice(), nvrhi::ShaderType::All, 0,
             bsd, m_StageResources.sceneTerrainStage.bindingLayout, m_StageResources.sceneTerrainStage.bindingSet))

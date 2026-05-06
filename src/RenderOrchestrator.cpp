@@ -92,6 +92,13 @@ void RenderOrchestrator::_loadSceneIfRequested()
         return;
     }
 
+    // Refresh shared GPU assets (bark + terrain textures, impostors) for the new scene.
+    if (!m_Shared.OnSceneReloaded()) {
+        m_UI.sceneLoadStatus        = "Scene loaded but shared assets reload failed: " + path.string();
+        m_UI.sceneLoadStatusIsError = true;
+        return;
+    }
+
     // Camera reset — mirror RenderOrchestrator::Init.
     const auto& ci = m_Registry.getCameraInit();
     m_ViewHandler.camera.LookTo(ci.pos, ci.cameraDir);

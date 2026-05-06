@@ -1,6 +1,8 @@
 #ifndef XYLEM_TERRAIN_H
 #define XYLEM_TERRAIN_H
 
+#include <array>
+#include <string>
 #include <vector>
 #include <cstdint>
 #include <donut/core/math/math.h>
@@ -11,6 +13,17 @@ struct TerrainVertex {
     dm::float3 pos;
     dm::float3 normal;
     dm::float2 uv;
+};
+
+struct TerrainShadingParams {
+    float tileSize       = 4.0f;
+    float forestToDirtY  = 5.0f;
+    float dirtToSnowY    = 25.0f;
+    float bandWidth      = 8.0f;
+    float slopeLo        = 0.35f;
+    float slopeHi        = 0.65f;
+    float macroNoiseAmp  = 3.0f;
+    std::array<std::string, 4> textureSetNames; // [forestFloor, dirt, rock, snow]
 };
 
 struct TerrainConfig {
@@ -26,6 +39,7 @@ struct TerrainConfig {
     float    amplitude  = 8.0f;
     float    lacunarity = 2.0f;
     float    persistence = 0.5f;
+    TerrainShadingParams shading;
 };
 
 class Terrain {

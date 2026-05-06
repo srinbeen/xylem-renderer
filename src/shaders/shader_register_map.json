@@ -11,8 +11,18 @@
     { "namespace": ["Traditional", "Shadow"], "name": "kPushC_CascadeIndex", "kind": "b", "slot": 1 },
 
     { "namespace": ["Traditional", "Terrain"], "name": "kCB_Frame", "kind": "b", "slot": 0 },
+    { "namespace": ["Traditional", "Terrain"], "name": "kCB_Shading", "kind": "b", "slot": 1 },
     { "namespace": ["Traditional", "Terrain"], "name": "kTex_ShadowMap", "kind": "t", "slot": 0 },
+    { "namespace": ["Traditional", "Terrain"], "name": "kTex_ForestDiff", "kind": "t", "slot": 1 },
+    { "namespace": ["Traditional", "Terrain"], "name": "kTex_ForestNor", "kind": "t", "slot": 2 },
+    { "namespace": ["Traditional", "Terrain"], "name": "kTex_DirtDiff", "kind": "t", "slot": 3 },
+    { "namespace": ["Traditional", "Terrain"], "name": "kTex_DirtNor", "kind": "t", "slot": 4 },
+    { "namespace": ["Traditional", "Terrain"], "name": "kTex_RockDiff", "kind": "t", "slot": 5 },
+    { "namespace": ["Traditional", "Terrain"], "name": "kTex_RockNor", "kind": "t", "slot": 6 },
+    { "namespace": ["Traditional", "Terrain"], "name": "kTex_SnowDiff", "kind": "t", "slot": 7 },
+    { "namespace": ["Traditional", "Terrain"], "name": "kTex_SnowNor", "kind": "t", "slot": 8 },
     { "namespace": ["Traditional", "Terrain"], "name": "kSampler_Shadow", "kind": "s", "slot": 0 },
+    { "namespace": ["Traditional", "Terrain"], "name": "kSampler_Aniso", "kind": "s", "slot": 1 },
 
     { "namespace": ["Traditional", "Sky"], "name": "kCB_Sky", "kind": "b", "slot": 0 },
 
@@ -103,8 +113,18 @@
     { "namespace": ["Compute", "SDSM"], "name": "kUAV_CascadeOut", "kind": "u", "slot": 0 },
 
     { "namespace": ["Compute", "Terrain"], "name": "kCB_Frame", "kind": "b", "slot": 0 },
-    { "namespace": ["Compute", "Terrain"], "name": "kSampler_Shadow", "kind": "s", "slot": 0 },
+    { "namespace": ["Compute", "Terrain"], "name": "kCB_Shading", "kind": "b", "slot": 1 },
     { "namespace": ["Compute", "Terrain"], "name": "kTex_ShadowMap", "kind": "t", "slot": 0 },
+    { "namespace": ["Compute", "Terrain"], "name": "kTex_ForestDiff", "kind": "t", "slot": 1 },
+    { "namespace": ["Compute", "Terrain"], "name": "kTex_ForestNor", "kind": "t", "slot": 2 },
+    { "namespace": ["Compute", "Terrain"], "name": "kTex_DirtDiff", "kind": "t", "slot": 3 },
+    { "namespace": ["Compute", "Terrain"], "name": "kTex_DirtNor", "kind": "t", "slot": 4 },
+    { "namespace": ["Compute", "Terrain"], "name": "kTex_RockDiff", "kind": "t", "slot": 5 },
+    { "namespace": ["Compute", "Terrain"], "name": "kTex_RockNor", "kind": "t", "slot": 6 },
+    { "namespace": ["Compute", "Terrain"], "name": "kTex_SnowDiff", "kind": "t", "slot": 7 },
+    { "namespace": ["Compute", "Terrain"], "name": "kTex_SnowNor", "kind": "t", "slot": 8 },
+    { "namespace": ["Compute", "Terrain"], "name": "kSampler_Shadow", "kind": "s", "slot": 0 },
+    { "namespace": ["Compute", "Terrain"], "name": "kSampler_Aniso", "kind": "s", "slot": 1 },
 
     { "namespace": ["Compute", "Sky"], "name": "kCB_Sky", "kind": "b", "slot": 0 },
 
@@ -176,8 +196,18 @@
     { "namespace": ["Mesh", "SDSM"], "name": "kUAV_CascadeOut", "kind": "u", "slot": 0 },
 
     { "namespace": ["Mesh", "Terrain"], "name": "kCB_Frame", "kind": "b", "slot": 0 },
-    { "namespace": ["Mesh", "Terrain"], "name": "kSampler_Shadow", "kind": "s", "slot": 0 },
+    { "namespace": ["Mesh", "Terrain"], "name": "kCB_Shading", "kind": "b", "slot": 1 },
     { "namespace": ["Mesh", "Terrain"], "name": "kTex_ShadowMap", "kind": "t", "slot": 0 },
+    { "namespace": ["Mesh", "Terrain"], "name": "kTex_ForestDiff", "kind": "t", "slot": 1 },
+    { "namespace": ["Mesh", "Terrain"], "name": "kTex_ForestNor", "kind": "t", "slot": 2 },
+    { "namespace": ["Mesh", "Terrain"], "name": "kTex_DirtDiff", "kind": "t", "slot": 3 },
+    { "namespace": ["Mesh", "Terrain"], "name": "kTex_DirtNor", "kind": "t", "slot": 4 },
+    { "namespace": ["Mesh", "Terrain"], "name": "kTex_RockDiff", "kind": "t", "slot": 5 },
+    { "namespace": ["Mesh", "Terrain"], "name": "kTex_RockNor", "kind": "t", "slot": 6 },
+    { "namespace": ["Mesh", "Terrain"], "name": "kTex_SnowDiff", "kind": "t", "slot": 7 },
+    { "namespace": ["Mesh", "Terrain"], "name": "kTex_SnowNor", "kind": "t", "slot": 8 },
+    { "namespace": ["Mesh", "Terrain"], "name": "kSampler_Shadow", "kind": "s", "slot": 0 },
+    { "namespace": ["Mesh", "Terrain"], "name": "kSampler_Aniso", "kind": "s", "slot": 1 },
 
     { "namespace": ["Mesh", "Sky"], "name": "kCB_Sky", "kind": "b", "slot": 0 }
   ]

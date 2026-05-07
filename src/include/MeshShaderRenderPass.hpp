@@ -221,6 +221,13 @@ private:
         nvrhi::MeshletPipelineHandle     pipeline;
 
         nvrhi::RefCountPtr<ID3D12CommandSignature> dispatchMeshSignature;
+
+        // Terrain shadow caster (traditional VS into the same per-cascade
+        // framebuffer slice). Reuses the meshlet shadow bindingLayout/bindingSet —
+        // the VS only references the CB and push constant; declared SRVs are unused.
+        nvrhi::ShaderHandle              terrainVS;
+        nvrhi::InputLayoutHandle         terrainInputLayout;
+        nvrhi::GraphicsPipelineHandle    terrainPipeline;
     };
 
     struct DepthPrepassResources {
@@ -402,6 +409,7 @@ private:
 
     void _CreateMainPipelineIfNeeded(nvrhi::IFramebuffer* framebuffer);
     void _CreateShadowPipelineIfNeeded();
+    void _CreateShadowTerrainPipelineIfNeeded();
     void _CreateDepthPrepassPipelineIfNeeded();
     void _CreateLeafPipelinesIfNeeded(nvrhi::IFramebuffer* framebuffer);
     void _EnsureDispatchMeshSignatures();

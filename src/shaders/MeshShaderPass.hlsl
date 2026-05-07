@@ -441,6 +441,20 @@ void shadow_ms(
 }
 
 // =============================================================================
+// Terrain shadow VS — traditional VS path. Reuses the main draw CB for
+// lightViewProj[] and the kPushC_Slot push constant slot for cascade index
+// (g_SlotIdx). Cull/leaf SRVs declared above are unused here.
+// =============================================================================
+
+void shadow_terrain_vs(
+    in  float3 i_pos : POSITION,
+    out float4 o_pos : SV_Position
+)
+{
+    o_pos = mul(float4(i_pos, 1), lightViewProj[g_SlotIdx]);
+}
+
+// =============================================================================
 // Depth-prepass mesh shader — reuses main_as for culling, no PS.
 // =============================================================================
 

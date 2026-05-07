@@ -411,6 +411,27 @@ bool MeshShaderRenderPass::_InitShadowPass() {
         .setDebugName("MeshShader_DebugSelectedCascade"));
     if (!m_StageResources.shadow.debugSelectedCascadeTexture) return false;
 
+    // Terrain shadow caster path: traditional VS that pushes cascadeIdx through
+    // the existing kPushC_Slot root constant and reads lightViewProj[] from the
+    // shared kCB_Frame. PSO is built lazily in _CreateShadowTerrainPipelineIfNeeded.
+    m_StageResources.shadow.terrainVS = m_ShaderFactory->CreateShader(
+        "app/MeshShaderPass.hlsl", "shadow_terrain_vs", nullptr, nvrhi::ShaderType::Vertex);
+    if (!m_StageResources.shadow.terrainVS) {
+        log::error("MeshShaderRenderPass: shadow_terrain_vs compile failed");
+        return false;
+    }
+
+    nvrhi::VertexAttributeDesc shadowTerrainAttrs[] = {
+        nvrhi::VertexAttributeDesc()
+            .setName("POSITION").setFormat(nvrhi::Format::RGB32_FLOAT)
+            .setOffset(offsetof(Scene::TerrainVertex, pos))
+            .setBufferIndex(0).setElementStride(sizeof(Scene::TerrainVertex)),
+    };
+    m_StageResources.shadow.terrainInputLayout = GetDevice()->createInputLayout(
+        shadowTerrainAttrs, uint32_t(std::size(shadowTerrainAttrs)),
+        m_StageResources.shadow.terrainVS);
+    if (!m_StageResources.shadow.terrainInputLayout) return false;
+
     return true;
 }
 
@@ -1388,6 +1409,32 @@ void MeshShaderRenderPass::_CreateShadowPipelineIfNeeded() {
         psoDesc, m_StageResources.shadow.framebuffers[0]->getFramebufferInfo());
 }
 
+void MeshShaderRenderPass::_CreateShadowTerrainPipelineIfNeeded() {
+    if (m_StageResources.shadow.terrainPipeline)            return;
+    if (!m_StageResources.shadow.terrainVS)                 return;
+    if (!m_StageResources.shadow.terrainInputLayout)        return;
+    if (!m_StageResources.shadow.bindingLayout)             return;
+    if (!m_StageResources.shadow.framebuffers[0])           return;
+    if (m_StageResources.sceneTerrain.indexCount == 0)      return;
+
+    nvrhi::GraphicsPipelineDesc pso;
+    pso.VS             = m_StageResources.shadow.terrainVS;
+    pso.inputLayout    = m_StageResources.shadow.terrainInputLayout;
+    pso.bindingLayouts = { m_StageResources.shadow.bindingLayout };
+    pso.primType       = nvrhi::PrimitiveType::TriangleList;
+    // Light-space shadow framebuffers are STANDARD Z (clear=1.0, Less) regardless of
+    // the main camera's reverse-Z mode — do not branch on XYLEM_USE_REVERSE_Z here.
+    pso.renderState.depthStencilState.depthTestEnable  = true;
+    pso.renderState.depthStencilState.depthWriteEnable = true;
+    pso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
+    pso.renderState.rasterState.setCullBack();
+    pso.renderState.rasterState.depthBias            = 2;
+    pso.renderState.rasterState.slopeScaledDepthBias = 2.0f;
+
+    m_StageResources.shadow.terrainPipeline = GetDevice()->createGraphicsPipeline(
+        pso, m_StageResources.shadow.framebuffers[0]->getFramebufferInfo());
+}
+
 void MeshShaderRenderPass::_EnsureDispatchMeshSignatures() {
     ID3D12Device* d3dDevice = GetDevice()->getNativeObject(nvrhi::ObjectTypes::D3D12_Device);
     if (!d3dDevice) return;
@@ -1533,6 +1580,7 @@ void MeshShaderRenderPass::Animate(float /*seconds*/) {
 void MeshShaderRenderPass::BackBufferResizing() {
     m_StageResources.sceneDraw.pipeline          = nullptr;
     m_StageResources.shadow.pipeline        = nullptr;
+    m_StageResources.shadow.terrainPipeline = nullptr;
     m_DispatchMeshSignature  = nullptr;
     m_StageResources.shadow.dispatchMeshSignature = nullptr;
 
@@ -1582,6 +1630,7 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
 
     _CreateMainPipelineIfNeeded(framebuffer);
     _CreateShadowPipelineIfNeeded();
+    _CreateShadowTerrainPipelineIfNeeded();
     _CreateLeafPipelinesIfNeeded(framebuffer);
     _EnsureDispatchMeshSignatures();
     _EnsureLeafDispatchMeshSignatures();
@@ -1863,6 +1912,30 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
                             0);
                     }
                 }
+            }
+
+            // Terrain into this cascade slice. CPU per-cascade intersection test would
+            // need the SDSM-overridden lightViewProj available CPU-side; render
+            // unconditionally and let ortho clip discard fragments outside NDC.
+            if (m_StageResources.shadow.terrainPipeline
+                && m_StageResources.sceneTerrain.indexCount > 0
+                && m_StageResources.sceneTerrain.vertexBuffer
+                && m_StageResources.sceneTerrain.indexBuffer) {
+                nvrhi::GraphicsState terrShadow;
+                terrShadow.pipeline    = m_StageResources.shadow.terrainPipeline;
+                terrShadow.framebuffer = m_StageResources.shadow.framebuffers[c];
+                terrShadow.bindings    = { m_StageResources.shadow.bindingSet };
+                terrShadow.viewport.addViewportAndScissorRect(
+                    nvrhi::Viewport(float(k_ShadowRes), float(k_ShadowRes)));
+                terrShadow.vertexBuffers = { { m_StageResources.sceneTerrain.vertexBuffer, 0, 0 } };
+                terrShadow.indexBuffer   = { m_StageResources.sceneTerrain.indexBuffer, nvrhi::Format::R32_UINT, 0 };
+                m_CommandList->setGraphicsState(terrShadow);
+
+                // shadow_terrain_vs reads cascadeIdx from g_SlotIdx (kPushC_Slot).
+                m_CommandList->setPushConstants(&c, sizeof(c));
+
+                m_CommandList->drawIndexed(nvrhi::DrawArguments()
+                    .setVertexCount(m_StageResources.sceneTerrain.indexCount));
             }
 
             if (m_UI.showShadowImpostors) {

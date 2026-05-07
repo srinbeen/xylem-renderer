@@ -441,7 +441,7 @@
   },
   "terrain" :
   {
-    "amplitude" : 75.0,
+    "amplitude" : 65.0,
     "frequency" : 0.02,
     "gridSpacing" : 0.5,
     "lacunarity" : 2.0,
@@ -456,12 +456,12 @@
     },
     "shading" : {
       "tileSize"      : 16.0,
-      "forestToDirtY" : 5.0,
-      "dirtToSnowY"   : 25.0,
-      "bandWidth"     : 8.0,
+      "forestToDirtY" : 10.0,
+      "dirtToSnowY"   : 20.0,
+      "bandWidth"     : 5.0,
       "slopeLo"       : 0.85,
       "slopeHi"       : 0.97,
-      "macroNoiseAmp" : 3.0
+      "macroNoiseAmp" : 2.5
     }
   }
 }

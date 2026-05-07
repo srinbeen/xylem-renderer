@@ -98,6 +98,7 @@ void terrain_ps(
     float3 albedoSum = 0.0;
     float3 normalSum = 0.0;
     AccumulateLayer(t_ForestDiff, t_ForestNor, s_Aniso, worldPosScaled, triW, vertN, weights.x, albedoSum, normalSum);
+    albedoSum = saturate(albedoSum * GREEN_BOOST);
     AccumulateLayer(t_DirtDiff,   t_DirtNor,   s_Aniso, worldPosScaled, triW, vertN, weights.y, albedoSum, normalSum);
     AccumulateLayer(t_RockDiff,   t_RockNor,   s_Aniso, worldPosScaled, triW, vertN, weights.z, albedoSum, normalSum);
     AccumulateLayer(t_SnowDiff,   t_SnowNor,   s_Aniso, worldPosScaled, triW, vertN, weights.w, albedoSum, normalSum);

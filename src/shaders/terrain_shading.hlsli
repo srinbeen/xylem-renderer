@@ -3,6 +3,8 @@
 
 #pragma pack_matrix(row_major)
 
+#define GREEN_BOOST (float3(1.0, 1.25, 1.0))
+
 struct TerrainShadingParams {
     float tileSize;
     float forestToDirtY;

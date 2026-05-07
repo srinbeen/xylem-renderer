@@ -250,6 +250,8 @@ namespace Xylem::ProcGen {
         TurtleState(const Params& p) : pos{0.f}, orientation{}, radius{p.baseRadius}, stepLength{p.baseLength}, baseRingIndex{0}, branchLength{0.f}, lastDrewSegment{false} {}
     };
 
+    const float uvYtilingFactor = 0.5f;
+
     private:
         Params   params;
         uint32_t m_branchCounter = 0;

@@ -768,16 +768,37 @@ void SceneRegistry::_rebuildRegion(RegionDef& region) {
     // Phase D: build instance data from relaxed positions.
     region.instances.reserve(region.instanceCount);
 
+    constexpr float    k_TiltFactor    = 0.3f;
+    constexpr float    k_BaseSink      = 0.5f;
+    constexpr float    k_SinkScale     = 1.0f;
+    constexpr float    k_TiltCutoff    = 0.99f;
+    const dm::float3   worldUp(0.f, 1.f, 0.f);
+
     for (uint32_t i = 0; i < region.instanceCount; i++) {
         const auto& p = placements[i];
         const auto* asset = findAsset(p.assetId);
         if (!asset || asset->lods.empty()) continue;
 
-        float posY = m_Terrain ? m_Terrain->getHeightAt(p.pos.x, p.pos.y) : 0.f;
+        float      terrainY = m_Terrain ? m_Terrain->getHeightAt(p.pos.x, p.pos.y) : 0.f;
+        dm::float3 normal   = m_Terrain ? m_Terrain->getNormalAt(p.pos.x, p.pos.y) : worldUp;
 
-        dm::affine3 worldMatrix =
-            dm::rotation(dm::float3(0.f, 1.f, 0.f), p.rotY)
-            * dm::translation(dm::float3(p.pos.x, posY - 0.5f, p.pos.y));
+        dm::float3 tiltedUp = dm::normalize(dm::lerp(worldUp, normal, k_TiltFactor));
+        float      sink     = k_BaseSink + k_SinkScale * (1.f - normal.y);
+
+        dm::affine3 selfRot         = dm::rotation(worldUp, p.rotY);
+        dm::affine3 terrainPlace    = dm::translation(dm::float3(p.pos.x, terrainY - sink, p.pos.y));
+
+        dm::affine3 worldMatrix;
+        // if they're not super parallel
+        if (dm::dot(worldUp, tiltedUp) < k_TiltCutoff) {
+            dm::float3  tiltAxisUnNorm  = dm::cross(worldUp, tiltedUp);
+            float       tiltAngle       = std::asinf(dm::length(tiltAxisUnNorm));
+            dm::affine3 terrainTilt     = dm::rotation(tiltAxisUnNorm/tiltAngle, tiltAngle);
+            worldMatrix = selfRot * terrainTilt * terrainPlace;
+        }
+        else {
+            worldMatrix = selfRot * terrainPlace;
+        }
 
         dm::float3x3 normalMatrix;
         if (dm::isnear(worldMatrix.m_linear[0][0], worldMatrix.m_linear[1][1]) &&

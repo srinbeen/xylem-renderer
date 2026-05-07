@@ -180,7 +180,7 @@ uint32_t TreeGenerator::createRing(const TurtleState& state, Buffers& buffers) {
         buffers.normals.push_back(usedNormal);
         buffers.tangents.push_back(tangent);
         buffers.bitangents.push_back(bitangent);
-        buffers.uvs.push_back(dm::float2(percentage, state.branchLength));
+        buffers.uvs.push_back(dm::float2(percentage, state.branchLength * uvYtilingFactor));
     }
 
     if (nextRingIndex != 0) {
@@ -235,7 +235,7 @@ void TreeGenerator::emitColonizationCylinders(const std::vector<SCNode>& nodes,
             buffers.normals.push_back(normal);
             buffers.tangents.push_back(tangent);
             buffers.bitangents.push_back(bitangent);
-            buffers.uvs.push_back(dm::float2(percentage, n.branchLength));
+            buffers.uvs.push_back(dm::float2(percentage, n.branchLength * uvYtilingFactor));
         }
         nodeBaseRingIdx[i] = newRingFirstVert;
 

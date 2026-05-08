@@ -194,19 +194,26 @@ void TraditionalRenderPass::_RebuildBindingSets() {
     const auto& barkTextures = m_Shared->barkTextures();
     m_StageResources.sceneTreeStage.bindingSets.resize(barkTextures.size());
 
-    nvrhi::BindingLayoutDesc bld;
-    bld.bindings = {
-        nvrhi::BindingLayoutItem::ConstantBuffer(traditional_reg::Tree::kCB_Frame),
-        nvrhi::BindingLayoutItem::Sampler(traditional_reg::Tree::kSampler_Main),
-        nvrhi::BindingLayoutItem::Sampler(traditional_reg::Tree::kSampler_Shadow),
-        nvrhi::BindingLayoutItem::Texture_SRV(traditional_reg::Tree::kTex_ShadowMap),
-        
-        // changes per bark texture
-        nvrhi::BindingLayoutItem::Texture_SRV(traditional_reg::Tree::kTex_Diffuse),
-        nvrhi::BindingLayoutItem::Texture_SRV(traditional_reg::Tree::kTex_NormalMap),
-    };
+    // Layout is structural and never changes across rebuilds — recreating it
+    // would orphan any PSO that already captured the previous handle (cause
+    // of "Binding set in slot 0 does not match the layout in pipeline slot 0"
+    // after a pipeline switch). Build once, reuse.
+    if (!m_StageResources.sceneTreeStage.bindingLayout) {
+        nvrhi::BindingLayoutDesc bld;
+        bld.visibility = nvrhi::ShaderType::All;
+        bld.bindings = {
+            nvrhi::BindingLayoutItem::ConstantBuffer(traditional_reg::Tree::kCB_Frame),
+            nvrhi::BindingLayoutItem::Sampler(traditional_reg::Tree::kSampler_Main),
+            nvrhi::BindingLayoutItem::Sampler(traditional_reg::Tree::kSampler_Shadow),
+            nvrhi::BindingLayoutItem::Texture_SRV(traditional_reg::Tree::kTex_ShadowMap),
 
-    m_StageResources.sceneTreeStage.bindingLayout = GetDevice()->createBindingLayout(bld);
+            // changes per bark texture
+            nvrhi::BindingLayoutItem::Texture_SRV(traditional_reg::Tree::kTex_Diffuse),
+            nvrhi::BindingLayoutItem::Texture_SRV(traditional_reg::Tree::kTex_NormalMap),
+        };
+
+        m_StageResources.sceneTreeStage.bindingLayout = GetDevice()->createBindingLayout(bld);
+    }
 
     for (size_t i = 0; i < barkTextures.size(); i++) {
         nvrhi::BindingSetDesc bsd;

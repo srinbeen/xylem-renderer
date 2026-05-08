@@ -223,10 +223,13 @@ private:
         nvrhi::RefCountPtr<ID3D12CommandSignature> dispatchMeshSignature;
 
         // Terrain shadow caster (traditional VS into the same per-cascade
-        // framebuffer slice). Reuses the meshlet shadow bindingLayout/bindingSet —
-        // the VS only references the CB and push constant; declared SRVs are unused.
+        // framebuffer slice). Has its own minimal binding layout (CB + push
+        // constant) — kept disjoint from the meshlet shadow bindingLayout so the
+        // graphics root signature doesn't mix with the mesh-shader root signature.
         nvrhi::ShaderHandle              terrainVS;
         nvrhi::InputLayoutHandle         terrainInputLayout;
+        nvrhi::BindingLayoutHandle       terrainBindingLayout;
+        nvrhi::BindingSetHandle          terrainBindingSet;
         nvrhi::GraphicsPipelineHandle    terrainPipeline;
     };
 
@@ -272,15 +275,24 @@ private:
     };
 
     struct TerrainPassResources {
-        nvrhi::ShaderHandle                    vertexShader;
-        nvrhi::ShaderHandle                    pixelShader;
-        nvrhi::InputLayoutHandle               inputLayout;
+        // VB + IB (VB doubles as StructuredBuffer<TerrainVertex> SRV for the
+        // meshlet path; IB is still consumed by the depth-prepass IA path).
         nvrhi::BufferHandle                    vertexBuffer;
         nvrhi::BufferHandle                    indexBuffer;
         uint32_t                               indexCount = 0;
+
+        // Mesh-shader scene path
+        nvrhi::ShaderHandle                    amplificationShader;
+        nvrhi::ShaderHandle                    meshShader;
+        nvrhi::ShaderHandle                    pixelShader;
+        nvrhi::BufferHandle                    meshletDescBuffer;
+        nvrhi::BufferHandle                    meshletVertIdxBuffer;
+        nvrhi::BufferHandle                    meshletPrimIdxBuffer;  // raw byte buffer
+        nvrhi::BufferHandle                    visibleCounterBuffer;  // RW raw UAV, single uint
+        uint32_t                               meshletCount = 0;
         nvrhi::BindingLayoutHandle             bindingLayout;
         nvrhi::BindingSetHandle                bindingSet;
-        nvrhi::GraphicsPipelineHandle          pipeline;
+        nvrhi::MeshletPipelineHandle           pipeline;
     };
 
     struct SkyPassResources {
@@ -406,6 +418,7 @@ private:
     void _RebuildShadowBindingSet();
     void _RebuildDepthPrepassBindingSet();
     void _RebuildLeafBindingSets();
+    void _RebuildTerrainBindingSet();
 
     void _CreateMainPipelineIfNeeded(nvrhi::IFramebuffer* framebuffer);
     void _CreateShadowPipelineIfNeeded();

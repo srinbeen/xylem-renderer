@@ -218,19 +218,26 @@ inline constexpr uint32_t kCB_Sky = 0;
 } // namespace Sky
 
 namespace Terrain {
+inline constexpr uint32_t kCB_ASCull = 2;
 inline constexpr uint32_t kCB_Frame = 0;
 inline constexpr uint32_t kCB_Shading = 1;
+inline constexpr uint32_t kSRV_MeshletDescs = 10;
+inline constexpr uint32_t kSRV_MeshletPrimIdx = 12;
+inline constexpr uint32_t kSRV_MeshletVertIdx = 11;
+inline constexpr uint32_t kSRV_VertexBuffer = 9;
 inline constexpr uint32_t kSampler_Aniso = 1;
 inline constexpr uint32_t kSampler_Shadow = 0;
 inline constexpr uint32_t kTex_DirtDiff = 3;
 inline constexpr uint32_t kTex_DirtNor = 4;
 inline constexpr uint32_t kTex_ForestDiff = 1;
 inline constexpr uint32_t kTex_ForestNor = 2;
+inline constexpr uint32_t kTex_HiZ = 13;
 inline constexpr uint32_t kTex_RockDiff = 5;
 inline constexpr uint32_t kTex_RockNor = 6;
 inline constexpr uint32_t kTex_ShadowMap = 0;
 inline constexpr uint32_t kTex_SnowDiff = 7;
 inline constexpr uint32_t kTex_SnowNor = 8;
+inline constexpr uint32_t kUAV_VisibleCounter = 0;
 } // namespace Terrain
 
 } // namespace Mesh

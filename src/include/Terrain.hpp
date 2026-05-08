@@ -42,6 +42,28 @@ struct TerrainConfig {
     TerrainShadingParams shading;
 };
 
+// Tile partitioning for the mesh-shader path. 7x7 quads -> 8x8 = 64 verts (=
+// k_MaxMeshletVerts), 98 tris (< k_MaxMeshletPrims). World-space AABB is exact
+// per tile so the AS can do a tight Hi-Z + frustum cull.
+static constexpr uint32_t k_TerrainMeshletQuadsPerSide = 7;
+
+struct TerrainMeshletDesc {
+    dm::float3 aabbMin;
+    uint32_t   vertOffset;
+    dm::float3 aabbMax;
+    uint32_t   triOffset;
+    uint32_t   vertCount;
+    uint32_t   triCount;
+    uint32_t   _pad0;
+    uint32_t   _pad1;
+};
+
+struct TerrainMeshletData {
+    std::vector<TerrainMeshletDesc> descs;
+    std::vector<uint32_t>           localVertIndices; // global terrain vert idx
+    std::vector<uint8_t>            localTriIndices;  // 3 bytes per tri, indexes into the local vert table
+};
+
 class Terrain {
 public:
     void generate(const TerrainConfig& config);
@@ -53,6 +75,7 @@ public:
     const std::vector<uint32_t>&      getIndices()  const { return m_Indices; }
     const dm::box3&                   getBbox()     const { return m_Bbox; }
     const TerrainConfig&              getConfig()   const { return m_Config; }
+    const TerrainMeshletData&         getMeshlets() const { return m_Meshlets; }
 
     uint32_t getGridWidth() const { return m_GridWidth; }
     uint32_t getGridDepth() const { return m_GridDepth; }
@@ -67,8 +90,10 @@ private:
     std::vector<TerrainVertex> m_Vertices;
     std::vector<uint32_t>      m_Indices;
     dm::box3                   m_Bbox;
+    TerrainMeshletData         m_Meshlets;
 
     void _computeNormals();
+    void _buildMeshlets();
     void _worldToGrid(float worldX, float worldZ, float& gx, float& gz) const;
 };
 

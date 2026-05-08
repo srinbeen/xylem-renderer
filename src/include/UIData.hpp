@@ -59,6 +59,8 @@ struct UIData {
     uint32_t msInvocations        = 0;
     float    meshletMegaBufferMB  = 0.0f;
     uint32_t totalMeshletCount    = 0;
+    uint32_t totalTerrainMeshletCount   = 0;
+    uint32_t visibleTerrainMeshletCount = 0;
 
     // SDSM debug readback (populated when hizActiveThisFrame and SDSM ran).
     bool     sdsmDebugValid       = false;

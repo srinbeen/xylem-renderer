@@ -81,6 +81,13 @@ void UIRenderer::buildUI() {
         }
         ImGui::Text("  meshlets total: %u", m_ui.totalLeafMeshletCount);
 
+        if (m_ui.totalTerrainMeshletCount > 0) {
+            const uint32_t culledTerrain = (m_ui.visibleTerrainMeshletCount <= m_ui.totalTerrainMeshletCount)
+                ? m_ui.totalTerrainMeshletCount - m_ui.visibleTerrainMeshletCount : 0;
+            ImGui::Text("Terrain meshlets visible: %u / %u  (culled: %u)",
+                m_ui.visibleTerrainMeshletCount, m_ui.totalTerrainMeshletCount, culledTerrain);
+        }
+
         ImGui::Text("Draw calls: %u", m_ui.drawCallCount);
     }
 

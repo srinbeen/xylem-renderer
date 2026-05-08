@@ -413,7 +413,9 @@ bool MeshShaderRenderPass::_InitShadowPass() {
 
     // Terrain shadow caster path: traditional VS that pushes cascadeIdx through
     // the existing kPushC_Slot root constant and reads lightViewProj[] from the
-    // shared kCB_Frame. PSO is built lazily in _CreateShadowTerrainPipelineIfNeeded.
+    // shared kCB_Frame. Dedicated binding layout (CB + push constant only) —
+    // kept disjoint from the meshlet shadow bindingLayout so the graphics root
+    // signature doesn't share a layout with the mesh-shader root signature.
     m_StageResources.shadow.terrainVS = m_ShaderFactory->CreateShader(
         "app/MeshShaderPass.hlsl", "shadow_terrain_vs", nullptr, nvrhi::ShaderType::Vertex);
     if (!m_StageResources.shadow.terrainVS) {
@@ -431,6 +433,25 @@ bool MeshShaderRenderPass::_InitShadowPass() {
         shadowTerrainAttrs, uint32_t(std::size(shadowTerrainAttrs)),
         m_StageResources.shadow.terrainVS);
     if (!m_StageResources.shadow.terrainInputLayout) return false;
+
+    nvrhi::BindingLayoutDesc terrBLD;
+    terrBLD.visibility = nvrhi::ShaderType::All;
+    terrBLD.bindings = {
+        nvrhi::BindingLayoutItem::PushConstants(mesh_reg::Draw::kPushC_Slot, mesh_reg::Draw::kPushCBytes),
+        nvrhi::BindingLayoutItem::ConstantBuffer(mesh_reg::Draw::kCB_Frame),
+    };
+    m_StageResources.shadow.terrainBindingLayout = GetDevice()->createBindingLayout(terrBLD);
+    if (!m_StageResources.shadow.terrainBindingLayout) return false;
+
+    nvrhi::BindingSetDesc terrBSD;
+    terrBSD.bindings = {
+        nvrhi::BindingSetItem::PushConstants(mesh_reg::Draw::kPushC_Slot, mesh_reg::Draw::kPushCBytes),
+        nvrhi::BindingSetItem::ConstantBuffer(mesh_reg::Draw::kCB_Frame, m_StageResources.frameShared.constantBuffer,
+            nvrhi::BufferRange(0, shader_cb::kCullFrameSize)),
+    };
+    m_StageResources.shadow.terrainBindingSet = GetDevice()->createBindingSet(
+        terrBSD, m_StageResources.shadow.terrainBindingLayout);
+    if (!m_StageResources.shadow.terrainBindingSet) return false;
 
     return true;
 }
@@ -1101,9 +1122,9 @@ void MeshShaderRenderPass::_UploadCullBuffers(nvrhi::ICommandList* cl) {
     m_ReadbackShadowEntries         = m_NumShadowSlots;
     m_ReadbackImpostorEntries       = numAssets;
     m_ReadbackShadowImpostorEntries = numAssets * XYLEM_NUM_CASCADES;
-    // Layout: [mainCounts][shadowCounts][impostorCounts][shadowImpostorCounts][shadowUnique][mainLeafSurvivors][shadowLeafSurvivors]
+    // Layout: [mainCounts][shadowCounts][impostorCounts][shadowImpostorCounts][shadowUnique][mainLeafSurvivors][shadowLeafSurvivors][terrainSurvivors]
     const uint64_t readbackSize =
-        (m_ReadbackMainEntries + m_ReadbackShadowEntries + m_ReadbackImpostorEntries + m_ReadbackShadowImpostorEntries + 3) * sizeof(uint32_t);
+        (m_ReadbackMainEntries + m_ReadbackShadowEntries + m_ReadbackImpostorEntries + m_ReadbackShadowImpostorEntries + 4) * sizeof(uint32_t);
     for (uint32_t i = 0; i < k_QueuedFrames; i++) {
         m_ReadbackBuffers[i] = device->createBuffer(nvrhi::BufferDesc()
             .setByteSize(readbackSize)
@@ -1413,14 +1434,14 @@ void MeshShaderRenderPass::_CreateShadowTerrainPipelineIfNeeded() {
     if (m_StageResources.shadow.terrainPipeline)            return;
     if (!m_StageResources.shadow.terrainVS)                 return;
     if (!m_StageResources.shadow.terrainInputLayout)        return;
-    if (!m_StageResources.shadow.bindingLayout)             return;
+    if (!m_StageResources.shadow.terrainBindingLayout)      return;
     if (!m_StageResources.shadow.framebuffers[0])           return;
     if (m_StageResources.sceneTerrain.indexCount == 0)      return;
 
     nvrhi::GraphicsPipelineDesc pso;
     pso.VS             = m_StageResources.shadow.terrainVS;
     pso.inputLayout    = m_StageResources.shadow.terrainInputLayout;
-    pso.bindingLayouts = { m_StageResources.shadow.bindingLayout };
+    pso.bindingLayouts = { m_StageResources.shadow.terrainBindingLayout };
     pso.primType       = nvrhi::PrimitiveType::TriangleList;
     // Light-space shadow framebuffers are STANDARD Z (clear=1.0, Less) regardless of
     // the main camera's reverse-Z mode — do not branch on XYLEM_USE_REVERSE_Z here.
@@ -1918,13 +1939,14 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
             // need the SDSM-overridden lightViewProj available CPU-side; render
             // unconditionally and let ortho clip discard fragments outside NDC.
             if (m_StageResources.shadow.terrainPipeline
+                && m_StageResources.shadow.terrainBindingSet
                 && m_StageResources.sceneTerrain.indexCount > 0
                 && m_StageResources.sceneTerrain.vertexBuffer
                 && m_StageResources.sceneTerrain.indexBuffer) {
                 nvrhi::GraphicsState terrShadow;
                 terrShadow.pipeline    = m_StageResources.shadow.terrainPipeline;
                 terrShadow.framebuffer = m_StageResources.shadow.framebuffers[c];
-                terrShadow.bindings    = { m_StageResources.shadow.bindingSet };
+                terrShadow.bindings    = { m_StageResources.shadow.terrainBindingSet };
                 terrShadow.viewport.addViewportAndScissorRect(
                     nvrhi::Viewport(float(k_ShadowRes), float(k_ShadowRes)));
                 terrShadow.vertexBuffers = { { m_StageResources.sceneTerrain.vertexBuffer, 0, 0 } };
@@ -2064,6 +2086,11 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         m_CommandList->copyBuffer(m_ReadbackBuffers[ringSlot], leafBaseOffset + sizeof(uint32_t),
                                   m_StageResources.cull.shadowLeafSurvivorCounter, 0,
                                   sizeof(uint32_t));
+        if (m_StageResources.sceneTerrain.visibleCounterBuffer) {
+            m_CommandList->copyBuffer(m_ReadbackBuffers[ringSlot], leafBaseOffset + 2 * sizeof(uint32_t),
+                                      m_StageResources.sceneTerrain.visibleCounterBuffer, 0,
+                                      sizeof(uint32_t));
+        }
     }
 
     m_CommandList->close();
@@ -2101,6 +2128,7 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
             uint32_t shadowUnique       = counts[shadowImpostorOffset + m_ReadbackShadowImpostorEntries];
             uint32_t leafMainSurvivors  = counts[shadowImpostorOffset + m_ReadbackShadowImpostorEntries + 1];
             uint32_t leafShadowSurvivors= counts[shadowImpostorOffset + m_ReadbackShadowImpostorEntries + 2];
+            uint32_t terrainSurvivors   = counts[shadowImpostorOffset + m_ReadbackShadowImpostorEntries + 3];
 
             GetDevice()->unmapBuffer(m_ReadbackBuffers[readSlot]);
 
@@ -2118,6 +2146,7 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
             m_UI.shadowCascadeDrawCount = shadowVisSum;
             m_UI.shadowOverdrawCount    = (shadowVisSum >= shadowUnique)
                 ? shadowVisSum - shadowUnique : 0;
+            m_UI.visibleTerrainMeshletCount = terrainSurvivors;
         }
     }
     m_ReadbackFrameIndex++;
@@ -2326,6 +2355,7 @@ bool MeshShaderRenderPass::_InitSDSMPass() {
 }
 
 bool MeshShaderRenderPass::_InitTerrainPass(nvrhi::ICommandList* initCL) {
+    auto& T = m_StageResources.sceneTerrain;
     const auto* terrain = m_Registry.getTerrain();
     if (!terrain) return true;
 
@@ -2333,58 +2363,118 @@ bool MeshShaderRenderPass::_InitTerrainPass(nvrhi::ICommandList* initCL) {
     const auto& indices = terrain->getIndices();
     if (verts.empty() || indices.empty()) return true;
 
-    m_StageResources.sceneTerrain.indexCount = static_cast<uint32_t>(indices.size());
+    T.indexCount = static_cast<uint32_t>(indices.size());
 
-    m_StageResources.sceneTerrain.vertexShader = m_ShaderFactory->CreateShader(
-        "app/terrain_compute.hlsl", "terrain_vs", nullptr, nvrhi::ShaderType::Vertex);
-    m_StageResources.sceneTerrain.pixelShader = m_ShaderFactory->CreateShader(
-        "app/terrain_compute.hlsl", "terrain_ps", nullptr, nvrhi::ShaderType::Pixel);
-    if (!m_StageResources.sceneTerrain.vertexShader || !m_StageResources.sceneTerrain.pixelShader) return false;
+    T.amplificationShader = m_ShaderFactory->CreateShader(
+        "app/terrain_meshlet.hlsl", "terrain_as", nullptr, nvrhi::ShaderType::Amplification);
+    T.meshShader = m_ShaderFactory->CreateShader(
+        "app/terrain_meshlet.hlsl", "terrain_ms", nullptr, nvrhi::ShaderType::Mesh);
+    T.pixelShader = m_ShaderFactory->CreateShader(
+        "app/terrain_meshlet.hlsl", "terrain_ps", nullptr, nvrhi::ShaderType::Pixel);
+    if (!T.amplificationShader || !T.meshShader || !T.pixelShader) {
+        log::error("MeshShaderRenderPass: terrain_meshlet shaders failed to compile");
+        return false;
+    }
 
-    nvrhi::VertexAttributeDesc attrs[] = {
-        nvrhi::VertexAttributeDesc()
-            .setName("POSITION").setFormat(nvrhi::Format::RGB32_FLOAT)
-            .setOffset(offsetof(Scene::TerrainVertex, pos))
-            .setBufferIndex(0).setElementStride(sizeof(Scene::TerrainVertex)),
-        nvrhi::VertexAttributeDesc()
-            .setName("NORMAL").setFormat(nvrhi::Format::RGB32_FLOAT)
-            .setOffset(offsetof(Scene::TerrainVertex, normal))
-            .setBufferIndex(0).setElementStride(sizeof(Scene::TerrainVertex)),
-        nvrhi::VertexAttributeDesc()
-            .setName("UV").setFormat(nvrhi::Format::RG32_FLOAT)
-            .setOffset(offsetof(Scene::TerrainVertex, uv))
-            .setBufferIndex(0).setElementStride(sizeof(Scene::TerrainVertex)),
-    };
-    m_StageResources.sceneTerrain.inputLayout = GetDevice()->createInputLayout(
-        attrs, uint32_t(std::size(attrs)), m_StageResources.sceneTerrain.vertexShader);
-    if (!m_StageResources.sceneTerrain.inputLayout) return false;
-
+    // Terrain VB: VB (depth-prepass IA) + ByteAddressBuffer SRV (mesh-shader
+    // path uses explicit-offset loads to match the 32-byte C++ TerrainVertex
+    // layout exactly — a StructuredBuffer<TerrainVertex> would risk HLSL CB-
+    // style padding inserting a gap before `normal`).
     nvrhi::BufferDesc vbDesc;
-    vbDesc.isVertexBuffer = true;
-    vbDesc.byteSize       = verts.size() * sizeof(Scene::TerrainVertex);
-    vbDesc.debugName      = "MeshTerrainVB";
-    vbDesc.initialState   = nvrhi::ResourceStates::CopyDest;
-    m_StageResources.sceneTerrain.vertexBuffer = GetDevice()->createBuffer(vbDesc);
-    initCL->beginTrackingBufferState(m_StageResources.sceneTerrain.vertexBuffer, nvrhi::ResourceStates::CopyDest);
-    initCL->writeBuffer(m_StageResources.sceneTerrain.vertexBuffer, verts.data(), vbDesc.byteSize);
-    initCL->setPermanentBufferState(m_StageResources.sceneTerrain.vertexBuffer, nvrhi::ResourceStates::VertexBuffer);
+    vbDesc.isVertexBuffer  = true;
+    vbDesc.canHaveRawViews = true;
+    vbDesc.byteSize        = verts.size() * sizeof(Scene::TerrainVertex);
+    vbDesc.debugName       = "MeshTerrainVB";
+    vbDesc.initialState    = nvrhi::ResourceStates::CopyDest;
+    T.vertexBuffer = GetDevice()->createBuffer(vbDesc);
+    initCL->beginTrackingBufferState(T.vertexBuffer, nvrhi::ResourceStates::CopyDest);
+    initCL->writeBuffer(T.vertexBuffer, verts.data(), vbDesc.byteSize);
+    initCL->setPermanentBufferState(T.vertexBuffer,
+        nvrhi::ResourceStates::VertexBuffer | nvrhi::ResourceStates::ShaderResource);
 
     nvrhi::BufferDesc ibDesc;
     ibDesc.isIndexBuffer = true;
     ibDesc.byteSize      = indices.size() * sizeof(uint32_t);
     ibDesc.debugName     = "MeshTerrainIB";
     ibDesc.initialState  = nvrhi::ResourceStates::CopyDest;
-    m_StageResources.sceneTerrain.indexBuffer = GetDevice()->createBuffer(ibDesc);
-    initCL->beginTrackingBufferState(m_StageResources.sceneTerrain.indexBuffer, nvrhi::ResourceStates::CopyDest);
-    initCL->writeBuffer(m_StageResources.sceneTerrain.indexBuffer, indices.data(), ibDesc.byteSize);
-    initCL->setPermanentBufferState(m_StageResources.sceneTerrain.indexBuffer, nvrhi::ResourceStates::IndexBuffer);
+    T.indexBuffer = GetDevice()->createBuffer(ibDesc);
+    initCL->beginTrackingBufferState(T.indexBuffer, nvrhi::ResourceStates::CopyDest);
+    initCL->writeBuffer(T.indexBuffer, indices.data(), ibDesc.byteSize);
+    initCL->setPermanentBufferState(T.indexBuffer, nvrhi::ResourceStates::IndexBuffer);
+
+    // ---- Meshlet GPU buffers ----
+    const auto& meshlets = terrain->getMeshlets();
+    T.meshletCount = static_cast<uint32_t>(meshlets.descs.size());
+    if (T.meshletCount > 0) {
+        nvrhi::BufferDesc descsBD;
+        descsBD.byteSize     = meshlets.descs.size() * sizeof(Scene::TerrainMeshletDesc);
+        descsBD.structStride = sizeof(Scene::TerrainMeshletDesc);
+        descsBD.debugName    = "MeshTerrainMeshletDescs";
+        descsBD.initialState = nvrhi::ResourceStates::CopyDest;
+        T.meshletDescBuffer = GetDevice()->createBuffer(descsBD);
+        initCL->beginTrackingBufferState(T.meshletDescBuffer, nvrhi::ResourceStates::CopyDest);
+        initCL->writeBuffer(T.meshletDescBuffer, meshlets.descs.data(), descsBD.byteSize);
+        initCL->setPermanentBufferState(T.meshletDescBuffer, nvrhi::ResourceStates::ShaderResource);
+
+        nvrhi::BufferDesc vidBD;
+        vidBD.byteSize     = meshlets.localVertIndices.size() * sizeof(uint32_t);
+        vidBD.structStride = sizeof(uint32_t);
+        vidBD.debugName    = "MeshTerrainMeshletVertIdx";
+        vidBD.initialState = nvrhi::ResourceStates::CopyDest;
+        T.meshletVertIdxBuffer = GetDevice()->createBuffer(vidBD);
+        initCL->beginTrackingBufferState(T.meshletVertIdxBuffer, nvrhi::ResourceStates::CopyDest);
+        initCL->writeBuffer(T.meshletVertIdxBuffer,
+            meshlets.localVertIndices.data(), vidBD.byteSize);
+        initCL->setPermanentBufferState(T.meshletVertIdxBuffer, nvrhi::ResourceStates::ShaderResource);
+
+        nvrhi::BufferDesc pidBD;
+        pidBD.byteSize       = meshlets.localTriIndices.size();
+        pidBD.canHaveRawViews = true;
+        pidBD.debugName      = "MeshTerrainMeshletPrimIdx";
+        pidBD.initialState   = nvrhi::ResourceStates::CopyDest;
+        T.meshletPrimIdxBuffer = GetDevice()->createBuffer(pidBD);
+        initCL->beginTrackingBufferState(T.meshletPrimIdxBuffer, nvrhi::ResourceStates::CopyDest);
+        initCL->writeBuffer(T.meshletPrimIdxBuffer,
+            meshlets.localTriIndices.data(), pidBD.byteSize);
+        initCL->setPermanentBufferState(T.meshletPrimIdxBuffer, nvrhi::ResourceStates::ShaderResource);
+    }
+
+    // Per-frame survivor counter — single uint32 raw UAV. Cleared at frame start
+    // by clearBufferUInt; copied to readback ring after the AS dispatch.
+    nvrhi::BufferDesc counterBD;
+    counterBD.byteSize       = sizeof(uint32_t);
+    counterBD.canHaveUAVs    = true;
+    counterBD.canHaveRawViews = true;
+    counterBD.debugName      = "MeshTerrainVisibleCounter";
+    counterBD.initialState   = nvrhi::ResourceStates::UnorderedAccess;
+    counterBD.keepInitialState = true;
+    T.visibleCounterBuffer = GetDevice()->createBuffer(counterBD);
+
+    _RebuildTerrainBindingSet();
+    m_UI.totalTerrainMeshletCount = T.meshletCount;
+    return true;
+}
+
+void MeshShaderRenderPass::_RebuildTerrainBindingSet() {
+    auto& T = m_StageResources.sceneTerrain;
+    if (T.meshletCount == 0)                       return;
+    if (!T.meshletDescBuffer)                      return;
+    if (!T.vertexBuffer)                           return;
+    if (!T.visibleCounterBuffer)                   return;
+    if (!m_StageResources.shadow.depthTexture)     return;
+    if (!m_StageResources.hiz.hizTexture)          return;
+    if (!m_Shared)                                 return;
 
     const auto& terrainTex = m_Shared->terrainTextures();
+    if (terrainTex.size() < 4)                     return;
+
     nvrhi::BindingSetDesc bsd;
     bsd.bindings = {
         nvrhi::BindingSetItem::ConstantBuffer(mesh_reg::Terrain::kCB_Frame, m_StageResources.frameShared.constantBuffer,
             nvrhi::BufferRange(0, shader_cb::kCullFrameSize)),
         nvrhi::BindingSetItem::ConstantBuffer(mesh_reg::Terrain::kCB_Shading, m_Shared->terrainShadingCB()),
+        nvrhi::BindingSetItem::ConstantBuffer(mesh_reg::Terrain::kCB_ASCull,  m_StageResources.frameShared.asCullCB,
+            nvrhi::BufferRange(0, shader_cb::kMeshASCullSize)),
         nvrhi::BindingSetItem::Texture_SRV(mesh_reg::Terrain::kTex_ShadowMap, m_StageResources.shadow.depthTexture),
         nvrhi::BindingSetItem::Texture_SRV(mesh_reg::Terrain::kTex_ForestDiff, terrainTex[0].diffuse),
         nvrhi::BindingSetItem::Texture_SRV(mesh_reg::Terrain::kTex_ForestNor,  terrainTex[0].normalMap),
@@ -2394,14 +2484,20 @@ bool MeshShaderRenderPass::_InitTerrainPass(nvrhi::ICommandList* initCL) {
         nvrhi::BindingSetItem::Texture_SRV(mesh_reg::Terrain::kTex_RockNor,    terrainTex[2].normalMap),
         nvrhi::BindingSetItem::Texture_SRV(mesh_reg::Terrain::kTex_SnowDiff,   terrainTex[3].diffuse),
         nvrhi::BindingSetItem::Texture_SRV(mesh_reg::Terrain::kTex_SnowNor,    terrainTex[3].normalMap),
+        nvrhi::BindingSetItem::RawBuffer_SRV(mesh_reg::Terrain::kSRV_VertexBuffer, T.vertexBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Terrain::kSRV_MeshletDescs, T.meshletDescBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Terrain::kSRV_MeshletVertIdx, T.meshletVertIdxBuffer),
+        nvrhi::BindingSetItem::RawBuffer_SRV(mesh_reg::Terrain::kSRV_MeshletPrimIdx, T.meshletPrimIdxBuffer),
+        nvrhi::BindingSetItem::Texture_SRV(mesh_reg::Terrain::kTex_HiZ, m_StageResources.hiz.hizTexture),
+        nvrhi::BindingSetItem::RawBuffer_UAV(mesh_reg::Terrain::kUAV_VisibleCounter, T.visibleCounterBuffer),
         nvrhi::BindingSetItem::Sampler(mesh_reg::Terrain::kSampler_Shadow, m_StageResources.sceneDraw.shadowSampler),
         nvrhi::BindingSetItem::Sampler(mesh_reg::Terrain::kSampler_Aniso,  m_Shared->barkSampler()),
     };
-    if (!nvrhi::utils::CreateBindingSetAndLayout(GetDevice(), nvrhi::ShaderType::All, 0,
-            bsd, m_StageResources.sceneTerrain.bindingLayout, m_StageResources.sceneTerrain.bindingSet))
-        return false;
-
-    return true;
+    // Null the binding set so CreateBindingSetAndLayout recreates it (it only
+    // builds a new set when the handle is null on entry; layout is preserved).
+    T.bindingSet = nullptr;
+    nvrhi::utils::CreateBindingSetAndLayout(GetDevice(), nvrhi::ShaderType::All, 0,
+        bsd, T.bindingLayout, T.bindingSet);
 }
 
 bool MeshShaderRenderPass::_InitSkyPass() {
@@ -2550,6 +2646,7 @@ void MeshShaderRenderPass::_EnsureHiZResources(uint32_t width, uint32_t height) 
     _RebuildDrawBindingSet();
     _RebuildDepthPrepassBindingSet();
     _RebuildLeafBindingSets();
+    _RebuildTerrainBindingSet();
 
     if (m_StageResources.sdsm.buildBindingLayout) {
         nvrhi::BindingSetDesc bsd;
@@ -2914,37 +3011,48 @@ void MeshShaderRenderPass::_RenderSkyPass(nvrhi::IFramebuffer* framebuffer) {
 void MeshShaderRenderPass::_RenderShadowPass() {}
 
 void MeshShaderRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
-    if (!m_StageResources.sceneTerrain.pipeline && m_StageResources.sceneTerrain.indexCount > 0) {
-        nvrhi::GraphicsPipelineDesc pso;
-        pso.VS             = m_StageResources.sceneTerrain.vertexShader;
-        pso.PS             = m_StageResources.sceneTerrain.pixelShader;
-        pso.inputLayout    = m_StageResources.sceneTerrain.inputLayout;
-        pso.bindingLayouts = { m_StageResources.sceneTerrain.bindingLayout };
-        pso.primType       = nvrhi::PrimitiveType::TriangleList;
-        pso.renderState.rasterState.setCullNone();
-        pso.renderState.depthStencilState.depthTestEnable  = true;
-        pso.renderState.depthStencilState.depthWriteEnable = true;
+    auto& T = m_StageResources.sceneTerrain;
+    if (T.meshletCount == 0 || !T.amplificationShader || !T.meshShader || !T.pixelShader)
+        return;
+    // Binding layout/set may be null on the first frame before _EnsureHiZResources
+    // creates the Hi-Z texture and triggers _RebuildTerrainBindingSet.
+    if (!T.bindingLayout || !T.bindingSet)
+        return;
+
+    if (!T.pipeline) {
+        nvrhi::MeshletPipelineDesc psoDesc;
+        psoDesc.AS = T.amplificationShader;
+        psoDesc.MS = T.meshShader;
+        psoDesc.PS = T.pixelShader;
+        psoDesc.primType = nvrhi::PrimitiveType::TriangleList;
+        psoDesc.bindingLayouts = { T.bindingLayout };
+
+        auto& rs = psoDesc.renderState;
+        rs.depthStencilState.depthTestEnable  = true;
+        rs.depthStencilState.depthWriteEnable = true;
     #if XYLEM_USE_REVERSE_Z
-        pso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Greater);
+        rs.depthStencilState.depthFunc = nvrhi::ComparisonFunc::Greater;
     #else
-        pso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
+        rs.depthStencilState.depthFunc = nvrhi::ComparisonFunc::Less;
     #endif
-        m_StageResources.sceneTerrain.pipeline = GetDevice()->createGraphicsPipeline(
-            pso, framebuffer->getFramebufferInfo());
+        rs.rasterState.cullMode = nvrhi::RasterCullMode::None;
+
+        T.pipeline = GetDevice()->createMeshletPipeline(psoDesc, framebuffer->getFramebufferInfo());
+        if (!T.pipeline) return;
     }
 
-    if (m_StageResources.sceneTerrain.indexCount > 0 && m_StageResources.sceneTerrain.pipeline) {
-        nvrhi::GraphicsState state;
-        state.pipeline    = m_StageResources.sceneTerrain.pipeline;
-        state.framebuffer = framebuffer;
-        state.bindings    = { m_StageResources.sceneTerrain.bindingSet };
-        state.vertexBuffers = { { m_StageResources.sceneTerrain.vertexBuffer, 0, 0 } };
-        state.indexBuffer   = { m_StageResources.sceneTerrain.indexBuffer, nvrhi::Format::R32_UINT, 0 };
-        state.viewport.addViewportAndScissorRect(framebuffer->getFramebufferInfo().getViewport());
-        m_CommandList->setGraphicsState(state);
-        m_CommandList->drawIndexed(
-            nvrhi::DrawArguments().setVertexCount(m_StageResources.sceneTerrain.indexCount));
-    }
+    // Reset survivor counter for this frame.
+    m_CommandList->clearBufferUInt(T.visibleCounterBuffer, 0);
+
+    nvrhi::MeshletState ms;
+    ms.pipeline    = T.pipeline;
+    ms.framebuffer = framebuffer;
+    ms.bindings    = { T.bindingSet };
+    ms.viewport.addViewportAndScissorRect(framebuffer->getFramebufferInfo().getViewport());
+    m_CommandList->setMeshletState(ms);
+
+    const uint32_t numGroups = (T.meshletCount + Render::k_ASGroupSize - 1) / Render::k_ASGroupSize;
+    m_CommandList->dispatchMesh(numGroups, 1, 1);
 }
 
 // ===========================================================================

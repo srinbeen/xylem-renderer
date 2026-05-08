@@ -197,6 +197,7 @@
 
     { "namespace": ["Mesh", "Terrain"], "name": "kCB_Frame", "kind": "b", "slot": 0 },
     { "namespace": ["Mesh", "Terrain"], "name": "kCB_Shading", "kind": "b", "slot": 1 },
+    { "namespace": ["Mesh", "Terrain"], "name": "kCB_ASCull", "kind": "b", "slot": 2 },
     { "namespace": ["Mesh", "Terrain"], "name": "kTex_ShadowMap", "kind": "t", "slot": 0 },
     { "namespace": ["Mesh", "Terrain"], "name": "kTex_ForestDiff", "kind": "t", "slot": 1 },
     { "namespace": ["Mesh", "Terrain"], "name": "kTex_ForestNor", "kind": "t", "slot": 2 },
@@ -206,6 +207,12 @@
     { "namespace": ["Mesh", "Terrain"], "name": "kTex_RockNor", "kind": "t", "slot": 6 },
     { "namespace": ["Mesh", "Terrain"], "name": "kTex_SnowDiff", "kind": "t", "slot": 7 },
     { "namespace": ["Mesh", "Terrain"], "name": "kTex_SnowNor", "kind": "t", "slot": 8 },
+    { "namespace": ["Mesh", "Terrain"], "name": "kSRV_VertexBuffer", "kind": "t", "slot": 9 },
+    { "namespace": ["Mesh", "Terrain"], "name": "kSRV_MeshletDescs", "kind": "t", "slot": 10 },
+    { "namespace": ["Mesh", "Terrain"], "name": "kSRV_MeshletVertIdx", "kind": "t", "slot": 11 },
+    { "namespace": ["Mesh", "Terrain"], "name": "kSRV_MeshletPrimIdx", "kind": "t", "slot": 12 },
+    { "namespace": ["Mesh", "Terrain"], "name": "kTex_HiZ", "kind": "t", "slot": 13 },
+    { "namespace": ["Mesh", "Terrain"], "name": "kUAV_VisibleCounter", "kind": "u", "slot": 0 },
     { "namespace": ["Mesh", "Terrain"], "name": "kSampler_Shadow", "kind": "s", "slot": 0 },
     { "namespace": ["Mesh", "Terrain"], "name": "kSampler_Aniso", "kind": "s", "slot": 1 },
 

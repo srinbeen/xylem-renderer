@@ -169,6 +169,8 @@ bool MeshShaderRenderPass::_InitDrawResources() {
         nvrhi::BindingLayoutItem::Texture_SRV(mesh_reg::Draw::kTex_ShadowMap),
         nvrhi::BindingLayoutItem::Texture_SRV(mesh_reg::Draw::kTex_HiZ),
 
+        nvrhi::BindingLayoutItem::RawBuffer_UAV(mesh_reg::Draw::kUAV_MeshletStats),
+
         nvrhi::BindingLayoutItem::Sampler(mesh_reg::Draw::kSampler_Main),
         nvrhi::BindingLayoutItem::Sampler(mesh_reg::Draw::kSampler_Shadow),
     };
@@ -206,21 +208,22 @@ bool MeshShaderRenderPass::_InitLeafResources() {
     nvrhi::BindingLayoutDesc mainBLD;
     mainBLD.visibility = nvrhi::ShaderType::All;
     mainBLD.bindings = {
-        nvrhi::BindingLayoutItem::ConstantBuffer(0),
-        nvrhi::BindingLayoutItem::PushConstants(1, sizeof(uint32_t)),
-        nvrhi::BindingLayoutItem::ConstantBuffer(2),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(4),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(5),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(6),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(7),
-        nvrhi::BindingLayoutItem::Texture_SRV(8),
-        nvrhi::BindingLayoutItem::Texture_SRV(9),
-        nvrhi::BindingLayoutItem::RawBuffer_UAV(0),
-        nvrhi::BindingLayoutItem::Sampler(0),
+        nvrhi::BindingLayoutItem::ConstantBuffer(mesh_reg::Leaf::kCB_Frame),
+        nvrhi::BindingLayoutItem::PushConstants(mesh_reg::Leaf::kPushC_Slot, sizeof(uint32_t)),
+        nvrhi::BindingLayoutItem::ConstantBuffer(mesh_reg::Leaf::kCB_ASCull),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_Vis),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_SlotOffsets),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_SlotCounts),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_Instances),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_ASInvocations),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_LeafInstances),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_LeafSlots),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_LeafMeshlets),
+        nvrhi::BindingLayoutItem::Texture_SRV(mesh_reg::Leaf::kTex_ShadowMap),
+        nvrhi::BindingLayoutItem::Texture_SRV(mesh_reg::Leaf::kTex_HiZ),
+        nvrhi::BindingLayoutItem::RawBuffer_UAV(mesh_reg::Leaf::kUAV_LeafSurvivor),
+        nvrhi::BindingLayoutItem::RawBuffer_UAV(mesh_reg::Leaf::kUAV_MeshletStats),
+        nvrhi::BindingLayoutItem::Sampler(mesh_reg::Leaf::kSampler_Shadow),
     };
     L.mainLayout = GetDevice()->createBindingLayout(mainBLD);
     if (!L.mainLayout) return false;
@@ -231,19 +234,20 @@ bool MeshShaderRenderPass::_InitLeafResources() {
     nvrhi::BindingLayoutDesc depthBLD;
     depthBLD.visibility = nvrhi::ShaderType::All;
     depthBLD.bindings = {
-        nvrhi::BindingLayoutItem::ConstantBuffer(0),
-        nvrhi::BindingLayoutItem::PushConstants(1, sizeof(uint32_t)),
-        nvrhi::BindingLayoutItem::ConstantBuffer(2),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(4),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(5),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(6),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(7),
-        nvrhi::BindingLayoutItem::Texture_SRV(9),
-        nvrhi::BindingLayoutItem::RawBuffer_UAV(0),
+        nvrhi::BindingLayoutItem::ConstantBuffer(mesh_reg::Leaf::kCB_Frame),
+        nvrhi::BindingLayoutItem::PushConstants(mesh_reg::Leaf::kPushC_Slot, sizeof(uint32_t)),
+        nvrhi::BindingLayoutItem::ConstantBuffer(mesh_reg::Leaf::kCB_ASCull),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_Vis),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_SlotOffsets),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_SlotCounts),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_Instances),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_ASInvocations),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_LeafInstances),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_LeafSlots),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_LeafMeshlets),
+        nvrhi::BindingLayoutItem::Texture_SRV(mesh_reg::Leaf::kTex_HiZ),
+        nvrhi::BindingLayoutItem::RawBuffer_UAV(mesh_reg::Leaf::kUAV_LeafSurvivor),
+        nvrhi::BindingLayoutItem::RawBuffer_UAV(mesh_reg::Leaf::kUAV_MeshletStats),
     };
     L.depthLayout = GetDevice()->createBindingLayout(depthBLD);
     if (!L.depthLayout) return false;
@@ -253,17 +257,18 @@ bool MeshShaderRenderPass::_InitLeafResources() {
     nvrhi::BindingLayoutDesc shadowBLD;
     shadowBLD.visibility = nvrhi::ShaderType::All;
     shadowBLD.bindings = {
-        nvrhi::BindingLayoutItem::ConstantBuffer(0),
-        nvrhi::BindingLayoutItem::PushConstants(1, sizeof(uint32_t)),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(4),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(5),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(6),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(7),
-        nvrhi::BindingLayoutItem::RawBuffer_UAV(0),
+        nvrhi::BindingLayoutItem::ConstantBuffer(mesh_reg::Leaf::kCB_Frame),
+        nvrhi::BindingLayoutItem::PushConstants(mesh_reg::Leaf::kPushC_Slot, sizeof(uint32_t)),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_Vis),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_SlotOffsets),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_SlotCounts),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_Instances),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_ASInvocations),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_LeafInstances),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_LeafSlots),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_LeafMeshlets),
+        nvrhi::BindingLayoutItem::RawBuffer_UAV(mesh_reg::Leaf::kUAV_LeafSurvivor),
+        nvrhi::BindingLayoutItem::RawBuffer_UAV(mesh_reg::Leaf::kUAV_MeshletStats),
     };
     L.shadowLayout = GetDevice()->createBindingLayout(shadowBLD);
     return L.shadowLayout != nullptr;
@@ -374,6 +379,8 @@ bool MeshShaderRenderPass::_InitShadowPass() {
         nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_SlotCounts),
         nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Instances),
         nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_ASInvocations),
+
+        nvrhi::BindingLayoutItem::RawBuffer_UAV(mesh_reg::Draw::kUAV_MeshletStats),
     };
     m_StageResources.shadow.bindingLayout = GetDevice()->createBindingLayout(bld);
     if (!m_StageResources.shadow.bindingLayout) return false;
@@ -994,6 +1001,19 @@ void MeshShaderRenderPass::_UploadCullBuffers(nvrhi::ICommandList* cl) {
     m_StageResources.cull.depthLeafSurvivorScratch  = makeLeafSurvivorBuf("Mesh_DepthLeafSurvivorScratch");
     m_StageResources.cull.shadowLeafSurvivorCounter = makeLeafSurvivorBuf("Mesh_ShadowLeafSurvivorCounter");
 
+    m_StageResources.cull.meshletStatsBuffer = device->createBuffer(nvrhi::BufferDesc()
+        .setByteSize(8 * sizeof(uint32_t))
+        .setDebugName("Mesh_MeshletStatsBuffer")
+        .setCanHaveUAVs(true)
+        .setCanHaveRawViews(true)
+        .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess));
+    m_StageResources.cull.meshletStatsDepthScratch = device->createBuffer(nvrhi::BufferDesc()
+        .setByteSize(8 * sizeof(uint32_t))
+        .setDebugName("Mesh_MeshletStatsDepthScratch")
+        .setCanHaveUAVs(true)
+        .setCanHaveRawViews(true)
+        .enableAutomaticStateTracking(nvrhi::ResourceStates::UnorderedAccess));
+
     // --- Impostor cull buffers (per-asset slots) ---
     const uint32_t numAssets = std::max(1u,
         static_cast<uint32_t>(m_Registry.getAssets().size()));
@@ -1122,9 +1142,10 @@ void MeshShaderRenderPass::_UploadCullBuffers(nvrhi::ICommandList* cl) {
     m_ReadbackShadowEntries         = m_NumShadowSlots;
     m_ReadbackImpostorEntries       = numAssets;
     m_ReadbackShadowImpostorEntries = numAssets * XYLEM_NUM_CASCADES;
-    // Layout: [mainCounts][shadowCounts][impostorCounts][shadowImpostorCounts][shadowUnique][mainLeafSurvivors][shadowLeafSurvivors][terrainSurvivors]
+    // Layout: [mainCounts][shadowCounts][impostorCounts][shadowImpostorCounts][shadowUnique]
+    //         [mainLeafSurvivors][shadowLeafSurvivors][terrainSurvivors][meshletStats × 8]
     const uint64_t readbackSize =
-        (m_ReadbackMainEntries + m_ReadbackShadowEntries + m_ReadbackImpostorEntries + m_ReadbackShadowImpostorEntries + 4) * sizeof(uint32_t);
+        (m_ReadbackMainEntries + m_ReadbackShadowEntries + m_ReadbackImpostorEntries + m_ReadbackShadowImpostorEntries + 4 + 8) * sizeof(uint32_t);
     for (uint32_t i = 0; i < k_QueuedFrames; i++) {
         m_ReadbackBuffers[i] = device->createBuffer(nvrhi::BufferDesc()
             .setByteSize(readbackSize)
@@ -1216,6 +1237,8 @@ void MeshShaderRenderPass::_RebuildDrawBindingSet() {
             nvrhi::BindingSetItem::Texture_SRV(mesh_reg::Draw::kTex_ShadowMap, m_StageResources.shadow.depthTexture),
             nvrhi::BindingSetItem::Texture_SRV(mesh_reg::Draw::kTex_HiZ,    m_StageResources.hiz.hizTexture),
 
+            nvrhi::BindingSetItem::RawBuffer_UAV(mesh_reg::Draw::kUAV_MeshletStats, m_StageResources.cull.meshletStatsBuffer),
+
             nvrhi::BindingSetItem::Sampler(mesh_reg::Draw::kSampler_Main,   m_Shared->barkSampler()),
             nvrhi::BindingSetItem::Sampler(mesh_reg::Draw::kSampler_Shadow, m_StageResources.sceneDraw.shadowSampler),
         };
@@ -1245,6 +1268,8 @@ void MeshShaderRenderPass::_RebuildShadowBindingSet() {
         nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_SlotCounts,      m_StageResources.cull.shadowCountBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Instances,       m_StageResources.cull.persistentInstBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_ASInvocations, m_StageResources.cull.shadowASInvocsPerSlotBuffer),
+
+        nvrhi::BindingSetItem::RawBuffer_UAV(mesh_reg::Draw::kUAV_MeshletStats, m_StageResources.cull.meshletStatsBuffer),
     };
     m_StageResources.shadow.bindingSet = GetDevice()->createBindingSet(bsd, m_StageResources.shadow.bindingLayout);
 }
@@ -1263,23 +1288,24 @@ void MeshShaderRenderPass::_RebuildLeafBindingSets() {
     {
         nvrhi::BindingSetDesc bsd;
         bsd.bindings = {
-            nvrhi::BindingSetItem::ConstantBuffer(0, m_StageResources.frameShared.constantBuffer,
+            nvrhi::BindingSetItem::ConstantBuffer(mesh_reg::Leaf::kCB_Frame, m_StageResources.frameShared.constantBuffer,
                 nvrhi::BufferRange(0, shader_cb::kCullFrameSize)),
-            nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t)),
-            nvrhi::BindingSetItem::ConstantBuffer(2, m_StageResources.frameShared.asCullCB,
+            nvrhi::BindingSetItem::PushConstants(mesh_reg::Leaf::kPushC_Slot, sizeof(uint32_t)),
+            nvrhi::BindingSetItem::ConstantBuffer(mesh_reg::Leaf::kCB_ASCull, m_StageResources.frameShared.asCullCB,
                 nvrhi::BufferRange(0, shader_cb::kMeshASCullSize)),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_StageResources.cull.mainVisBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_StageResources.cull.mainSlotOffsetBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_StageResources.cull.mainCountBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(3, m_StageResources.cull.persistentInstBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(4, m_StageResources.cull.mainLeafASInvocsPerSlotBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(5, m_Shared->leafInstancesBuffer()),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(6, m_Shared->leafSlotsBuffer()),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(7, m_Shared->leafMeshletsBuffer()),
-            nvrhi::BindingSetItem::Texture_SRV(8, m_StageResources.shadow.depthTexture),
-            nvrhi::BindingSetItem::Texture_SRV(9, m_StageResources.hiz.hizTexture),
-            nvrhi::BindingSetItem::RawBuffer_UAV(0, m_StageResources.cull.mainLeafSurvivorCounter),
-            nvrhi::BindingSetItem::Sampler(0, m_StageResources.sceneDraw.shadowSampler),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_Vis,            m_StageResources.cull.mainVisBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_SlotOffsets,    m_StageResources.cull.mainSlotOffsetBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_SlotCounts,     m_StageResources.cull.mainCountBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_Instances,      m_StageResources.cull.persistentInstBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_ASInvocations,  m_StageResources.cull.mainLeafASInvocsPerSlotBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_LeafInstances,  m_Shared->leafInstancesBuffer()),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_LeafSlots,      m_Shared->leafSlotsBuffer()),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_LeafMeshlets,   m_Shared->leafMeshletsBuffer()),
+            nvrhi::BindingSetItem::Texture_SRV(mesh_reg::Leaf::kTex_ShadowMap,               m_StageResources.shadow.depthTexture),
+            nvrhi::BindingSetItem::Texture_SRV(mesh_reg::Leaf::kTex_HiZ,                     m_StageResources.hiz.hizTexture),
+            nvrhi::BindingSetItem::RawBuffer_UAV(mesh_reg::Leaf::kUAV_LeafSurvivor,          m_StageResources.cull.mainLeafSurvivorCounter),
+            nvrhi::BindingSetItem::RawBuffer_UAV(mesh_reg::Leaf::kUAV_MeshletStats,          m_StageResources.cull.meshletStatsBuffer),
+            nvrhi::BindingSetItem::Sampler(mesh_reg::Leaf::kSampler_Shadow,                  m_StageResources.sceneDraw.shadowSampler),
         };
         L.mainBindingSet = GetDevice()->createBindingSet(bsd, L.mainLayout);
     }
@@ -1288,21 +1314,22 @@ void MeshShaderRenderPass::_RebuildLeafBindingSets() {
     {
         nvrhi::BindingSetDesc bsd;
         bsd.bindings = {
-            nvrhi::BindingSetItem::ConstantBuffer(0, m_StageResources.frameShared.constantBuffer,
+            nvrhi::BindingSetItem::ConstantBuffer(mesh_reg::Leaf::kCB_Frame, m_StageResources.frameShared.constantBuffer,
                 nvrhi::BufferRange(0, shader_cb::kCullFrameSize)),
-            nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t)),
-            nvrhi::BindingSetItem::ConstantBuffer(2, m_StageResources.frameShared.asCullCB,
+            nvrhi::BindingSetItem::PushConstants(mesh_reg::Leaf::kPushC_Slot, sizeof(uint32_t)),
+            nvrhi::BindingSetItem::ConstantBuffer(mesh_reg::Leaf::kCB_ASCull, m_StageResources.frameShared.asCullCB,
                 nvrhi::BufferRange(0, shader_cb::kMeshASCullSize)),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_StageResources.cull.mainVisBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_StageResources.cull.mainSlotOffsetBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_StageResources.cull.mainCountBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(3, m_StageResources.cull.persistentInstBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(4, m_StageResources.cull.mainLeafASInvocsPerSlotBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(5, m_Shared->leafInstancesBuffer()),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(6, m_Shared->leafSlotsBuffer()),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(7, m_Shared->leafMeshletsBuffer()),
-            nvrhi::BindingSetItem::Texture_SRV(9, m_StageResources.hiz.hizTexture),
-            nvrhi::BindingSetItem::RawBuffer_UAV(0, m_StageResources.cull.depthLeafSurvivorScratch),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_Vis,            m_StageResources.cull.mainVisBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_SlotOffsets,    m_StageResources.cull.mainSlotOffsetBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_SlotCounts,     m_StageResources.cull.mainCountBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_Instances,      m_StageResources.cull.persistentInstBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_ASInvocations,  m_StageResources.cull.mainLeafASInvocsPerSlotBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_LeafInstances,  m_Shared->leafInstancesBuffer()),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_LeafSlots,      m_Shared->leafSlotsBuffer()),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_LeafMeshlets,   m_Shared->leafMeshletsBuffer()),
+            nvrhi::BindingSetItem::Texture_SRV(mesh_reg::Leaf::kTex_HiZ,                     m_StageResources.hiz.hizTexture),
+            nvrhi::BindingSetItem::RawBuffer_UAV(mesh_reg::Leaf::kUAV_LeafSurvivor,          m_StageResources.cull.depthLeafSurvivorScratch),
+            nvrhi::BindingSetItem::RawBuffer_UAV(mesh_reg::Leaf::kUAV_MeshletStats,          m_StageResources.cull.meshletStatsDepthScratch),
         };
         L.depthBindingSet = GetDevice()->createBindingSet(bsd, L.depthLayout);
     }
@@ -1311,18 +1338,19 @@ void MeshShaderRenderPass::_RebuildLeafBindingSets() {
     {
         nvrhi::BindingSetDesc bsd;
         bsd.bindings = {
-            nvrhi::BindingSetItem::ConstantBuffer(0, m_StageResources.frameShared.constantBuffer,
+            nvrhi::BindingSetItem::ConstantBuffer(mesh_reg::Leaf::kCB_Frame, m_StageResources.frameShared.constantBuffer,
                 nvrhi::BufferRange(0, shader_cb::kCullFrameSize)),
-            nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t)),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_StageResources.cull.shadowVisBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_StageResources.cull.shadowSlotOffsetBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_StageResources.cull.shadowCountBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(3, m_StageResources.cull.persistentInstBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(4, m_StageResources.cull.shadowLeafASInvocsPerSlotBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(5, m_Shared->leafInstancesBuffer()),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(6, m_Shared->leafShadowSlotsBuffer()),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(7, m_Shared->leafMeshletsBuffer()),
-            nvrhi::BindingSetItem::RawBuffer_UAV(0, m_StageResources.cull.shadowLeafSurvivorCounter),
+            nvrhi::BindingSetItem::PushConstants(mesh_reg::Leaf::kPushC_Slot, sizeof(uint32_t)),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_Vis,            m_StageResources.cull.shadowVisBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_SlotOffsets,    m_StageResources.cull.shadowSlotOffsetBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_SlotCounts,     m_StageResources.cull.shadowCountBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_Instances,      m_StageResources.cull.persistentInstBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_ASInvocations,  m_StageResources.cull.shadowLeafASInvocsPerSlotBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_LeafInstances,  m_Shared->leafInstancesBuffer()),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_LeafSlots,      m_Shared->leafShadowSlotsBuffer()),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Leaf::kSRV_LeafMeshlets,   m_Shared->leafMeshletsBuffer()),
+            nvrhi::BindingSetItem::RawBuffer_UAV(mesh_reg::Leaf::kUAV_LeafSurvivor,          m_StageResources.cull.shadowLeafSurvivorCounter),
+            nvrhi::BindingSetItem::RawBuffer_UAV(mesh_reg::Leaf::kUAV_MeshletStats,          m_StageResources.cull.meshletStatsBuffer),
         };
         L.shadowBindingSet = GetDevice()->createBindingSet(bsd, L.shadowLayout);
     }
@@ -1759,6 +1787,8 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_CommandList->clearBufferUInt(m_StageResources.cull.mainLeafSurvivorCounter,   0);
     m_CommandList->clearBufferUInt(m_StageResources.cull.shadowLeafSurvivorCounter, 0);
     m_CommandList->clearBufferUInt(m_StageResources.cull.depthLeafSurvivorScratch,  0);
+    m_CommandList->clearBufferUInt(m_StageResources.cull.meshletStatsBuffer,        0);
+    m_CommandList->clearBufferUInt(m_StageResources.cull.meshletStatsDepthScratch,  0);
 
     m_CommandList->writeBuffer(m_StageResources.cull.mainDispatchArgsBuffer,
         m_MainDispatchArgsStaging.data(),
@@ -2070,11 +2100,12 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     if (m_UI.showImpostorAtlas && m_Shared)
         m_Shared->CopySelectedImpostorDebugAtlases(m_CommandList, m_UI.impostorSelectedAsset);
 
-    // ----- 6d. Leaf survivor readback copy. Has to run AFTER the shadow + main
-    // color leaf draws so the AS-side atomics are committed. The trunk readback
-    // copy at step 4 wrote into [main][shadow][impostor][shadowImpostor][shadowUnique]; the leaf
-    // counters land at the [mainLeafSurvivors][shadowLeafSurvivors] tail of the
-    // same ring slot.
+    // ----- 6d. Leaf survivor + meshlet stats readback copy. Has to run AFTER the
+    // shadow + main color leaf draws so the AS-side atomics are committed. The
+    // trunk readback copy at step 4 wrote into
+    // [main][shadow][impostor][shadowImpostor][shadowUnique]; the leaf and
+    // terrain counters land at [mainLeafSurvivors][shadowLeafSurvivors][terrainSurvivors],
+    // followed by the 8-uint meshlet stats block.
     {
         const uint32_t ringSlot = m_ReadbackFrameIndex % k_QueuedFrames;
         const uint64_t leafBaseOffset =
@@ -2091,6 +2122,10 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
                                       m_StageResources.sceneTerrain.visibleCounterBuffer, 0,
                                       sizeof(uint32_t));
         }
+        const uint64_t meshletStatsOffset = leafBaseOffset + 3 * sizeof(uint32_t);
+        m_CommandList->copyBuffer(m_ReadbackBuffers[ringSlot], meshletStatsOffset,
+                                  m_StageResources.cull.meshletStatsBuffer, 0,
+                                  8 * sizeof(uint32_t));
     }
 
     m_CommandList->close();
@@ -2111,24 +2146,55 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
             uint32_t visSum = 0;
             for (uint32_t i = 0; i < m_ReadbackMainEntries; i++) visSum += counts[i];
 
+            // Per-cascade shadow geometry sums. Slot layout is
+            // ai * Render::c_NumCascades + c (asset major). Total visible
+            // is Σ over all (asset, cascade) slots; we also break out per c.
+            uint32_t perCascadeShadow[Render::c_NumCascades] = {};
             uint32_t shadowVisSum = 0;
-            for (uint32_t i = 0; i < m_ReadbackShadowEntries; i++)
-                shadowVisSum += counts[m_ReadbackMainEntries + i];
+            const uint32_t numShadowAssets =
+                Render::c_NumCascades > 0 ? (m_ReadbackShadowEntries / Render::c_NumCascades) : 0;
+            for (uint32_t ai = 0; ai < numShadowAssets; ++ai) {
+                for (uint32_t c = 0; c < Render::c_NumCascades; ++c) {
+                    const uint32_t v = counts[m_ReadbackMainEntries + ai * Render::c_NumCascades + c];
+                    perCascadeShadow[c] += v;
+                    shadowVisSum        += v;
+                }
+            }
 
             uint32_t impostorVisSum = 0;
             const uint32_t impostorOffset = m_ReadbackMainEntries + m_ReadbackShadowEntries;
             for (uint32_t i = 0; i < m_ReadbackImpostorEntries; i++)
                 impostorVisSum += counts[impostorOffset + i];
 
+            // Per-cascade shadow impostor sums. Slot layout same as
+            // geometry: ai * Render::c_NumCascades + c.
             const uint32_t shadowImpostorOffset = impostorOffset + m_ReadbackImpostorEntries;
+            uint32_t perCascadeShadowImpostor[Render::c_NumCascades] = {};
             uint32_t shadowImpostorVisSum = 0;
-            for (uint32_t i = 0; i < m_ReadbackShadowImpostorEntries; i++)
-                shadowImpostorVisSum += counts[shadowImpostorOffset + i];
+            const uint32_t numShadowImpostorAssets =
+                Render::c_NumCascades > 0 ? (m_ReadbackShadowImpostorEntries / Render::c_NumCascades) : 0;
+            for (uint32_t ai = 0; ai < numShadowImpostorAssets; ++ai) {
+                for (uint32_t c = 0; c < Render::c_NumCascades; ++c) {
+                    const uint32_t v = counts[shadowImpostorOffset + ai * Render::c_NumCascades + c];
+                    perCascadeShadowImpostor[c] += v;
+                    shadowImpostorVisSum        += v;
+                }
+            }
 
             uint32_t shadowUnique       = counts[shadowImpostorOffset + m_ReadbackShadowImpostorEntries];
             uint32_t leafMainSurvivors  = counts[shadowImpostorOffset + m_ReadbackShadowImpostorEntries + 1];
             uint32_t leafShadowSurvivors= counts[shadowImpostorOffset + m_ReadbackShadowImpostorEntries + 2];
             uint32_t terrainSurvivors   = counts[shadowImpostorOffset + m_ReadbackShadowImpostorEntries + 3];
+
+            const uint32_t meshletStatsOffset = shadowImpostorOffset + m_ReadbackShadowImpostorEntries + 4;
+            uint32_t trunkMainConsidered   = counts[meshletStatsOffset + 0];
+            uint32_t trunkMainSurvived     = counts[meshletStatsOffset + 1];
+            uint32_t trunkShadowConsidered = counts[meshletStatsOffset + 2];
+            uint32_t trunkShadowSurvived   = counts[meshletStatsOffset + 3];
+            uint32_t leafMainConsidered    = counts[meshletStatsOffset + 4];
+            uint32_t leafMainSurvived      = counts[meshletStatsOffset + 5];
+            uint32_t leafShadowConsidered  = counts[meshletStatsOffset + 6];
+            uint32_t leafShadowSurvived    = counts[meshletStatsOffset + 7];
 
             GetDevice()->unmapBuffer(m_ReadbackBuffers[readSlot]);
 
@@ -2146,7 +2212,20 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
             m_UI.shadowCascadeDrawCount = shadowVisSum;
             m_UI.shadowOverdrawCount    = (shadowVisSum >= shadowUnique)
                 ? shadowVisSum - shadowUnique : 0;
+            for (uint32_t c = 0; c < Render::c_NumCascades; ++c) {
+                m_UI.shadowGeomDrawsPerCascade[c]      = perCascadeShadow[c];
+                m_UI.shadowBillboardDrawsPerCascade[c] = perCascadeShadowImpostor[c];
+            }
             m_UI.visibleTerrainMeshletCount = terrainSurvivors;
+
+            m_UI.trunkMainMeshletsDispatched   = trunkMainConsidered;
+            m_UI.trunkMainMeshletsRendered     = trunkMainSurvived;
+            m_UI.trunkShadowMeshletsDispatched = trunkShadowConsidered;
+            m_UI.trunkShadowMeshletsRendered   = trunkShadowSurvived;
+            m_UI.leafMainMeshletsDispatched    = leafMainConsidered;
+            m_UI.leafMainMeshletsRendered      = leafMainSurvived;
+            m_UI.leafShadowMeshletsDispatched  = leafShadowConsidered;
+            m_UI.leafShadowMeshletsRendered    = leafShadowSurvived;
         }
     }
     m_ReadbackFrameIndex++;
@@ -2532,10 +2611,52 @@ bool MeshShaderRenderPass::_InitSkyPass() {
 // ===========================================================================
 
 void MeshShaderRenderPass::_RebuildDepthPrepassBindingSet() {
-    // Tree meshlet depth prepass shares the main Draw binding set.
-    m_StageResources.depthPrepass.bindingSet = m_StageResources.sceneDraw.bindingSets.empty()
-        ? nullptr
-        : m_StageResources.sceneDraw.bindingSets[0];
+    // Tree meshlet depth prepass mirrors sceneDraw[0] but rebinds the meshlet
+    // stats UAV to a scratch buffer so the shared main_as doesn't double-count
+    // (depth prepass + color both run main_as on the same visible instances).
+    if (!m_Shared || !m_StageResources.shadow.depthTexture
+        || !m_StageResources.hiz.hizTexture
+        || !m_StageResources.sceneDraw.bindingLayout
+        || m_Shared->barkTextures().empty()) {
+        m_StageResources.depthPrepass.bindingSet = nullptr;
+    } else {
+        const auto& barkTextures = m_Shared->barkTextures();
+        nvrhi::BindingSetDesc bsd;
+        bsd.bindings = {
+            nvrhi::BindingSetItem::PushConstants(mesh_reg::Draw::kPushC_Slot, mesh_reg::Draw::kPushCBytes),
+            nvrhi::BindingSetItem::ConstantBuffer(mesh_reg::Draw::kCB_Frame, m_StageResources.frameShared.constantBuffer,
+                nvrhi::BufferRange(0, shader_cb::kCullFrameSize)),
+            nvrhi::BindingSetItem::ConstantBuffer(mesh_reg::Draw::kCB_ASCull, m_StageResources.frameShared.asCullCB,
+                nvrhi::BufferRange(0, shader_cb::kMeshASCullSize)),
+
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Positions,     m_StageResources.sceneMeshletData.positions),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Normals,       m_StageResources.sceneMeshletData.normals),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Tangents,      m_StageResources.sceneMeshletData.tangents),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Bitangents,    m_StageResources.sceneMeshletData.bitangents),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_UVs,           m_StageResources.sceneMeshletData.uvs),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_MeshletVertIdx, m_StageResources.sceneMeshletData.meshletVertIdx),
+            nvrhi::BindingSetItem::RawBuffer_SRV(mesh_reg::Draw::kSRV_MeshletPrimIdx,        m_StageResources.sceneMeshletData.meshletPrimIdx),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Meshlets,      m_StageResources.sceneMeshletData.meshletDescs),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_AssetLods,     m_StageResources.sceneMeshletData.assetLodRanges),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Vis,        m_StageResources.cull.mainVisBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_SlotOffsets,   m_StageResources.cull.mainSlotOffsetBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_SlotCounts,    m_StageResources.cull.mainCountBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Instances,     m_StageResources.cull.persistentInstBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_ASInvocations, m_StageResources.cull.mainASInvocsPerSlotBuffer),
+
+            nvrhi::BindingSetItem::Texture_SRV(mesh_reg::Draw::kTex_Diffuse,   barkTextures[0].diffuse),
+            nvrhi::BindingSetItem::Texture_SRV(mesh_reg::Draw::kTex_NormalMap, barkTextures[0].normalMap),
+            nvrhi::BindingSetItem::Texture_SRV(mesh_reg::Draw::kTex_ShadowMap, m_StageResources.shadow.depthTexture),
+            nvrhi::BindingSetItem::Texture_SRV(mesh_reg::Draw::kTex_HiZ,    m_StageResources.hiz.hizTexture),
+
+            nvrhi::BindingSetItem::RawBuffer_UAV(mesh_reg::Draw::kUAV_MeshletStats, m_StageResources.cull.meshletStatsDepthScratch),
+
+            nvrhi::BindingSetItem::Sampler(mesh_reg::Draw::kSampler_Main,   m_Shared->barkSampler()),
+            nvrhi::BindingSetItem::Sampler(mesh_reg::Draw::kSampler_Shadow, m_StageResources.sceneDraw.shadowSampler),
+        };
+        m_StageResources.depthPrepass.bindingSet = GetDevice()->createBindingSet(
+            bsd, m_StageResources.sceneDraw.bindingLayout);
+    }
 
     // Terrain depth prepass: CB + dummy vis/inst/slotOffsets (not read by terrain_vs).
     if (!m_StageResources.depthPrepass.terrainBindingLayout) return;

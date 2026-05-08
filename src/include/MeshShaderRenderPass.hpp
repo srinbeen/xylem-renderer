@@ -133,6 +133,18 @@ private:
         nvrhi::BufferHandle              depthLeafSurvivorScratch;  // bound to depth-prepass leaf set; never read
         nvrhi::BufferHandle              shadowLeafSurvivorCounter;
 
+        // Per-frame meshlet AS cull stats (8 uints, raw UAV). Layout:
+        //   [0] trunk main   considered  [1] trunk main   survived
+        //   [2] trunk shadow considered  [3] trunk shadow survived
+        //   [4] leaf  main   considered  [5] leaf  main   survived
+        //   [6] leaf  shadow considered  [7] leaf  shadow survived
+        // Cleared at frame start, copied to readback ring tail.
+        nvrhi::BufferHandle              meshletStatsBuffer;
+        // Depth prepass shares main_as / leaf_as with the color pass; binding the
+        // real buffer to both paths would double-count main considered/survived.
+        // Depth prepass writes here instead; values are discarded.
+        nvrhi::BufferHandle              meshletStatsDepthScratch;
+
         // Impostor terminal-LOD slot buffers (numAssets slots, one per asset)
         nvrhi::BufferHandle              impostorSlotOffsetBuffer;   // SRV uint32[numAssets]
         nvrhi::BufferHandle              impostorCountBuffer;        // UAV uint32[numAssets]

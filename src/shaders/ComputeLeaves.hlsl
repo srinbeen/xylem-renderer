@@ -1,10 +1,11 @@
 #include "../include/macros.h"
 #include "LeafCommon.hlsli"
 #include "ShadowCascadeCommon.hlsli"
+#include "ShaderRegisterMap.hlsli"
 
 #pragma pack_matrix(row_major)
 
-cbuffer CB : register(b0)
+cbuffer CB : register(XY_REG_B_COMPUTE_LEAF_CB_FRAME)
 {
     float4x4 viewProj;
     float4x4 viewMatrix;
@@ -14,19 +15,19 @@ cbuffer CB : register(b0)
     float4   cascadeSplits;
 };
 
-cbuffer LeafPush : register(b1)
+cbuffer LeafPush : register(XY_REG_B_COMPUTE_LEAF_PUSH_C_SLOT)
 {
     uint leafSlot;
     uint cascadeIdx;
 };
 
-StructuredBuffer<uint>               g_VisBuf      : register(t0);
-StructuredBuffer<InstanceRenderData> g_Instances   : register(t1);
-StructuredBuffer<uint>               g_SlotOffsets : register(t2);
-StructuredBuffer<LeafInstanceData>   g_Leaves      : register(t3);
-StructuredBuffer<LeafSlotData>       g_LeafSlots   : register(t4);
-Texture2DArray                       t_ShadowMap   : register(t5);
-SamplerComparisonState               s_ShadowSampler : register(s0);
+StructuredBuffer<uint>               g_VisBuf        : register(XY_REG_T_COMPUTE_LEAF_SRV_VIS);
+StructuredBuffer<InstanceRenderData> g_Instances     : register(XY_REG_T_COMPUTE_LEAF_SRV_INSTANCES);
+StructuredBuffer<uint>               g_SlotOffsets   : register(XY_REG_T_COMPUTE_LEAF_SRV_SLOT_OFFSETS);
+StructuredBuffer<LeafInstanceData>   g_Leaves        : register(XY_REG_T_COMPUTE_LEAF_SRV_LEAF_INSTANCES);
+StructuredBuffer<LeafSlotData>       g_LeafSlots     : register(XY_REG_T_COMPUTE_LEAF_SRV_LEAF_SLOTS);
+Texture2DArray                       t_ShadowMap     : register(XY_REG_T_COMPUTE_LEAF_TEX_SHADOW_MAP);
+SamplerComparisonState               s_ShadowSampler : register(XY_REG_S_COMPUTE_LEAF_SAMPLER_SHADOW);
 
 struct V2P
 {

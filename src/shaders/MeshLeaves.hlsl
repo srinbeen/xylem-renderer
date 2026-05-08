@@ -3,13 +3,14 @@
 #include "meshlet_types.hlsli"
 #include "LeafCommon.hlsli"
 #include "ShadowCascadeCommon.hlsli"
+#include "ShaderRegisterMap.hlsli"
 
 #pragma pack_matrix(row_major)
 
 // Mirrors Render::CullConstantBufferEntry through the `viewFrustum` field. The
 // leaf binding set binds the full kCullFrameSize range, so any prefix of the C++
 // struct is readable here. Anything past `viewFrustum` is unused in this shader.
-cbuffer CB : register(b0)
+cbuffer CB : register(XY_REG_B_MESH_LEAF_CB_FRAME)
 {
     float4x4 viewProj;
     float4x4 viewMatrix;
@@ -20,7 +21,7 @@ cbuffer CB : register(b0)
     frustum  viewFrustum;
 };
 
-cbuffer PushC : register(b1)
+cbuffer PushC : register(XY_REG_B_MESH_LEAF_PUSH_C_SLOT)
 {
     uint g_SlotIdx;
 };
@@ -29,7 +30,7 @@ cbuffer PushC : register(b1)
 // trunk path — toggling `g_HizEnabled` via the Hi-Z bypass affects both.
 // Bound only by the main + depth leaf binding sets; the shadow leaf path
 // uses `leaf_shadow_as` which doesn't read this CB.
-cbuffer ASCullCB : register(b2)
+cbuffer ASCullCB : register(XY_REG_B_MESH_LEAF_CB_ASCULL)
 {
     float3   g_CameraPos;
     uint     g_HizEnabled;
@@ -38,17 +39,17 @@ cbuffer ASCullCB : register(b2)
     uint     _ascullPad;
 };
 
-StructuredBuffer<uint>               g_VisBuf          : register(t0);
-StructuredBuffer<uint>               g_SlotOffsets     : register(t1);
-StructuredBuffer<uint>               g_SlotCounts      : register(t2);
-StructuredBuffer<InstanceRenderData> g_Instances       : register(t3);
-StructuredBuffer<uint>               g_ASInvocsPerSlot : register(t4);
-StructuredBuffer<LeafInstanceData>   g_Leaves          : register(t5);
-StructuredBuffer<LeafSlotData>       g_LeafSlots       : register(t6);
-StructuredBuffer<LeafMeshletData>    g_LeafMeshlets    : register(t7);
-Texture2DArray                       t_ShadowMap       : register(t8);
-Texture2D<float4>                    t_HiZ             : register(t9);
-SamplerComparisonState               s_ShadowSampler   : register(s0);
+StructuredBuffer<uint>               g_VisBuf          : register(XY_REG_T_MESH_LEAF_SRV_VIS);
+StructuredBuffer<uint>               g_SlotOffsets     : register(XY_REG_T_MESH_LEAF_SRV_SLOT_OFFSETS);
+StructuredBuffer<uint>               g_SlotCounts      : register(XY_REG_T_MESH_LEAF_SRV_SLOT_COUNTS);
+StructuredBuffer<InstanceRenderData> g_Instances       : register(XY_REG_T_MESH_LEAF_SRV_INSTANCES);
+StructuredBuffer<uint>               g_ASInvocsPerSlot : register(XY_REG_T_MESH_LEAF_SRV_ASINVOCATIONS);
+StructuredBuffer<LeafInstanceData>   g_Leaves          : register(XY_REG_T_MESH_LEAF_SRV_LEAF_INSTANCES);
+StructuredBuffer<LeafSlotData>       g_LeafSlots       : register(XY_REG_T_MESH_LEAF_SRV_LEAF_SLOTS);
+StructuredBuffer<LeafMeshletData>    g_LeafMeshlets    : register(XY_REG_T_MESH_LEAF_SRV_LEAF_MESHLETS);
+Texture2DArray                       t_ShadowMap       : register(XY_REG_T_MESH_LEAF_TEX_SHADOW_MAP);
+Texture2D<float4>                    t_HiZ             : register(XY_REG_T_MESH_LEAF_TEX_HI_Z);
+SamplerComparisonState               s_ShadowSampler   : register(XY_REG_S_MESH_LEAF_SAMPLER_SHADOW);
 
 float FarthestHiZDepth(float a, float b)
 {
@@ -87,7 +88,15 @@ float LoadHiZFarthestForRect(float2 minUV, float2 maxUV, float mipLevel)
 // leaf cross-billboards that survive AS cull. Each binding set (main / depth /
 // shadow) points this slot at its own counter so a single AS shader can
 // service all three pipelines without double-counting.
-RWByteAddressBuffer                  g_LeafSurvivors   : register(u0);
+RWByteAddressBuffer                  g_LeafSurvivors   : register(XY_REG_U_MESH_LEAF_UAV_LEAF_SURVIVOR);
+
+// Shared meshlet AS cull stats buffer (8 uints). Layout matches MeshShaderPass.hlsl:
+//   [16/20] leaf  main considered/survived
+//   [24/28] leaf  shadow considered/survived
+// Main + shadow leaf binding sets bind the real buffer; the depth-prepass
+// leaf binding set binds a scratch (writes ignored) so the shared leaf_as
+// doesn't double-count.
+RWByteAddressBuffer                  g_MeshletStats    : register(XY_REG_U_MESH_LEAF_UAV_MESHLET_STATS);
 
 // =============================================================================
 // AS helpers — leaf-meshlet frustum + Hi-Z cull
@@ -187,6 +196,7 @@ struct LeafPayload
 
 groupshared LeafPayload s_payload;
 groupshared uint s_survivors;
+groupshared uint s_considered;
 groupshared uint s_survivingLeafCount;  // Σ meshlet.meta.y over surviving meshlets in this AS group.
 
 // Main + depth-prepass leaf AS. Eye-camera frustum + Hi-Z reject per leaf
@@ -199,6 +209,7 @@ void leaf_as(uint3 gid : SV_GroupID, uint gtid : SV_GroupThreadID)
     if (gtid == 0)
     {
         s_survivors          = 0;
+        s_considered         = 0;
         s_survivingLeafCount = 0;
     }
     GroupMemoryBarrierWithGroupSync();
@@ -225,6 +236,7 @@ void leaf_as(uint3 gid : SV_GroupID, uint gtid : SV_GroupThreadID)
         uint meshletLocalIdx = invocIdx * XYLEM_AS_GROUP_SIZE + gtid;
         if (meshletLocalIdx < leafSlot.meshletCount)
         {
+            InterlockedAdd(s_considered, 1);
             LeafMeshletData m = g_LeafMeshlets[leafSlot.meshletOffset + meshletLocalIdx];
             bool cull =
                 LeafMeshletFrustumCulled(m, inst.model) ||
@@ -242,10 +254,15 @@ void leaf_as(uint3 gid : SV_GroupID, uint gtid : SV_GroupThreadID)
     GroupMemoryBarrierWithGroupSync();
 
     // One global atomic per AS group instead of one per surviving meshlet.
-    if (gtid == 0 && s_survivingLeafCount > 0)
+    if (gtid == 0)
     {
         uint dummy;
-        g_LeafSurvivors.InterlockedAdd(0, s_survivingLeafCount, dummy);
+        if (s_survivingLeafCount > 0)
+            g_LeafSurvivors.InterlockedAdd(0, s_survivingLeafCount, dummy);
+        if (s_considered > 0)
+            g_MeshletStats.InterlockedAdd(16, s_considered, dummy);
+        if (s_survivors > 0)
+            g_MeshletStats.InterlockedAdd(20, s_survivors,  dummy);
     }
 
     DispatchMesh(s_survivors, 1, 1, s_payload);
@@ -262,6 +279,7 @@ void leaf_shadow_as(uint3 gid : SV_GroupID, uint gtid : SV_GroupThreadID)
     if (gtid == 0)
     {
         s_survivors          = 0;
+        s_considered         = 0;
         s_survivingLeafCount = 0;
     }
     GroupMemoryBarrierWithGroupSync();
@@ -287,6 +305,8 @@ void leaf_shadow_as(uint3 gid : SV_GroupID, uint gtid : SV_GroupThreadID)
         uint meshletLocalIdx = invocIdx * XYLEM_AS_GROUP_SIZE + gtid;
         if (meshletLocalIdx < leafSlot.meshletCount)
         {
+            // No per-meshlet cull on shadow path. considered == survived.
+            InterlockedAdd(s_considered, 1);
             LeafMeshletData m = g_LeafMeshlets[leafSlot.meshletOffset + meshletLocalIdx];
             uint survivor;
             InterlockedAdd(s_survivors, 1, survivor);
@@ -297,10 +317,15 @@ void leaf_shadow_as(uint3 gid : SV_GroupID, uint gtid : SV_GroupThreadID)
 
     GroupMemoryBarrierWithGroupSync();
 
-    if (gtid == 0 && s_survivingLeafCount > 0)
+    if (gtid == 0)
     {
         uint dummy;
-        g_LeafSurvivors.InterlockedAdd(0, s_survivingLeafCount, dummy);
+        if (s_survivingLeafCount > 0)
+            g_LeafSurvivors.InterlockedAdd(0, s_survivingLeafCount, dummy);
+        if (s_considered > 0)
+            g_MeshletStats.InterlockedAdd(24, s_considered, dummy);
+        if (s_survivors > 0)
+            g_MeshletStats.InterlockedAdd(28, s_survivors,  dummy);
     }
 
     DispatchMesh(s_survivors, 1, 1, s_payload);

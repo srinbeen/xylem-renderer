@@ -21,6 +21,8 @@ inline constexpr uint32_t kSRV_ShadowSlotOffsets = 3;
 inline constexpr uint32_t kUAV_ImpostorCount = 8;
 inline constexpr uint32_t kUAV_ImpostorIndirectArgs = 10;
 inline constexpr uint32_t kUAV_ImpostorVis = 9;
+inline constexpr uint32_t kUAV_LeafMainIndirectArgs = 14;
+inline constexpr uint32_t kUAV_LeafShadowIndirectArgs = 15;
 inline constexpr uint32_t kUAV_MainIndirectArgs = 5;
 inline constexpr uint32_t kUAV_MainRegionVis = 0;
 inline constexpr uint32_t kUAV_MainSlotCount = 1;
@@ -50,6 +52,8 @@ inline constexpr uint32_t kUAV_Dest = 0;
 
 namespace ImpostorBake {
 inline constexpr uint32_t kCB_Bake = 0;
+inline constexpr uint32_t kPushC_LeafIdx = 1;
+inline constexpr uint32_t kSRV_BakeLeaves = 0;
 inline constexpr uint32_t kSampler_Main = 0;
 inline constexpr uint32_t kTex_Diffuse = 0;
 inline constexpr uint32_t kTex_NormalMap = 1;
@@ -71,6 +75,18 @@ inline constexpr uint32_t kTex_Depth = 6;
 inline constexpr uint32_t kTex_Normal = 5;
 inline constexpr uint32_t kTex_ShadowMap = 7;
 } // namespace Impostor
+
+namespace Leaf {
+inline constexpr uint32_t kCB_Frame = 0;
+inline constexpr uint32_t kPushC_Slot = 1;
+inline constexpr uint32_t kSRV_Instances = 1;
+inline constexpr uint32_t kSRV_LeafInstances = 3;
+inline constexpr uint32_t kSRV_LeafSlots = 4;
+inline constexpr uint32_t kSRV_SlotOffsets = 2;
+inline constexpr uint32_t kSRV_Vis = 0;
+inline constexpr uint32_t kSampler_Shadow = 0;
+inline constexpr uint32_t kTex_ShadowMap = 5;
+} // namespace Leaf
 
 namespace SDSM {
 inline constexpr uint32_t kCB_Input = 0;
@@ -199,6 +215,7 @@ inline constexpr uint32_t kTex_Diffuse = 14;
 inline constexpr uint32_t kTex_HiZ = 17;
 inline constexpr uint32_t kTex_NormalMap = 15;
 inline constexpr uint32_t kTex_ShadowMap = 16;
+inline constexpr uint32_t kUAV_MeshletStats = 0;
 } // namespace Draw
 
 namespace HiZ {
@@ -206,6 +223,25 @@ inline constexpr uint32_t kPushC_DestDimensions = 0;
 inline constexpr uint32_t kSRV_Source = 0;
 inline constexpr uint32_t kUAV_Dest = 0;
 } // namespace HiZ
+
+namespace Leaf {
+inline constexpr uint32_t kCB_ASCull = 2;
+inline constexpr uint32_t kCB_Frame = 0;
+inline constexpr uint32_t kPushC_Slot = 1;
+inline constexpr uint32_t kSRV_ASInvocations = 4;
+inline constexpr uint32_t kSRV_Instances = 3;
+inline constexpr uint32_t kSRV_LeafInstances = 5;
+inline constexpr uint32_t kSRV_LeafMeshlets = 7;
+inline constexpr uint32_t kSRV_LeafSlots = 6;
+inline constexpr uint32_t kSRV_SlotCounts = 2;
+inline constexpr uint32_t kSRV_SlotOffsets = 1;
+inline constexpr uint32_t kSRV_Vis = 0;
+inline constexpr uint32_t kSampler_Shadow = 0;
+inline constexpr uint32_t kTex_HiZ = 9;
+inline constexpr uint32_t kTex_ShadowMap = 8;
+inline constexpr uint32_t kUAV_LeafSurvivor = 0;
+inline constexpr uint32_t kUAV_MeshletStats = 1;
+} // namespace Leaf
 
 namespace SDSM {
 inline constexpr uint32_t kCB_Input = 0;
@@ -243,6 +279,15 @@ inline constexpr uint32_t kUAV_VisibleCounter = 0;
 } // namespace Mesh
 
 namespace Traditional {
+namespace Leaf {
+inline constexpr uint32_t kCB_Frame = 0;
+inline constexpr uint32_t kPushC_Slot = 1;
+inline constexpr uint32_t kSRV_LeafInstances = 0;
+inline constexpr uint32_t kSRV_LeafSlots = 1;
+inline constexpr uint32_t kSampler_Shadow = 0;
+inline constexpr uint32_t kTex_ShadowMap = 2;
+} // namespace Leaf
+
 namespace Shadow {
 inline constexpr uint32_t kCB_Frame = 0;
 inline constexpr uint32_t kPushC_CascadeIndex = 1;

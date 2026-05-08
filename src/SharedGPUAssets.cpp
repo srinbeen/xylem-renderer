@@ -266,8 +266,8 @@ bool SharedGPUAssets::_InitBakePipeline()
     leafBLD.visibility = nvrhi::ShaderType::All;
     leafBLD.bindings = {
         nvrhi::BindingLayoutItem::VolatileConstantBuffer(compute_reg::ImpostorBake::kCB_Bake),
-        nvrhi::BindingLayoutItem::PushConstants(1, sizeof(uint32_t) * 4),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0),
+        nvrhi::BindingLayoutItem::PushConstants(compute_reg::ImpostorBake::kPushC_LeafIdx, sizeof(uint32_t) * 4),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(compute_reg::ImpostorBake::kSRV_BakeLeaves),
     };
     m_LeafBakeBindingLayout = m_Device->createBindingLayout(leafBLD);
     return m_LeafBakeBindingLayout != nullptr;
@@ -587,8 +587,8 @@ bool SharedGPUAssets::_BakeImpostors(nvrhi::ICommandList* cl)
         nvrhi::BindingSetDesc leafBSD;
         leafBSD.bindings = {
             nvrhi::BindingSetItem::ConstantBuffer(compute_reg::ImpostorBake::kCB_Bake, m_BakeConstantBuffer),
-            nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t) * 4),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_LeafInstancesBuffer),
+            nvrhi::BindingSetItem::PushConstants(compute_reg::ImpostorBake::kPushC_LeafIdx, sizeof(uint32_t) * 4),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::ImpostorBake::kSRV_BakeLeaves, m_LeafInstancesBuffer),
         };
         m_LeafBakeBindingSet = m_Device->createBindingSet(leafBSD, m_LeafBakeBindingLayout);
         if (!m_LeafBakeBindingSet) return false;

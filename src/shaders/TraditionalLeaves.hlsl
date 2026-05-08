@@ -1,10 +1,11 @@
 #include "../include/macros.h"
 #include "LeafCommon.hlsli"
 #include "ShadowCascadeCommon.hlsli"
+#include "ShaderRegisterMap.hlsli"
 
 #pragma pack_matrix(row_major)
 
-cbuffer CB : register(b0)
+cbuffer CB : register(XY_REG_B_TRADITIONAL_LEAF_CB_FRAME)
 {
     float4x4 viewProj;
     float4x4 viewMatrix;
@@ -15,16 +16,16 @@ cbuffer CB : register(b0)
     float4   _pad1[6];
 };
 
-cbuffer LeafPush : register(b1)
+cbuffer LeafPush : register(XY_REG_B_TRADITIONAL_LEAF_PUSH_C_SLOT)
 {
     uint leafSlot;
     uint cascadeIdx;
 };
 
-StructuredBuffer<LeafInstanceData> g_Leaves : register(t0);
-StructuredBuffer<LeafSlotData>     g_LeafSlots : register(t1);
-Texture2DArray                     t_ShadowMap : register(t2);
-SamplerComparisonState             s_ShadowSampler : register(s0);
+StructuredBuffer<LeafInstanceData> g_Leaves        : register(XY_REG_T_TRADITIONAL_LEAF_SRV_LEAF_INSTANCES);
+StructuredBuffer<LeafSlotData>     g_LeafSlots     : register(XY_REG_T_TRADITIONAL_LEAF_SRV_LEAF_SLOTS);
+Texture2DArray                     t_ShadowMap    : register(XY_REG_T_TRADITIONAL_LEAF_TEX_SHADOW_MAP);
+SamplerComparisonState             s_ShadowSampler : register(XY_REG_S_TRADITIONAL_LEAF_SAMPLER_SHADOW);
 
 struct V2P
 {

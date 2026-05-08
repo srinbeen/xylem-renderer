@@ -15,7 +15,7 @@ SamplerState s_Sampler   : register(XY_REG_S_COMPUTE_IMPOSTORBAKE_SAMPLER_MAIN);
 
 // Leaf bake bindings live on a separate root layout — one CB at b0 (mvp shared with trunk path),
 // a leaf-instance push constant at b1, and the per-asset leaf instance buffer at t0.
-cbuffer LeafBakePush : register(b1)
+cbuffer LeafBakePush : register(XY_REG_B_COMPUTE_IMPOSTORBAKE_PUSH_C_LEAF_IDX)
 {
     uint g_LeafOffset;
     uint g_LeafCount;
@@ -23,7 +23,7 @@ cbuffer LeafBakePush : register(b1)
     uint _leafPad1;
 };
 
-StructuredBuffer<LeafInstanceData> g_BakeLeaves : register(t0);
+StructuredBuffer<LeafInstanceData> g_BakeLeaves : register(XY_REG_T_COMPUTE_IMPOSTORBAKE_SRV_BAKE_LEAVES);
 
 struct V2P
 {

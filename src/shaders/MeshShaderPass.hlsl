@@ -76,6 +76,16 @@ Texture2D                            t_NormalMap      : register(XY_REG_T_MESH_D
 Texture2DArray                       t_ShadowMap      : register(XY_REG_T_MESH_DRAW_TEX_SHADOW_MAP);
 Texture2D<float4>                    t_HiZ            : register(XY_REG_T_MESH_DRAW_TEX_HI_Z);
 
+// Meshlet AS cull telemetry. Layout (8 uints):
+//   [0/4]   trunk main considered/survived
+//   [8/12]  trunk shadow considered/survived
+//   [16/20] leaf  main considered/survived
+//   [24/28] leaf  shadow considered/survived
+// Cleared each frame on the C++ side; main/shadow pipelines bind the real
+// buffer, the depth prepass binds a scratch buffer (writes discarded) so the
+// shared main_as doesn't double-count.
+RWByteAddressBuffer                  g_MeshletStats   : register(XY_REG_U_MESH_DRAW_UAV_MESHLET_STATS);
+
 SamplerState                         s_Sampler        : register(XY_REG_S_MESH_DRAW_SAMPLER_MAIN);
 SamplerComparisonState               s_ShadowSampler  : register(XY_REG_S_MESH_DRAW_SAMPLER_SHADOW);
 
@@ -226,12 +236,13 @@ bool MeshletHiZOccluded(MeshletDesc m, float4x4 model)
 
 groupshared ASPayload s_payload;
 groupshared uint      s_survivors;
+groupshared uint      s_considered;
 
 [numthreads(XYLEM_AS_GROUP_SIZE, 1, 1)]
 void main_as(uint3 gid  : SV_GroupID,
              uint  gtid : SV_GroupThreadID)
 {
-    if (gtid == 0) s_survivors = 0;
+    if (gtid == 0) { s_survivors = 0; s_considered = 0; }
     GroupMemoryBarrierWithGroupSync();
 
     uint slotIdx            = g_SlotIdx;
@@ -257,9 +268,10 @@ void main_as(uint3 gid  : SV_GroupID,
         uint meshletLocalIdx = invocIdx * XYLEM_AS_GROUP_SIZE + gtid;
         if (meshletLocalIdx < al.meshletCount)
         {
+            InterlockedAdd(s_considered, 1);
             MeshletDesc m = g_Meshlets[al.meshletOffset + meshletLocalIdx];
             bool cull =
-                MeshletConeCull(m, inst.model, g_CameraPos) || 
+                MeshletConeCull(m, inst.model, g_CameraPos) ||
                 MeshletHiZOccluded(m, inst.model);
             if (!cull)
             {
@@ -270,6 +282,15 @@ void main_as(uint3 gid  : SV_GroupID,
         }
     }
     GroupMemoryBarrierWithGroupSync();
+
+    if (gtid == 0)
+    {
+        uint dummy;
+        if (s_considered > 0)
+            g_MeshletStats.InterlockedAdd(0, s_considered, dummy);
+        if (s_survivors > 0)
+            g_MeshletStats.InterlockedAdd(4, s_survivors,  dummy);
+    }
 
     DispatchMesh(s_survivors, 1, 1, s_payload);
 }
@@ -357,7 +378,7 @@ void main_ms(
 void shadow_as(uint3 gid  : SV_GroupID,
                uint  gtid : SV_GroupThreadID)
 {
-    if (gtid == 0) s_survivors = 0;
+    if (gtid == 0) { s_survivors = 0; s_considered = 0; }
     GroupMemoryBarrierWithGroupSync();
 
     uint slotIdx         = g_SlotIdx;              // shadow slot = ai*XYLEM_NUM_CASCADES + c
@@ -385,12 +406,24 @@ void shadow_as(uint3 gid  : SV_GroupID,
         uint meshletLocalIdx = invocIdx * XYLEM_AS_GROUP_SIZE + gtid;
         if (meshletLocalIdx < al.meshletCount)
         {
+            // No per-meshlet cone/Hi-Z cull on shadow path — every meshlet of a
+            // cascade-visible instance survives. Considered == survived.
+            InterlockedAdd(s_considered, 1);
             uint slot;
             InterlockedAdd(s_survivors, 1, slot);
             s_payload.meshletIndices[slot] = meshletLocalIdx;
         }
     }
     GroupMemoryBarrierWithGroupSync();
+
+    if (gtid == 0)
+    {
+        uint dummy;
+        if (s_considered > 0)
+            g_MeshletStats.InterlockedAdd(8,  s_considered, dummy);
+        if (s_survivors > 0)
+            g_MeshletStats.InterlockedAdd(12, s_survivors,  dummy);
+    }
 
     DispatchMesh(s_survivors, 1, 1, s_payload);
 }

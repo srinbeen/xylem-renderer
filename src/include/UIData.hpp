@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include "Render.hpp"
+
 namespace Xylem {
 
 enum class Pipeline { Traditional = 0, Compute = 1, MeshShader = 2 };
@@ -26,6 +28,15 @@ struct UIData {
     uint32_t shadowCulledCount      = 0; // totalInstanceCount - shadowVisibleCount
     uint32_t shadowCascadeDrawCount = 0; // sum over all cascades of per-cascade visible (counts overdraw)
     uint32_t shadowOverdrawCount    = 0; // shadowCascadeDrawCount - shadowVisibleCount
+
+    // Shadow draws by cascade. Geometry and billboard tracks are kept
+    // separate so the UI can show "<cascade total> (<billboarded>)" per row.
+    // Indexed by cascade [0..Render::c_NumCascades). All-zero in a fresh
+    // frame; populated by each render pass's per-frame UI write.
+    //   shadowCascadeDrawCount     = Σ_c shadowGeomDrawsPerCascade[c]      (sanity identity)
+    //   shadowImpostorVisibleCount = Σ_c shadowBillboardDrawsPerCascade[c] (sanity identity)
+    uint32_t shadowGeomDrawsPerCascade[Render::c_NumCascades]      = {};
+    uint32_t shadowBillboardDrawsPerCascade[Render::c_NumCascades] = {};
 
     // Scene-wide leaf totals (CPU-derived capacity) and per-frame visible counts
     // (GPU readback from leaf_as / leaf_shadow_as atomics, mesh-shader pipeline only;
@@ -54,13 +65,24 @@ struct UIData {
     uint32_t shadowImpostorVisibleCount = 0;     // total across (asset, cascade)
 
     // Mesh-shader pipeline stats
-    uint32_t asMeshletsDispatched = 0;
-    uint32_t asMeshletsCulled     = 0;
-    uint32_t msInvocations        = 0;
     float    meshletMegaBufferMB  = 0.0f;
     uint32_t totalMeshletCount    = 0;
     uint32_t totalTerrainMeshletCount   = 0;
     uint32_t visibleTerrainMeshletCount = 0;
+
+    // Mesh-shader pipeline meshlet AS cull stats (P2 only, GPU readback,
+    // k_QueuedFrames-1 latency). "Dispatched" reflects only post-instance-cull
+    // visible instances × per-slot meshlet count; AS-level cone+Hi-Z reduces
+    // this further to "rendered". Shadow rows have no per-meshlet cull, so
+    // dispatched == rendered (culled = 0) on the shadow path.
+    uint32_t trunkMainMeshletsDispatched   = 0;
+    uint32_t trunkMainMeshletsRendered     = 0;
+    uint32_t trunkShadowMeshletsDispatched = 0;
+    uint32_t trunkShadowMeshletsRendered   = 0;
+    uint32_t leafMainMeshletsDispatched    = 0;
+    uint32_t leafMainMeshletsRendered      = 0;
+    uint32_t leafShadowMeshletsDispatched  = 0;
+    uint32_t leafShadowMeshletsRendered    = 0;
 
     // SDSM debug readback (populated when hizActiveThisFrame and SDSM ran).
     bool     sdsmDebugValid       = false;

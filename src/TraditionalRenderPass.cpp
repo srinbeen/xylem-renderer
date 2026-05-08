@@ -232,22 +232,22 @@ void TraditionalRenderPass::_RebuildBindingSets() {
 
     nvrhi::BindingSetDesc leafBSD;
     leafBSD.bindings = {
-        nvrhi::BindingSetItem::ConstantBuffer(0, m_StageResources.frameShared.constantBuffer, nvrhi::BufferRange(0, shader_cb::kFrameSize)),
-        nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t) * 2),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_Shared->leafInstancesBuffer()),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_Shared->leafSlotsBuffer()),
-        nvrhi::BindingSetItem::Texture_SRV(2, m_StageResources.shadowStage.depthTexture),
-        nvrhi::BindingSetItem::Sampler(0, m_StageResources.shadowStage.comparisonSampler),
+        nvrhi::BindingSetItem::ConstantBuffer(traditional_reg::Leaf::kCB_Frame, m_StageResources.frameShared.constantBuffer, nvrhi::BufferRange(0, shader_cb::kFrameSize)),
+        nvrhi::BindingSetItem::PushConstants(traditional_reg::Leaf::kPushC_Slot, sizeof(uint32_t) * 2),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(traditional_reg::Leaf::kSRV_LeafInstances, m_Shared->leafInstancesBuffer()),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(traditional_reg::Leaf::kSRV_LeafSlots, m_Shared->leafSlotsBuffer()),
+        nvrhi::BindingSetItem::Texture_SRV(traditional_reg::Leaf::kTex_ShadowMap, m_StageResources.shadowStage.depthTexture),
+        nvrhi::BindingSetItem::Sampler(traditional_reg::Leaf::kSampler_Shadow, m_StageResources.shadowStage.comparisonSampler),
     };
     m_StageResources.leafStage.bindingSet =
         GetDevice()->createBindingSet(leafBSD, m_StageResources.leafStage.bindingLayout);
 
     nvrhi::BindingSetDesc leafShadowBSD;
     leafShadowBSD.bindings = {
-        nvrhi::BindingSetItem::ConstantBuffer(0, m_StageResources.frameShared.constantBuffer, nvrhi::BufferRange(0, shader_cb::kFrameSize)),
-        nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t) * 2),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_Shared->leafInstancesBuffer()),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_Shared->leafShadowSlotsBuffer()),
+        nvrhi::BindingSetItem::ConstantBuffer(traditional_reg::Leaf::kCB_Frame, m_StageResources.frameShared.constantBuffer, nvrhi::BufferRange(0, shader_cb::kFrameSize)),
+        nvrhi::BindingSetItem::PushConstants(traditional_reg::Leaf::kPushC_Slot, sizeof(uint32_t) * 2),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(traditional_reg::Leaf::kSRV_LeafInstances, m_Shared->leafInstancesBuffer()),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(traditional_reg::Leaf::kSRV_LeafSlots, m_Shared->leafShadowSlotsBuffer()),
     };
     m_StageResources.leafStage.shadowBindingSet =
         GetDevice()->createBindingSet(leafShadowBSD, m_StageResources.leafStage.shadowBindingLayout);
@@ -591,6 +591,36 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_UI.shadowCulledCount    = m_UI.totalInstanceCount - m_TotalShadowInstancesDrawn;
     m_UI.visibleLeafInstanceCount       = visibleLeafTotal;
     m_UI.shadowVisibleLeafInstanceCount = shadowVisibleLeafTotal;
+
+    // Per-cascade shadow draws. P0 has no shadow billboard tier — every
+    // cascade's geometry draw count comes from m_CascadeShadowData[c],
+    // and all billboard counts are 0.
+    {
+        uint32_t cascadeSum = 0;
+        for (uint32_t c = 0; c < Render::c_NumCascades; ++c) {
+            const uint32_t v = static_cast<uint32_t>(m_CascadeShadowData[c].visibleRefs.size());
+            m_UI.shadowGeomDrawsPerCascade[c]      = v;
+            m_UI.shadowBillboardDrawsPerCascade[c] = 0;
+            cascadeSum += v;
+        }
+        m_UI.shadowCascadeDrawCount = cascadeSum;
+        m_UI.shadowOverdrawCount    = (cascadeSum >= m_TotalShadowInstancesDrawn)
+            ? cascadeSum - m_TotalShadowInstancesDrawn : 0;
+    }
+
+    // Zero P1/P2-only fields so they don't carry stale values across a
+    // pipeline switch.
+    m_UI.shadowImpostorVisibleCount    = 0;
+    m_UI.trunkMainMeshletsDispatched   = 0;
+    m_UI.trunkMainMeshletsRendered     = 0;
+    m_UI.trunkShadowMeshletsDispatched = 0;
+    m_UI.trunkShadowMeshletsRendered   = 0;
+    m_UI.leafMainMeshletsDispatched    = 0;
+    m_UI.leafMainMeshletsRendered      = 0;
+    m_UI.leafShadowMeshletsDispatched  = 0;
+    m_UI.leafShadowMeshletsRendered    = 0;
+    m_UI.totalTerrainMeshletCount      = 0;
+    m_UI.visibleTerrainMeshletCount    = 0;
 
     m_VisibleInstanceReferences.clear();
     m_VisibleImpostorReferences.clear();
@@ -1324,12 +1354,12 @@ bool TraditionalRenderPass::_InitLeafPass() {
     nvrhi::BindingLayoutDesc leafLayout;
     leafLayout.visibility = nvrhi::ShaderType::All;
     leafLayout.bindings = {
-        nvrhi::BindingLayoutItem::ConstantBuffer(0),
-        nvrhi::BindingLayoutItem::PushConstants(1, sizeof(uint32_t) * 2),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1),
-        nvrhi::BindingLayoutItem::Texture_SRV(2),
-        nvrhi::BindingLayoutItem::Sampler(0),
+        nvrhi::BindingLayoutItem::ConstantBuffer(traditional_reg::Leaf::kCB_Frame),
+        nvrhi::BindingLayoutItem::PushConstants(traditional_reg::Leaf::kPushC_Slot, sizeof(uint32_t) * 2),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(traditional_reg::Leaf::kSRV_LeafInstances),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(traditional_reg::Leaf::kSRV_LeafSlots),
+        nvrhi::BindingLayoutItem::Texture_SRV(traditional_reg::Leaf::kTex_ShadowMap),
+        nvrhi::BindingLayoutItem::Sampler(traditional_reg::Leaf::kSampler_Shadow),
     };
     m_StageResources.leafStage.bindingLayout = GetDevice()->createBindingLayout(leafLayout);
     if (!m_StageResources.leafStage.bindingLayout) return false;
@@ -1337,10 +1367,10 @@ bool TraditionalRenderPass::_InitLeafPass() {
     nvrhi::BindingLayoutDesc shadowLayout;
     shadowLayout.visibility = nvrhi::ShaderType::All;
     shadowLayout.bindings = {
-        nvrhi::BindingLayoutItem::ConstantBuffer(0),
-        nvrhi::BindingLayoutItem::PushConstants(1, sizeof(uint32_t) * 2),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0),
-        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1),
+        nvrhi::BindingLayoutItem::ConstantBuffer(traditional_reg::Leaf::kCB_Frame),
+        nvrhi::BindingLayoutItem::PushConstants(traditional_reg::Leaf::kPushC_Slot, sizeof(uint32_t) * 2),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(traditional_reg::Leaf::kSRV_LeafInstances),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(traditional_reg::Leaf::kSRV_LeafSlots),
     };
     m_StageResources.leafStage.shadowBindingLayout = GetDevice()->createBindingLayout(shadowLayout);
     return m_StageResources.leafStage.shadowBindingLayout != nullptr;

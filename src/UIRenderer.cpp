@@ -8,6 +8,43 @@
 
 using namespace Xylem;
 
+const char* UIRenderer::_fmtCount(uint64_t v) {
+    // Rotating ring of thread-local scratch buffers so that multiple
+    // _fmtCount calls in the same ImGui::Text varargs list don't trample
+    // each other (a single shared buffer would make all %s arguments
+    // resolve to the same — last-written — value).
+    thread_local char bufs[8][32];
+    thread_local int  next = 0;
+    char* buf = bufs[next];
+    next = (next + 1) & 7;
+
+    char tmp[24];
+    int  n = snprintf(tmp, sizeof(tmp), "%llu", static_cast<unsigned long long>(v));
+    if (n <= 0) { buf[0] = '0'; buf[1] = 0; return buf; }
+
+    // Walk tmp right-to-left into buf right-to-left, inserting a comma
+    // every 3 digits.
+    int outPos = 0;
+    int groupCount = 0;
+    for (int i = n - 1; i >= 0; --i) {
+        if (groupCount == 3) {
+            buf[outPos++] = ',';
+            groupCount = 0;
+        }
+        buf[outPos++] = tmp[i];
+        ++groupCount;
+    }
+    buf[outPos] = 0;
+
+    // Reverse buf in place.
+    for (int a = 0, b = outPos - 1; a < b; ++a, --b) {
+        char t = buf[a];
+        buf[a] = buf[b];
+        buf[b] = t;
+    }
+    return buf;
+}
+
 bool UIRenderer::KeyboardUpdate(int key, int scancode, int action, int mods) {
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
         m_ui.ShowUI = !m_ui.ShowUI;
@@ -52,43 +89,15 @@ void UIRenderer::buildUI() {
             ImGui::TextDisabled("GPU pass:   (pending)");
 
         ImGui::Separator();
-        ImGui::Text("Trees");
-        if (m_ui.impostorVisibleCount > 0) {
-            ImGui::Text("  visible: %u / %u  (impostors: %u, culled: %u)",
-                m_ui.visibleInstanceCount, m_ui.totalInstanceCount,
-                m_ui.impostorVisibleCount, m_ui.culledInstanceCount);
-        } else {
-            ImGui::Text("  visible: %u / %u  (culled: %u)",
-                m_ui.visibleInstanceCount, m_ui.totalInstanceCount, m_ui.culledInstanceCount);
+        _buildTreesFunnel();
+        ImGui::Separator();
+        _buildLeavesFunnel();
+        if (m_ui.activePipeline == Pipeline::MeshShader && m_ui.totalTerrainMeshletCount > 0) {
+            ImGui::Separator();
+            _buildTerrainFunnel();
         }
-        ImGui::Text("  shadow casters: %u / %u  (culled: %u)",
-            m_ui.shadowVisibleCount, m_ui.totalInstanceCount, m_ui.shadowCulledCount);
-        ImGui::Text("  shadow impostors: %u", m_ui.shadowImpostorVisibleCount);
-        ImGui::Text("  cascade draws:  %u  (overdraw: %u)",
-            m_ui.shadowCascadeDrawCount, m_ui.shadowOverdrawCount);
-
-        ImGui::Text("Leaves");
-        if (m_ui.visibleLeafInstanceCount > 0 || m_ui.shadowVisibleLeafInstanceCount > 0) {
-            const uint32_t culledLeaves = (m_ui.visibleLeafInstanceCount <= m_ui.totalLeafInstanceCount)
-                ? m_ui.totalLeafInstanceCount - m_ui.visibleLeafInstanceCount : 0;
-            ImGui::Text("  visible: %u / %u  (culled: %u)",
-                m_ui.visibleLeafInstanceCount, m_ui.totalLeafInstanceCount, culledLeaves);
-            ImGui::Text("  shadow:  %u",
-                m_ui.shadowVisibleLeafInstanceCount);
-        } else {
-            ImGui::Text("  total: %u  (no per-frame readback in this pipeline)",
-                m_ui.totalLeafInstanceCount);
-        }
-        ImGui::Text("  meshlets total: %u", m_ui.totalLeafMeshletCount);
-
-        if (m_ui.totalTerrainMeshletCount > 0) {
-            const uint32_t culledTerrain = (m_ui.visibleTerrainMeshletCount <= m_ui.totalTerrainMeshletCount)
-                ? m_ui.totalTerrainMeshletCount - m_ui.visibleTerrainMeshletCount : 0;
-            ImGui::Text("Terrain meshlets visible: %u / %u  (culled: %u)",
-                m_ui.visibleTerrainMeshletCount, m_ui.totalTerrainMeshletCount, culledTerrain);
-        }
-
-        ImGui::Text("Draw calls: %u", m_ui.drawCallCount);
+        ImGui::Separator();
+        ImGui::Text("Draw calls: %s", _fmtCount(m_ui.drawCallCount));
     }
 
     _buildLSystemsSection();
@@ -618,6 +627,94 @@ void UIRenderer::_buildRegionsSection() {
 
         ImGui::Unindent();
     }
+}
+
+
+void UIRenderer::_buildTreesFunnel() {
+    ImGui::Text("Trees");
+    ImGui::Indent();
+
+    const uint32_t total      = m_ui.totalInstanceCount;
+    const uint32_t visible    = m_ui.visibleInstanceCount;
+    const uint32_t culled     = m_ui.culledInstanceCount;
+    const uint32_t impostors  = m_ui.impostorVisibleCount;
+    const uint32_t mesh       = (visible >= impostors) ? (visible - impostors) : 0;
+
+    ImGui::Text("Total instances:    %s",                   _fmtCount(total));
+    ImGui::Text("Post-cull:          %s   (%s culled)",      _fmtCount(visible), _fmtCount(culled));
+    ImGui::Text("Post-billboard:     %s   (%s billboarded)", _fmtCount(mesh),    _fmtCount(impostors));
+
+    ImGui::Spacing();
+    ImGui::Text("Shadow draws (actual, per cascade):");
+    ImGui::Indent();
+    uint32_t shadowGeomSum = 0;
+    uint32_t shadowBillSum = 0;
+    for (uint32_t c = 0; c < Render::c_NumCascades; ++c) {
+        const uint32_t geom = m_ui.shadowGeomDrawsPerCascade[c];
+        const uint32_t bill = m_ui.shadowBillboardDrawsPerCascade[c];
+        ImGui::Text("Cascade %u:          %s   (%s billboarded)", c, _fmtCount(geom), _fmtCount(bill));
+        shadowGeomSum += geom;
+        shadowBillSum += bill;
+    }
+    ImGui::Text("Total:              %s   (%s billboarded)", _fmtCount(shadowGeomSum), _fmtCount(shadowBillSum));
+    ImGui::Unindent();
+
+    if (m_ui.activePipeline == Pipeline::MeshShader) {
+        ImGui::Spacing();
+        ImGui::TextDisabled("-- mesh-shader AS --");
+        const uint32_t asDisp = m_ui.trunkMainMeshletsDispatched;
+        const uint32_t asRend = m_ui.trunkMainMeshletsRendered;
+        const uint32_t asCull = (asDisp >= asRend) ? (asDisp - asRend) : 0;
+        ImGui::Text("Total AS post-instance: %s",                  _fmtCount(asDisp));
+        ImGui::Text("Post-AS culling:        %s   (%s culled)",    _fmtCount(asRend), _fmtCount(asCull));
+        ImGui::Text("Shadow AS draws:        %s   (no AS cull on shadow path)",
+                    _fmtCount(m_ui.trunkShadowMeshletsRendered));
+    }
+
+    ImGui::Unindent();
+}
+
+void UIRenderer::_buildLeavesFunnel() {
+    ImGui::Text("Leaves");
+    ImGui::Indent();
+
+    const uint32_t total  = m_ui.totalLeafInstanceCount;
+    const uint32_t drawn  = m_ui.visibleLeafInstanceCount;
+    const uint32_t culled = (total >= drawn) ? (total - drawn) : 0;
+
+    ImGui::Text("Total leaf instances: %s",                                       _fmtCount(total));
+    ImGui::Text("Post-cull:            %s   (%s culled, incl. leaves on billboarded trees)",
+                _fmtCount(drawn), _fmtCount(culled));
+    ImGui::Spacing();
+    ImGui::Text("Shadow draws:         %s   (cascade-summed)", _fmtCount(m_ui.shadowVisibleLeafInstanceCount));
+
+    if (m_ui.activePipeline == Pipeline::MeshShader) {
+        ImGui::Spacing();
+        ImGui::TextDisabled("-- mesh-shader AS --");
+        const uint32_t asDisp = m_ui.leafMainMeshletsDispatched;
+        const uint32_t asRend = m_ui.leafMainMeshletsRendered;
+        const uint32_t asCull = (asDisp >= asRend) ? (asDisp - asRend) : 0;
+        ImGui::Text("Total AS post-instance: %s",                  _fmtCount(asDisp));
+        ImGui::Text("Post-AS culling:        %s   (%s culled)",    _fmtCount(asRend), _fmtCount(asCull));
+        ImGui::Text("Shadow AS draws:        %s",                  _fmtCount(m_ui.leafShadowMeshletsRendered));
+    }
+
+    ImGui::Unindent();
+}
+
+void UIRenderer::_buildTerrainFunnel() {
+    ImGui::Text("Terrain (P2)");
+    ImGui::Indent();
+
+    const uint32_t total  = m_ui.totalTerrainMeshletCount;
+    const uint32_t drawn  = m_ui.visibleTerrainMeshletCount;
+    const uint32_t culled = (total >= drawn) ? (total - drawn) : 0;
+
+    ImGui::Text("Total meshlets:       %s",                  _fmtCount(total));
+    ImGui::Text("Post-cull:            %s   (%s culled)",    _fmtCount(drawn), _fmtCount(culled));
+    ImGui::TextDisabled("Shadow:               \xE2\x80\x94   (full terrain per cascade, traditional VS)");
+
+    ImGui::Unindent();
 }
 
 

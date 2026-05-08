@@ -102,11 +102,19 @@ private:
     void _buildLSystemsSection();
     void _buildAssetsSection();
     void _buildRegionsSection();
+    void _buildTreesFunnel();
+    void _buildLeavesFunnel();
+    void _buildTerrainFunnel();
     void _buildDebugTopDownSection();
     void _buildDebugShadowTopDownSection();
     void _buildShadowMapSection();
     void _buildHiZSection();
     void _buildImpostorAtlasSection();
+
+    // Format a uint32 with thousands grouping ("12,345"). Returns a
+    // pointer into a thread-local buffer; valid only until the next call
+    // on the same thread. Used inline in funnel rows.
+    static const char* _fmtCount(uint64_t v);
 
     // Shared top-down canvas context — world XZ <-> screen pixel transform.
     struct TopDownCanvas {

@@ -17,6 +17,8 @@ using namespace donut::math;
 #include <donut/shaders/sky_cb.h>
 
 #include <filesystem>
+#include <limits>
+#include <unordered_map>
 
 using namespace Xylem;
 namespace shader_cb = Xylem::shader::cb;
@@ -115,6 +117,8 @@ void TraditionalRenderPass::_RebuildInstanceBuffers() {
 
     _BuildImpostorSlotLayout();
     _RebuildImpostorBuffers();
+    _BuildShadowImpostorSlotLayout();
+    _RebuildShadowImpostorBuffers();
 }
 
 void TraditionalRenderPass::_BuildImpostorSlotLayout() {
@@ -188,6 +192,85 @@ void TraditionalRenderPass::_RebuildImpostorBuffers() {
     m_ImpostorWriteOffsets.assign(numAssets, 0);
     m_VisibleImpostorReferences.clear();
     m_VisibleImpostorReferences.reserve(m_Registry.totalInstanceCount());
+}
+
+void TraditionalRenderPass::_BuildShadowImpostorSlotLayout() {
+    const uint32_t numAssets = static_cast<uint32_t>(m_GPUAssets.size());
+    const uint32_t nC        = Render::c_NumCascades;
+    const uint32_t numSlots  = std::max(1u, numAssets * nC);
+
+    // Worst case per slot: every live instance of asset ai is a billboard
+    // in cascade c. Use the same per-asset live count the main impostor
+    // slot layout uses; replicate across all cascades.
+    std::vector<uint32_t> livePerAsset(std::max(1u, numAssets), 0);
+    const auto& regions = m_Registry.getRegions();
+    for (const auto& region : regions) {
+        for (const auto& inst : region.instances) {
+            auto it = m_AssetIdToGPUIndex.find(inst.assetId);
+            if (it == m_AssetIdToGPUIndex.end()) continue;
+            uint32_t gpuIdx = static_cast<uint32_t>(it->second);
+            if (gpuIdx < numAssets)
+                livePerAsset[gpuIdx]++;
+        }
+    }
+
+    m_ShadowImpostorSlotOffsets.assign(numSlots, 0);
+    m_ShadowImpostorMaxSlotCounts.assign(numSlots, 0);
+    m_ShadowImpostorVisBufferSize = 0;
+
+    for (uint32_t ai = 0; ai < numAssets; ++ai) {
+        for (uint32_t c = 0; c < nC; ++c) {
+            const uint32_t s = ai * nC + c;
+            m_ShadowImpostorSlotOffsets[s]   = m_ShadowImpostorVisBufferSize;
+            m_ShadowImpostorMaxSlotCounts[s] = livePerAsset[ai];
+            m_ShadowImpostorVisBufferSize   += livePerAsset[ai];
+        }
+    }
+    m_ShadowImpostorVisBufferSize    = std::max(1u, m_ShadowImpostorVisBufferSize);
+    m_ShadowImpostorInstanceCapacity = std::max(1u, m_Registry.totalInstanceCount());
+}
+
+void TraditionalRenderPass::_RebuildShadowImpostorBuffers() {
+    auto* device = GetDevice();
+    auto& sip = m_StageResources.shadowImpostorStage;
+
+    const uint32_t numAssets = std::max(1u, static_cast<uint32_t>(m_GPUAssets.size()));
+    const uint32_t numSlots  = std::max(1u, numAssets * Render::c_NumCascades);
+    const uint32_t visCap    = std::max(1u, m_ShadowImpostorVisBufferSize);
+    const uint32_t instCap   = std::max(1u, m_ShadowImpostorInstanceCapacity);
+
+    sip.instanceBuffer = device->createBuffer(
+        nvrhi::BufferDesc()
+            .setByteSize(instCap * sizeof(Render::InstanceBufferEntry))
+            .setStructStride(sizeof(Render::InstanceBufferEntry))
+            .setDebugName("TraditionalShadowImpostorInstanceBuffer")
+            .enableAutomaticStateTracking(nvrhi::ResourceStates::CopyDest));
+
+    sip.cullDataBuffer = device->createBuffer(
+        nvrhi::BufferDesc()
+            .setByteSize(instCap * sizeof(Render::CullInstanceData))
+            .setStructStride(sizeof(Render::CullInstanceData))
+            .setDebugName("TraditionalShadowImpostorCullDataBuffer")
+            .enableAutomaticStateTracking(nvrhi::ResourceStates::CopyDest));
+
+    sip.visBuffer = device->createBuffer(
+        nvrhi::BufferDesc()
+            .setByteSize(visCap * sizeof(uint32_t))
+            .setStructStride(sizeof(uint32_t))
+            .setDebugName("TraditionalShadowImpostorVisBuffer")
+            .enableAutomaticStateTracking(nvrhi::ResourceStates::CopyDest));
+
+    sip.slotOffsetBuffer = device->createBuffer(
+        nvrhi::BufferDesc()
+            .setByteSize(numSlots * sizeof(uint32_t))
+            .setStructStride(sizeof(uint32_t))
+            .setDebugName("TraditionalShadowImpostorSlotOffsetBuffer")
+            .enableAutomaticStateTracking(nvrhi::ResourceStates::CopyDest));
+
+    m_ShadowImpostorInstanceStaging.clear();
+    m_ShadowImpostorCullStaging.clear();
+    m_ShadowImpostorVisStaging.clear();
+    m_ShadowImpostorCounts.assign(numSlots, 0);
 }
 
 void TraditionalRenderPass::_RebuildBindingSets() {
@@ -296,6 +379,48 @@ void TraditionalRenderPass::_RebuildBindingSets() {
         m_StageResources.impostorStage.bindingSets[i] = GetDevice()->createBindingSet(
             bsd, m_StageResources.impostorStage.bindingLayout);
     }
+
+    auto& sip = m_StageResources.shadowImpostorStage;
+    sip.bindingSets.clear();
+    if (sip.bindingLayout
+        && sip.instanceBuffer
+        && sip.cullDataBuffer
+        && sip.visBuffer
+        && sip.slotOffsetBuffer
+        && m_StageResources.impostorStage.sampler
+        && m_StageResources.impostorStage.depthSampler
+        && m_Shared
+        && m_Shared->impostorAlbedo()
+        && m_Shared->impostorDepth()
+        && m_Shared->assetDimsBuffer()
+        && !barkTextures.empty())
+    {
+        sip.bindingSets.resize(barkTextures.size());
+        for (size_t i = 0; i < barkTextures.size(); i++) {
+            nvrhi::BindingSetDesc bsd;
+            bsd.bindings = {
+                nvrhi::BindingSetItem::ConstantBuffer(
+                    compute_reg::ShadowImpostor::kCB_Frame,
+                    m_StageResources.frameShared.constantBuffer,
+                    nvrhi::BufferRange(0, shader_cb::kCullFrameSize)),
+                nvrhi::BindingSetItem::PushConstants(
+                    compute_reg::ShadowImpostor::kPushC_AssetCascade, sizeof(uint32_t) * 2),
+
+                nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::ShadowImpostor::kSRV_Vis,         sip.visBuffer),
+                nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::ShadowImpostor::kSRV_Instances,   sip.instanceBuffer),
+                nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::ShadowImpostor::kSRV_SlotOffsets, sip.slotOffsetBuffer),
+                nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::ShadowImpostor::kSRV_CullData,    sip.cullDataBuffer),
+
+                nvrhi::BindingSetItem::Texture_SRV(compute_reg::ShadowImpostor::kTex_Albedo, m_Shared->impostorAlbedo()),
+                nvrhi::BindingSetItem::Texture_SRV(compute_reg::ShadowImpostor::kTex_Depth,  m_Shared->impostorDepth(), nvrhi::Format::R32_FLOAT),
+                nvrhi::BindingSetItem::StructuredBuffer_SRV(compute_reg::ShadowImpostor::kSRV_AssetDims, m_Shared->assetDimsBuffer()),
+
+                nvrhi::BindingSetItem::Sampler(compute_reg::ShadowImpostor::kSampler_Main,  m_StageResources.impostorStage.sampler),
+                nvrhi::BindingSetItem::Sampler(compute_reg::ShadowImpostor::kSampler_Depth, m_StageResources.impostorStage.depthSampler),
+            };
+            sip.bindingSets[i] = GetDevice()->createBindingSet(bsd, sip.bindingLayout);
+        }
+    }
 }
 
 // ===========================================================================
@@ -308,6 +433,7 @@ bool TraditionalRenderPass::Init() {
     if (!_InitTreePass())                               return false;
     if (!_InitLeafPass())                               return false;
     if (!_InitImpostorPass())                           return false;
+    if (!_InitShadowImpostorPass())                     return false;
     if (!_InitSkyPass())                                return false;
     
     if (!_InitDebug())                                  return false;
@@ -425,6 +551,8 @@ void TraditionalRenderPass::onAssetsDirty(const std::vector<size_t>& dirtyAssetI
 
     _BuildImpostorSlotLayout();
     _RebuildImpostorBuffers();
+    _BuildShadowImpostorSlotLayout();
+    _RebuildShadowImpostorBuffers();
     _RebuildBindingSets();
 }
 
@@ -592,25 +720,36 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_UI.visibleLeafInstanceCount       = visibleLeafTotal;
     m_UI.shadowVisibleLeafInstanceCount = shadowVisibleLeafTotal;
 
-    // Per-cascade shadow draws. P0 has no shadow billboard tier — every
-    // cascade's geometry draw count comes from m_CascadeShadowData[c],
-    // and all billboard counts are 0.
+    // Per-cascade shadow draws. Geometry counts come from
+    // m_CascadeShadowData[c] (geometry-only refs). Billboard counts come
+    // from the m_ShadowImpostorCounts[ai*C+c] table built earlier in the
+    // shadow pass; sum across assets per cascade.
     {
-        uint32_t cascadeSum = 0;
-        for (uint32_t c = 0; c < Render::c_NumCascades; ++c) {
-            const uint32_t v = static_cast<uint32_t>(m_CascadeShadowData[c].visibleRefs.size());
-            m_UI.shadowGeomDrawsPerCascade[c]      = v;
-            m_UI.shadowBillboardDrawsPerCascade[c] = 0;
-            cascadeSum += v;
+        const uint32_t numAssets = static_cast<uint32_t>(m_GPUAssets.size());
+        const uint32_t nC        = Render::c_NumCascades;
+        uint32_t cascadeGeomSum  = 0;
+        uint32_t cascadeBillSum  = 0;
+        for (uint32_t c = 0; c < nC; ++c) {
+            const uint32_t geom = static_cast<uint32_t>(m_CascadeShadowData[c].visibleRefs.size());
+            uint32_t bill = 0;
+            for (uint32_t ai = 0; ai < numAssets; ++ai) {
+                const uint32_t slot = ai * nC + c;
+                if (slot < m_ShadowImpostorCounts.size())
+                    bill += m_ShadowImpostorCounts[slot];
+            }
+            m_UI.shadowGeomDrawsPerCascade[c]      = geom;
+            m_UI.shadowBillboardDrawsPerCascade[c] = bill;
+            cascadeGeomSum += geom;
+            cascadeBillSum += bill;
         }
-        m_UI.shadowCascadeDrawCount = cascadeSum;
-        m_UI.shadowOverdrawCount    = (cascadeSum >= m_TotalShadowInstancesDrawn)
-            ? cascadeSum - m_TotalShadowInstancesDrawn : 0;
+        m_UI.shadowCascadeDrawCount     = cascadeGeomSum;
+        m_UI.shadowImpostorVisibleCount = cascadeBillSum;
+        m_UI.shadowOverdrawCount        = (cascadeGeomSum >= m_TotalShadowInstancesDrawn)
+            ? cascadeGeomSum - m_TotalShadowInstancesDrawn : 0;
     }
 
-    // Zero P1/P2-only fields so they don't carry stale values across a
+    // Zero P2-only fields so they don't carry stale values across a
     // pipeline switch.
-    m_UI.shadowImpostorVisibleCount    = 0;
     m_UI.trunkMainMeshletsDispatched   = 0;
     m_UI.trunkMainMeshletsRendered     = 0;
     m_UI.trunkShadowMeshletsDispatched = 0;
@@ -694,6 +833,7 @@ void TraditionalRenderPass::_RenderShadowPass() {
     for (uint32_t c = 0; c < Render::c_NumCascades; c++) {
         m_CascadeShadowData[c].visibleRefs.clear();
         m_CascadeShadowData[c].drawCmds.clear();
+        m_CascadeShadowImpostorRefs[c].clear();
         shadowCounts[c].assign(m_GPUAssets.size(), 0);
     }
 
@@ -752,6 +892,13 @@ void TraditionalRenderPass::_RenderShadowPass() {
     const auto* terrainPtr = m_Registry.getTerrain();
     auto& cascades = m_ViewHandler.cascades;
 
+    const dm::float3 cameraPos = m_ViewHandler.camera.GetPosition();
+    const auto& lodDistances   = m_Registry.getLodDistances();
+    const float    impostorDist = lodDistances.empty()
+        ? std::numeric_limits<float>::infinity()
+        : lodDistances.back();
+    const bool     impostorEnabled = m_UI.showShadowImpostors;
+
     // regions culls against cascades, then instances
     for (uint32_t ri = 0; ri < regions.size(); ri++) {
         const auto& region = regions[ri];
@@ -787,6 +934,10 @@ void TraditionalRenderPass::_RenderShadowPass() {
 
             dm::box3 instanceLS = inst.bbox * worldToLight;
 
+            // CPU port of SelectImpostor — bbox-only, cascade-independent.
+            const bool isImpostor = impostorEnabled
+                && (dm::distance(cameraPos, inst.bbox) >= impostorDist);
+
             bool drawnYet = false;
             for (uint32_t c = 0; c < Render::c_NumCascades; c++) {
                 auto& cBbox = cascades[c].shadowCasterBboxLS;
@@ -797,10 +948,98 @@ void TraditionalRenderPass::_RenderShadowPass() {
                     m_TotalShadowInstancesDrawn++;
                     drawnYet = true;
                 }
-                m_CascadeShadowData[c].visibleRefs.push_back({ ri, ii, gpuIdx, lodIndex });
-                shadowCounts[c][gpuIdx]++;
+                if (isImpostor) {
+                    m_CascadeShadowImpostorRefs[c].push_back({ ri, ii, gpuIdx, lodIndex });
+                } else {
+                    m_CascadeShadowData[c].visibleRefs.push_back({ ri, ii, gpuIdx, lodIndex });
+                    shadowCounts[c][gpuIdx]++;
+                }
             }
         }
+    }
+
+    // ----- Shadow impostor staging build + upload -----
+    {
+        auto& sip = m_StageResources.shadowImpostorStage;
+        const uint32_t nC        = Render::c_NumCascades;
+        const uint32_t numAssets = static_cast<uint32_t>(m_GPUAssets.size());
+        const uint32_t numSlots  = std::max(1u, numAssets * nC);
+
+        m_ShadowImpostorInstanceStaging.clear();
+        m_ShadowImpostorCullStaging.clear();
+        m_ShadowImpostorVisStaging.clear();
+        m_ShadowImpostorCounts.assign(numSlots, 0);
+
+        // Dedup unique instance entries; bucket per-slot.
+        std::unordered_map<uint64_t, uint32_t> indexByKey;
+        std::vector<std::vector<uint32_t>> perSlot(numSlots);
+        indexByKey.reserve(m_Registry.totalInstanceCount());
+
+        for (uint32_t c = 0; c < nC; ++c) {
+            for (const auto& ref : m_CascadeShadowImpostorRefs[c]) {
+                const uint64_t key =
+                    (static_cast<uint64_t>(ref.regionIdx) << 32) | static_cast<uint64_t>(ref.instanceIdx);
+                uint32_t entryIdx;
+                auto it = indexByKey.find(key);
+                if (it == indexByKey.end()) {
+                    entryIdx = static_cast<uint32_t>(m_ShadowImpostorInstanceStaging.size());
+                    const auto& region = regions[ref.regionIdx];
+                    const auto& inst   = region.instances[ref.instanceIdx];
+
+                    m_ShadowImpostorInstanceStaging.emplace_back(
+                        inst.model, inst.normal, ref.treeId);
+
+                    Render::CullInstanceData cd{};
+                    cd.bbox     = inst.bbox;
+                    cd.baseSlot = 0;
+                    cd.regionId = 0;
+                    cd.active   = 1;
+                    m_ShadowImpostorCullStaging.push_back(cd);
+
+                    indexByKey.emplace(key, entryIdx);
+                } else {
+                    entryIdx = it->second;
+                }
+                const uint32_t slot = ref.treeId * nC + c;
+                if (slot < perSlot.size()) {
+                    perSlot[slot].push_back(entryIdx);
+                    m_ShadowImpostorCounts[slot]++;
+                }
+            }
+        }
+
+        // Prefix-sum slot offsets (walked in slot order ai*nC+c).
+        uint32_t running = 0;
+        for (uint32_t s = 0; s < numSlots; ++s) {
+            m_ShadowImpostorSlotOffsets[s] = running;
+            running += m_ShadowImpostorCounts[s];
+        }
+
+        // Pack vis staging asset-major-cascade-minor.
+        m_ShadowImpostorVisStaging.resize(running);
+        for (uint32_t s = 0; s < numSlots; ++s) {
+            if (perSlot[s].empty()) continue;
+            std::copy(perSlot[s].begin(), perSlot[s].end(),
+                      m_ShadowImpostorVisStaging.begin() + m_ShadowImpostorSlotOffsets[s]);
+        }
+
+        // Upload (skip empties — buffer keeps last contents but no slot reads it).
+        if (!m_ShadowImpostorInstanceStaging.empty() && sip.instanceBuffer)
+            m_CommandList->writeBuffer(sip.instanceBuffer,
+                                       m_ShadowImpostorInstanceStaging.data(),
+                                       m_ShadowImpostorInstanceStaging.size() * sizeof(Render::InstanceBufferEntry));
+        if (!m_ShadowImpostorCullStaging.empty() && sip.cullDataBuffer)
+            m_CommandList->writeBuffer(sip.cullDataBuffer,
+                                       m_ShadowImpostorCullStaging.data(),
+                                       m_ShadowImpostorCullStaging.size() * sizeof(Render::CullInstanceData));
+        if (!m_ShadowImpostorVisStaging.empty() && sip.visBuffer)
+            m_CommandList->writeBuffer(sip.visBuffer,
+                                       m_ShadowImpostorVisStaging.data(),
+                                       m_ShadowImpostorVisStaging.size() * sizeof(uint32_t));
+        if (sip.slotOffsetBuffer && !m_ShadowImpostorSlotOffsets.empty())
+            m_CommandList->writeBuffer(sip.slotOffsetBuffer,
+                                       m_ShadowImpostorSlotOffsets.data(),
+                                       m_ShadowImpostorSlotOffsets.size() * sizeof(uint32_t));
     }
 
     // Build draw commands, fill instance buffers, and render per cascade
@@ -908,6 +1147,9 @@ void TraditionalRenderPass::_RenderShadowPass() {
             m_CommandList->drawIndexed(
                 nvrhi::DrawArguments().setVertexCount(m_StageResources.sceneTerrainStage.indexCount));
         }
+
+        // Shadow impostors for this cascade (after geometry + leaf + terrain).
+        _RenderShadowImpostorPass(cascade);
     }
 }
 
@@ -1232,6 +1474,63 @@ void TraditionalRenderPass::_RenderImpostorPass(nvrhi::IFramebuffer* framebuffer
     }
 }
 
+void TraditionalRenderPass::_RenderShadowImpostorPass(uint32_t cascade) {
+    auto& sip = m_StageResources.shadowImpostorStage;
+    if (sip.bindingSets.empty() || !sip.bindingLayout || !sip.vertexShader || !sip.pixelShader)
+        return;
+    if (m_GPUAssets.empty() || m_ShadowImpostorCounts.empty())
+        return;
+
+    auto framebuffer = m_StageResources.shadowStage.framebuffers[cascade];
+    if (!framebuffer) return;
+
+    const nvrhi::FramebufferInfoEx& fbinfo = framebuffer->getFramebufferInfo();
+    if (!sip.pipeline) {
+        nvrhi::GraphicsPipelineDesc psoDesc;
+        psoDesc.VS = sip.vertexShader;
+        psoDesc.PS = sip.pixelShader;
+        psoDesc.inputLayout = nullptr;
+        psoDesc.bindingLayouts = { sip.bindingLayout };
+        psoDesc.primType = nvrhi::PrimitiveType::TriangleStrip;
+        // Shadow framebuffer is STANDARD Z (Less, clear=1.0), NOT reverse-Z.
+        // Do not branch on XYLEM_USE_REVERSE_Z here.
+        psoDesc.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
+        psoDesc.renderState.depthStencilState.setDepthWriteEnable(true);
+        psoDesc.renderState.depthStencilState.disableStencil();
+        psoDesc.renderState.rasterState.setCullNone();
+        psoDesc.renderState.rasterState.depthBias            = 2;
+        psoDesc.renderState.rasterState.slopeScaledDepthBias = 2.5f;
+        sip.pipeline = GetDevice()->createGraphicsPipeline(psoDesc, fbinfo);
+    }
+
+    nvrhi::GraphicsState state;
+    state.pipeline    = sip.pipeline;
+    state.framebuffer = framebuffer;
+    nvrhi::ViewportState vp;
+    vp.addViewportAndScissorRect(nvrhi::Viewport((float)fbinfo.width, (float)fbinfo.height));
+    state.viewport = vp;
+
+    const uint32_t numAssets = static_cast<uint32_t>(m_GPUAssets.size());
+    const uint32_t nC        = Render::c_NumCascades;
+    for (uint32_t ai = 0; ai < numAssets; ++ai) {
+        const uint32_t slot = ai * nC + cascade;
+        if (slot >= m_ShadowImpostorCounts.size() || m_ShadowImpostorCounts[slot] == 0)
+            continue;
+
+        const uint32_t texIdx = std::min<uint32_t>(
+            m_GPUAssets[ai].textureSetIdx,
+            static_cast<uint32_t>(sip.bindingSets.size() - 1));
+        state.bindings = { sip.bindingSets[texIdx] };
+        m_CommandList->setGraphicsState(state);
+
+        uint32_t pc[2] = { ai, cascade };
+        m_CommandList->setPushConstants(pc, sizeof(pc));
+        m_CommandList->draw(nvrhi::DrawArguments()
+                                .setVertexCount(4)
+                                .setInstanceCount(m_ShadowImpostorCounts[slot]));
+    }
+}
+
 bool TraditionalRenderPass::_InitShared() {
     m_StageResources.frameShared.constantBuffer = GetDevice()->createBuffer(
         nvrhi::BufferDesc()
@@ -1416,6 +1715,34 @@ bool TraditionalRenderPass::_InitImpostorPass() {
             .setAllAddressModes(nvrhi::SamplerAddressMode::Clamp)
             .setAllFilters(false));
     return m_StageResources.impostorStage.depthSampler != nullptr;
+}
+
+bool TraditionalRenderPass::_InitShadowImpostorPass() {
+    auto& sip = m_StageResources.shadowImpostorStage;
+
+    sip.vertexShader = m_ShaderFactory->CreateShader(
+        "app/ShadowImpostorPass.hlsl", "shadow_impostor_vs", nullptr, nvrhi::ShaderType::Vertex);
+    sip.pixelShader = m_ShaderFactory->CreateShader(
+        "app/ShadowImpostorPass.hlsl", "shadow_impostor_ps", nullptr, nvrhi::ShaderType::Pixel);
+    if (!sip.vertexShader || !sip.pixelShader) return false;
+
+    nvrhi::BindingLayoutDesc layoutDesc;
+    layoutDesc.visibility = nvrhi::ShaderType::All;
+    layoutDesc.bindings = {
+        nvrhi::BindingLayoutItem::ConstantBuffer(compute_reg::ShadowImpostor::kCB_Frame),
+        nvrhi::BindingLayoutItem::PushConstants(compute_reg::ShadowImpostor::kPushC_AssetCascade, sizeof(uint32_t) * 2),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(compute_reg::ShadowImpostor::kSRV_Vis),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(compute_reg::ShadowImpostor::kSRV_Instances),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(compute_reg::ShadowImpostor::kSRV_SlotOffsets),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(compute_reg::ShadowImpostor::kSRV_CullData),
+        nvrhi::BindingLayoutItem::Texture_SRV(compute_reg::ShadowImpostor::kTex_Albedo),
+        nvrhi::BindingLayoutItem::Texture_SRV(compute_reg::ShadowImpostor::kTex_Depth),
+        nvrhi::BindingLayoutItem::StructuredBuffer_SRV(compute_reg::ShadowImpostor::kSRV_AssetDims),
+        nvrhi::BindingLayoutItem::Sampler(compute_reg::ShadowImpostor::kSampler_Main),
+        nvrhi::BindingLayoutItem::Sampler(compute_reg::ShadowImpostor::kSampler_Depth),
+    };
+    sip.bindingLayout = GetDevice()->createBindingLayout(layoutDesc);
+    return sip.bindingLayout != nullptr;
 }
 
 // bool TraditionalRenderPass::_InitTimerQueries() {

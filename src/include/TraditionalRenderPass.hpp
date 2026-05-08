@@ -44,6 +44,7 @@ public:
         m_StageResources.leafStage.pipeline = nullptr;
         m_StageResources.leafStage.shadowPipeline = nullptr;
         m_StageResources.impostorStage.pipeline = nullptr;
+        m_StageResources.shadowImpostorStage.pipeline = nullptr;
         m_StageResources.sceneTerrainStage.pipeline = nullptr;
         m_StageResources.shadowStage.treePipeline = nullptr;
         m_StageResources.shadowStage.terrainPipeline = nullptr;
@@ -89,6 +90,22 @@ private:
         nvrhi::BindingLayoutHandle             bindingLayout;
         nvrhi::SamplerHandle                   sampler;
         nvrhi::SamplerHandle                   depthSampler;
+        std::vector<nvrhi::BindingSetHandle>   bindingSets;
+        nvrhi::GraphicsPipelineHandle          pipeline;
+        nvrhi::BufferHandle                    instanceBuffer;
+        nvrhi::BufferHandle                    cullDataBuffer;
+        nvrhi::BufferHandle                    visBuffer;
+        nvrhi::BufferHandle                    slotOffsetBuffer;
+    };
+
+    // Shadow billboard pass — distant trees cast as light-aligned cards
+    // sampling the impostor depth atlas instead of full geometry.
+    // Slot layout: ai * Render::c_NumCascades + c. Mirrors P1's
+    // ShadowImpostorPassResources but CPU-driven (no GPU cull / indirect).
+    struct ShadowImpostorPassResources {
+        nvrhi::ShaderHandle                    vertexShader;
+        nvrhi::ShaderHandle                    pixelShader;
+        nvrhi::BindingLayoutHandle             bindingLayout;
         std::vector<nvrhi::BindingSetHandle>   bindingSets;
         nvrhi::GraphicsPipelineHandle          pipeline;
         nvrhi::BufferHandle                    instanceBuffer;
@@ -152,13 +169,14 @@ private:
     };
 
     struct StageOwnedResources {
-        SharedResources      frameShared;
-        ShadowPassResources  shadowStage;
-        SkyPassResources     skyStage;
-        TreePassResources    sceneTreeStage;
-        LeafPassResources    leafStage;
-        ImpostorPassResources impostorStage;
-        TerrainPassResources sceneTerrainStage;
+        SharedResources             frameShared;
+        ShadowPassResources         shadowStage;
+        SkyPassResources            skyStage;
+        TreePassResources           sceneTreeStage;
+        LeafPassResources           leafStage;
+        ImpostorPassResources       impostorStage;
+        ShadowImpostorPassResources shadowImpostorStage;
+        TerrainPassResources        sceneTerrainStage;
     };
 
     StageOwnedResources                                m_StageResources;
@@ -196,6 +214,24 @@ private:
     uint32_t                                           m_ImpostorDrawCallCount = 0;
     uint32_t                                           m_TotalShadowInstancesDrawn;
 
+    // Per-cascade shadow billboard refs (parallel to m_CascadeShadowData
+    // but for the impostor path).
+    std::array<std::vector<Render::InstanceReference>, Render::c_NumCascades>
+                                                       m_CascadeShadowImpostorRefs;
+
+    // Frame-local staging for the shadow impostor pass. Built by
+    // _RenderShadowPass after the cull loop, uploaded with writeBuffer.
+    // visStaging is packed asset-major-cascade-minor; counts/offsets
+    // are sized numAssets * Render::c_NumCascades.
+    std::vector<Render::InstanceBufferEntry>           m_ShadowImpostorInstanceStaging;
+    std::vector<Render::CullInstanceData>              m_ShadowImpostorCullStaging;
+    std::vector<uint32_t>                              m_ShadowImpostorVisStaging;
+    std::vector<uint32_t>                              m_ShadowImpostorCounts;        // numAssets * c_NumCascades
+    std::vector<uint32_t>                              m_ShadowImpostorSlotOffsets;   // numAssets * c_NumCascades
+    std::vector<uint32_t>                              m_ShadowImpostorMaxSlotCounts; // numAssets * c_NumCascades, allocated capacity
+    uint32_t                                           m_ShadowImpostorVisBufferSize = 0;
+    uint32_t                                           m_ShadowImpostorInstanceCapacity = 0;
+
     // Per-cascade shadow draw data
     struct CascadeShadowData {
         std::vector<Render::InstanceReference>   visibleRefs;
@@ -208,6 +244,7 @@ private:
     bool _InitTreePass();
     bool _InitLeafPass();
     bool _InitImpostorPass();
+    bool _InitShadowImpostorPass();
     bool _InitShadowPass();
     bool _InitTerrainPass(nvrhi::ICommandList* initCL);
     bool _InitSkyPass();
@@ -220,10 +257,13 @@ private:
     void _RebuildInstanceBuffers();
     void _BuildImpostorSlotLayout();
     void _RebuildImpostorBuffers();
+    void _BuildShadowImpostorSlotLayout();
+    void _RebuildShadowImpostorBuffers();
     void _RebuildBindingSets();
 
     void _RenderSkyPass(nvrhi::IFramebuffer* framebuffer);
     void _RenderShadowPass();
+    void _RenderShadowImpostorPass(uint32_t cascade);
     void _RenderScenePass(nvrhi::IFramebuffer* framebuffer);
     void _RenderImpostorPass(nvrhi::IFramebuffer* framebuffer);
 };

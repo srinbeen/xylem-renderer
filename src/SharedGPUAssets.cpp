@@ -654,7 +654,7 @@ bool SharedGPUAssets::_BakeImpostors(nvrhi::ICommandList* cl)
         if (asset.lods.empty()) continue;
         if (asset.textureSetIdx >= m_BakeBindingSets.size()) continue;
 
-        const Scene::TreeLODDef& lod = asset.lods[0];
+        const Scene::TreeLODDef& lod = asset.lods[numLodsAll-1];
         if (lod.indices.empty()) continue;
 
         nvrhi::BufferHandle posBuf  = makeVB(lod.positions,  "ImpostorBake_Pos");

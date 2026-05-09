@@ -12,6 +12,11 @@ namespace Xylem {
 enum class Pipeline { Traditional = 0, Compute = 1, MeshShader = 2 };
 
 struct UIData {
+    // Cap on per-LOD breakdown surfaced to the UI. The pipelines today configure
+    // 3 LODs (16/8/4 segments); 8 leaves headroom without dragging an allocation
+    // into the per-frame UI write path.
+    static constexpr uint32_t kMaxLodsForUI = 8;
+
     bool ShowUI = true;
 
     Pipeline activePipeline    = Pipeline::Compute;
@@ -24,6 +29,12 @@ struct UIData {
     uint32_t drawCallCount        = 0;
     uint32_t totalInstanceCount   = 0;
     uint32_t culledInstanceCount  = 0;
+
+    // Per-LOD geometric instance counts (excludes impostors). Indexed by LOD,
+    // 0 = highest detail. Σ over [0..lodCountForUI) + impostorVisibleCount ==
+    // visibleInstanceCount. Populated by every render pass each frame.
+    uint32_t lodCountForUI                       = 0;
+    uint32_t lodVisibleCounts[kMaxLodsForUI]     = {};
     uint32_t shadowVisibleCount     = 0; // unique instances contributing to any cascade
     uint32_t shadowCulledCount      = 0; // totalInstanceCount - shadowVisibleCount
     uint32_t shadowCascadeDrawCount = 0; // sum over all cascades of per-cascade visible (counts overdraw)

@@ -634,15 +634,204 @@ void UIRenderer::_buildTreesFunnel() {
     ImGui::Text("Trees");
     ImGui::Indent();
 
-    const uint32_t total      = m_ui.totalInstanceCount;
-    const uint32_t visible    = m_ui.visibleInstanceCount;
-    const uint32_t culled     = m_ui.culledInstanceCount;
-    const uint32_t impostors  = m_ui.impostorVisibleCount;
-    const uint32_t mesh       = (visible >= impostors) ? (visible - impostors) : 0;
+    const uint32_t total     = m_ui.totalInstanceCount;
+    const uint32_t culled    = m_ui.culledInstanceCount;
+    const uint32_t impostors = m_ui.impostorVisibleCount;
+    const uint32_t numLods   = std::min<uint32_t>(m_ui.lodCountForUI, UIData::kMaxLodsForUI);
 
-    ImGui::Text("Total instances:    %s",                   _fmtCount(total));
-    ImGui::Text("Post-cull:          %s   (%s culled)",      _fmtCount(visible), _fmtCount(culled));
-    ImGui::Text("Post-billboard:     %s   (%s billboarded)", _fmtCount(mesh),    _fmtCount(impostors));
+    uint32_t meshTotal = 0;
+    for (uint32_t li = 0; li < numLods; ++li) meshTotal += m_ui.lodVisibleCounts[li];
+
+    ImGui::Text("Total instances: %s", _fmtCount(total));
+
+    // Two stacked bars side by side:
+    //   Bar 1 (overview) — top->bottom: Culled (red) | Billboarded (blue) | Mesh (one green segment).
+    //                       Total height encodes m_ui.totalInstanceCount.
+    //   Bar 2 (zoom)     — top->bottom: per-LOD breakdown of the mesh segment, lightest green at
+    //                       top (coarsest LOD) -> darkest green at bottom (LOD 0). Total height
+    //                       encodes meshTotal so the LOD slices fill the bar.
+    // Connector lines fan out from the mesh segment of bar 1 to the full extent of bar 2.
+    const float kBarWidth     = 56.f;
+    const float kBarHeight    = 240.f;
+    const float kLeftLabelW   = 200.f;   // labels to the LEFT of bar 1, right-aligned
+    const float kRightLabelW  = 200.f;   // labels to the RIGHT of bar 2
+    const float kConnectorGap = 70.f;    // horizontal space between the two bars
+    const float kPadding      = 6.f;
+    const float kSwatchGap    = 6.f;
+
+    const ImU32 colBg      = IM_COL32(28, 28, 28, 255);
+    const ImU32 colBorder  = IM_COL32(90, 90, 90, 255);
+    const ImU32 colCulled  = IM_COL32(220, 70, 70, 255);
+    const ImU32 colImpost  = IM_COL32(70, 140, 235, 255);
+    const ImU32 colMesh    = IM_COL32(105, 180, 105, 255);
+    const ImU32 colText    = IM_COL32(225, 225, 225, 255);
+    const ImU32 colConnect = IM_COL32(140, 200, 140, 220);
+
+    auto greenForLod = [&](uint32_t li) -> ImU32 {
+        // Top of stack (li = numLods-1) = lightest; LOD 0 = darkest.
+        float t = (numLods > 1) ? float(numLods - 1 - li) / float(numLods - 1) : 1.f;
+        auto lerp8 = [](int lo, int hi, float k) {
+            int v = lo + int((hi - lo) * k + 0.5f);
+            return (uint8_t)std::clamp(v, 0, 255);
+        };
+        // light (170,230,170) -> dark (40,130,50)
+        return IM_COL32(lerp8(170, 40, t), lerp8(230, 130, t), lerp8(170, 50, t), 255);
+    };
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImVec2      origin = ImGui::GetCursorScreenPos();
+
+    const float bar1X = origin.x + kLeftLabelW + kPadding;
+    const float bar2X = bar1X + kBarWidth + kConnectorGap;
+    const float barT  = origin.y;
+    const float barB  = origin.y + kBarHeight;
+
+    dl->AddRectFilled(ImVec2(bar1X, barT), ImVec2(bar1X + kBarWidth, barB), colBg);
+    dl->AddRectFilled(ImVec2(bar2X, barT), ImVec2(bar2X + kBarWidth, barB), colBg);
+
+    const float invTotal  = total     > 0 ? 1.f / float(total)     : 0.f;
+    const float invMesh   = meshTotal > 0 ? 1.f / float(meshTotal) : 0.f;
+    const float textLineH = ImGui::GetTextLineHeight();
+    const float swatchSz  = textLineH * 0.7f;
+    const float labelStep = textLineH + 2.f; // min vertical advance between adjacent labels
+
+    // Labels are queued (not drawn) during segment iteration so that we can run a
+    // two-pass layout afterwards: a backward pass pulls earlier labels UP to make
+    // room when a later label's natural Y would collide, then a forward pass
+    // pushes any remaining overlap down. This avoids the "tiny last segment gets
+    // shoved off the chart" failure mode of a single forward-only pass.
+    struct PendingLabel { float segTop; float segH; ImU32 color; char text[96]; };
+    std::vector<PendingLabel> labelsLeft;
+    std::vector<PendingLabel> labelsRight;
+    labelsLeft.reserve(8);
+    labelsRight.reserve(UIData::kMaxLodsForUI);
+
+    auto queueLabel = [&](std::vector<PendingLabel>& bucket,
+                          float segTop, float segH, ImU32 color,
+                          const char* text) {
+        bucket.emplace_back();
+        PendingLabel& L = bucket.back();
+        L.segTop = segTop;
+        L.segH   = segH;
+        L.color  = color;
+        snprintf(L.text, sizeof(L.text), "%s", text);
+    };
+
+    auto layoutAndDrawLabels = [&](const std::vector<PendingLabel>& labels, bool leftSide) {
+        if (labels.empty()) return;
+        std::vector<float> y(labels.size());
+
+        // Pass 0: natural Y per label (centered when segment fits a line, else
+        // top-aligned at the segment top).
+        for (size_t i = 0; i < labels.size(); ++i) {
+            const auto& L = labels[i];
+            y[i] = (L.segH >= textLineH + 2.f)
+                ? L.segTop + L.segH * 0.5f - textLineH * 0.5f
+                : L.segTop;
+        }
+
+        // Backward pass: pull each label UP to clear the one below it.
+        for (int i = int(labels.size()) - 2; i >= 0; --i)
+            y[i] = std::min(y[i], y[i + 1] - labelStep);
+
+        // Forward pass: push down anything still colliding with the one above
+        // (handles the case where backward over-corrected past the natural top).
+        for (size_t i = 1; i < labels.size(); ++i)
+            y[i] = std::max(y[i], y[i - 1] + labelStep);
+
+        for (size_t i = 0; i < labels.size(); ++i) {
+            const auto& L  = labels[i];
+            float textY    = y[i];
+            float swY      = textY + (textLineH - swatchSz) * 0.5f;
+            if (leftSide) {
+                ImVec2 ts = ImGui::CalcTextSize(L.text);
+                float swX = bar1X - kPadding - swatchSz;
+                float txX = swX - kSwatchGap - ts.x;
+                dl->AddText(ImVec2(txX, textY), colText, L.text);
+                dl->AddRectFilled(ImVec2(swX, swY),
+                                  ImVec2(swX + swatchSz, swY + swatchSz), L.color);
+            } else {
+                float swX = bar2X + kBarWidth + kPadding;
+                float txX = swX + swatchSz + kSwatchGap;
+                dl->AddRectFilled(ImVec2(swX, swY),
+                                  ImVec2(swX + swatchSz, swY + swatchSz), L.color);
+                dl->AddText(ImVec2(txX, textY), colText, L.text);
+            }
+        }
+    };
+
+    // ---- Chart 1: overview ----
+    float    y1     = barT;
+    float    accum1 = 0.f;
+    uint32_t cum1   = 0;
+    float    meshTopY = barT;
+
+    auto drawSeg1 = [&](uint32_t count, ImU32 color, const char* labelHead) -> float {
+        if (total == 0) return y1;
+        cum1 += count;
+        float target = float(cum1) * invTotal * kBarHeight;
+        float h      = target - accum1;
+        accum1       = target;
+        float top    = y1;
+        float bot    = y1 + h;
+        if (count > 0) {
+            dl->AddRectFilled(ImVec2(bar1X, top), ImVec2(bar1X + kBarWidth, bot), color);
+            char buf[96];
+            float pct = 100.f * float(count) * invTotal;
+            snprintf(buf, sizeof(buf), "%s: %s  (%.1f%%)", labelHead, _fmtCount(count), pct);
+            queueLabel(labelsLeft, top, h, color, buf);
+        }
+        y1 = bot;
+        return top;
+    };
+
+    drawSeg1(culled,    colCulled, "Culled");
+    drawSeg1(impostors, colImpost, "Billboarded");
+    meshTopY = drawSeg1(meshTotal, colMesh, "Mesh");
+
+    dl->AddRect(ImVec2(bar1X, barT), ImVec2(bar1X + kBarWidth, barB), colBorder);
+
+    // ---- Chart 2: per-LOD zoom of the mesh segment ----
+    if (meshTotal > 0) {
+        float    y2     = barT;
+        float    accum2 = 0.f;
+        uint32_t cum2   = 0;
+        for (int li = int(numLods) - 1; li >= 0; --li) {
+            uint32_t count = m_ui.lodVisibleCounts[li];
+            cum2 += count;
+            float target = float(cum2) * invMesh * kBarHeight;
+            float h      = target - accum2;
+            accum2       = target;
+            float top    = y2;
+            float bot    = y2 + h;
+            ImU32 col    = greenForLod((uint32_t)li);
+            if (count > 0) {
+                dl->AddRectFilled(ImVec2(bar2X, top), ImVec2(bar2X + kBarWidth, bot), col);
+                char buf[96];
+                float pct = 100.f * float(count) * invMesh;
+                snprintf(buf, sizeof(buf), "LOD %d: %s  (%.1f%%)", li, _fmtCount(count), pct);
+                queueLabel(labelsRight, top, h, col, buf);
+            }
+            y2 = bot;
+        }
+    }
+    dl->AddRect(ImVec2(bar2X, barT), ImVec2(bar2X + kBarWidth, barB), colBorder);
+
+    // Lay out + draw labels after all segments are placed (two-pass spread).
+    layoutAndDrawLabels(labelsLeft,  /*leftSide=*/true);
+    layoutAndDrawLabels(labelsRight, /*leftSide=*/false);
+
+    // Connector lines: top of mesh segment in chart 1 -> top of chart 2,
+    // bottom of chart 1 -> bottom of chart 2 (a fan-out / magnifier shape).
+    if (meshTotal > 0) {
+        const float thickness = 1.5f;
+        dl->AddLine(ImVec2(bar1X + kBarWidth, meshTopY), ImVec2(bar2X, barT), colConnect, thickness);
+        dl->AddLine(ImVec2(bar1X + kBarWidth, barB),     ImVec2(bar2X, barB), colConnect, thickness);
+    }
+
+    // Reserve total layout space so subsequent widgets clear both bars + labels.
+    const float totalW = (bar2X + kBarWidth + kPadding + kRightLabelW) - origin.x;
+    ImGui::Dummy(ImVec2(totalW, kBarHeight));
 
     ImGui::Spacing();
     ImGui::Text("Shadow draws (actual, per cascade):");

@@ -1609,6 +1609,19 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
             for (uint32_t i = 0; i < m_ReadbackCountEntries; i++)
                 visibleSum += counts[i];
 
+            // Per-LOD geometric counts. Slot layout matches the cull shader:
+            // slot = ai * numLods + li.
+            const uint32_t numLodsForBreakdown =
+                static_cast<uint32_t>(m_Registry.getLodSegments().size());
+            const uint32_t lodsForUI = std::min<uint32_t>(numLodsForBreakdown, UIData::kMaxLodsForUI);
+            uint32_t perLodCounts[UIData::kMaxLodsForUI] = {};
+            if (numLodsForBreakdown > 0) {
+                for (uint32_t slot = 0; slot < m_ReadbackCountEntries; ++slot) {
+                    const uint32_t li = slot % numLodsForBreakdown;
+                    if (li < lodsForUI) perLodCounts[li] += counts[slot];
+                }
+            }
+
             uint32_t impostorVisibleSum = 0;
             const uint32_t impostorOffset = m_ReadbackCountEntries;
             for (uint32_t i = 0; i < m_ReadbackImpostorEntries; i++)
@@ -1687,6 +1700,9 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
                 m_UI.shadowGeomDrawsPerCascade[c]      = perCascadeShadow[c];
                 m_UI.shadowBillboardDrawsPerCascade[c] = perCascadeShadowImpostor[c];
             }
+            m_UI.lodCountForUI = lodsForUI;
+            for (uint32_t li = 0; li < UIData::kMaxLodsForUI; ++li)
+                m_UI.lodVisibleCounts[li] = perLodCounts[li];
         }
     }
     m_ReadbackFrameIndex++;

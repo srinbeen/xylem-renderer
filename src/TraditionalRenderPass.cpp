@@ -722,6 +722,18 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         ? m_UI.totalInstanceCount - visibleTotal : 0;
     m_UI.drawCallCount        = static_cast<uint32_t>(m_DrawCmds.size()) + m_ImpostorDrawCallCount;
 
+    // Per-LOD geometric counts (impostors excluded; tracked separately).
+    {
+        const uint32_t numLods = static_cast<uint32_t>(m_Registry.getLodSegments().size());
+        const uint32_t lodsForUI = std::min<uint32_t>(numLods, UIData::kMaxLodsForUI);
+        m_UI.lodCountForUI = lodsForUI;
+        for (uint32_t li = 0; li < UIData::kMaxLodsForUI; ++li) m_UI.lodVisibleCounts[li] = 0;
+        for (uint32_t ai = 0; ai < m_InstanceCounts.size(); ++ai) {
+            for (uint32_t li = 0; li < lodsForUI && li < m_InstanceCounts[ai].size(); ++li)
+                m_UI.lodVisibleCounts[li] += m_InstanceCounts[ai][li];
+        }
+    }
+
     m_UI.shadowVisibleCount   = m_TotalShadowInstancesDrawn;
     m_UI.shadowCulledCount    = m_UI.totalInstanceCount - m_TotalShadowInstancesDrawn;
     m_UI.visibleLeafInstanceCount       = visibleLeafTotal;

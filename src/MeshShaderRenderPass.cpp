@@ -2146,6 +2146,19 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
             uint32_t visSum = 0;
             for (uint32_t i = 0; i < m_ReadbackMainEntries; i++) visSum += counts[i];
 
+            // Per-LOD geometric counts. Slot layout matches the cull shader:
+            // slot = ai * numLods + li.
+            const uint32_t numLodsForBreakdown =
+                static_cast<uint32_t>(m_Registry.getLodSegments().size());
+            const uint32_t lodsForUI = std::min<uint32_t>(numLodsForBreakdown, UIData::kMaxLodsForUI);
+            uint32_t perLodCounts[UIData::kMaxLodsForUI] = {};
+            if (numLodsForBreakdown > 0) {
+                for (uint32_t slot = 0; slot < m_ReadbackMainEntries; ++slot) {
+                    const uint32_t li = slot % numLodsForBreakdown;
+                    if (li < lodsForUI) perLodCounts[li] += counts[slot];
+                }
+            }
+
             // Per-cascade shadow geometry sums. Slot layout is
             // ai * Render::c_NumCascades + c (asset major). Total visible
             // is Σ over all (asset, cascade) slots; we also break out per c.
@@ -2226,6 +2239,9 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
             m_UI.leafMainMeshletsRendered      = leafMainSurvived;
             m_UI.leafShadowMeshletsDispatched  = leafShadowConsidered;
             m_UI.leafShadowMeshletsRendered    = leafShadowSurvived;
+            m_UI.lodCountForUI = lodsForUI;
+            for (uint32_t li = 0; li < UIData::kMaxLodsForUI; ++li)
+                m_UI.lodVisibleCounts[li] = perLodCounts[li];
         }
     }
     m_ReadbackFrameIndex++;

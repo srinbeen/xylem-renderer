@@ -75,34 +75,30 @@ void ViewHandler::computeCascades(const dm::box3& sceneBbox, dm::float3 sunDirec
             continue;
         }
 
-        // squares bbox for uniform texels
-        dm::float3 cascadeExtent = cascadeBboxLS.diagonal();
-        float maxXY = dm::max(cascadeExtent.x, cascadeExtent.y);
-        dm::float3 growVec = 0.5f * (dm::float3(maxXY, maxXY, cascadeExtent.z) - cascadeExtent);
-        cascadeBboxLS = cascadeBboxLS.grow(growVec);
-        cascadeExtent = cascadeBboxLS.diagonal();
+        const dm::float3 centroidVS(0.f, 0.f, (cNear + cFar) * 0.5f);
+        // 4 -- to a far corner
+        const float radius = dm::length(cornersVS[4] - centroidVS);
+        dm::float3 centroidLS = viewToWorldToLight.transformPoint(centroidVS);
 
-        // clamps bbox to texel grid
-        float texelSize = cascadeExtent.x / float(shadowRes);
-        if (texelSize > 0.f) {
-            cascadeBboxLS.m_mins.x = std::floorf(cascadeBboxLS.m_mins.x / texelSize) * texelSize;
-            cascadeBboxLS.m_mins.y = std::floorf(cascadeBboxLS.m_mins.y / texelSize) * texelSize;
-            cascadeBboxLS.m_maxs.x = cascadeBboxLS.m_mins.x + cascadeExtent.x;
-            cascadeBboxLS.m_maxs.y = cascadeBboxLS.m_mins.y + cascadeExtent.y;
+        float zMinLS = dm::min(cascadeBboxLS.m_mins.z, sceneBboxLS.m_mins.z);
+        float zMaxLS = dm::min(cascadeBboxLS.m_maxs.z, sceneBboxLS.m_maxs.z);
+
+        const float T = (2.f * radius) / float(shadowRes);
+        if (T > 0.f) {
+            centroidLS.x = std::roundf(centroidLS.x / T) * T;
+            centroidLS.y = std::roundf(centroidLS.y / T) * T;
         }
 
-        // extend box towards casters & shrink if aabb is past scene
-        cascadeBboxLS.m_mins.z = dm::min(cascadeBboxLS.m_mins.z, sceneBboxLS.m_mins.z);
-        cascadeBboxLS.m_maxs.z = dm::min(cascadeBboxLS.m_maxs.z, sceneBboxLS.m_maxs.z);
-
         dm::float4x4 lightProj = dm::orthoProjD3DStyle(
-            cascadeBboxLS.m_mins.x, cascadeBboxLS.m_maxs.x,
-            cascadeBboxLS.m_mins.y, cascadeBboxLS.m_maxs.y,
-            cascadeBboxLS.m_mins.z, cascadeBboxLS.m_maxs.z);
+            centroidLS.x - radius, centroidLS.x + radius,
+            centroidLS.y - radius, centroidLS.y + radius,
+            zMinLS, zMaxLS);
 
         cascades[c].lightViewProj = dm::affineToHomogeneous(worldToLight) * lightProj;
-        cascades[c].shadowCasterBboxLS = cascadeBboxLS;
-        shadowCasterBboxLS |= cascadeBboxLS;
+        cascades[c].shadowCasterBboxLS = dm::box3(
+            dm::float3(centroidLS.x - radius, centroidLS.y - radius, zMinLS),
+            dm::float3(centroidLS.x + radius, centroidLS.y + radius, zMaxLS));
+        shadowCasterBboxLS |= cascades[c].shadowCasterBboxLS;
     }
 
     shadowCasterBboxLS &= sceneBboxLS;

@@ -121,29 +121,24 @@ void BuildCascades(uint3 gtid : SV_GroupThreadID)
         bboxMaxLS = max(bboxMaxLS, ls);
     }
 
-    // Square XY extent for uniform texels across both axes.
-    float extX  = bboxMaxLS.x - bboxMinLS.x;
-    float extY  = bboxMaxLS.y - bboxMinLS.y;
-    float maxXY = max(extX, extY);
-    float growX = 0.5 * (maxXY - extX);
-    float growY = 0.5 * (maxXY - extY);
-    bboxMinLS.x -= growX;
-    bboxMaxLS.x += growX;
-    bboxMinLS.y -= growY;
-    bboxMaxLS.y += growY;
+    
+    float3 centroidVS = float3(0.0, 0.0, (cNear + cFar) * 0.5);
+    float radius = length(cornersVS[4] - centroidVS);
+    float3 centroidLS = mul(float4(centroidVS, 1.0), cb.viewToWorldToLight).xyz;
 
-    // Texel snap so shadow samples fall on a stable world-space grid.
-    float texelSize = maxXY / float(cb.shadowRes);
-    if (texelSize > 0.0) {
-        bboxMinLS.x = floor(bboxMinLS.x / texelSize) * texelSize;
-        bboxMinLS.y = floor(bboxMinLS.y / texelSize) * texelSize;
-        bboxMaxLS.x = bboxMinLS.x + maxXY;
-        bboxMaxLS.y = bboxMinLS.y + maxXY;
+    // Z range comes from the 8-corner pass above; XY of bboxMin/MaxLS no longer used.
+    float zMinLS = min(bboxMinLS.z, cb.sceneBboxMinLS.z);
+    float zMaxLS = min(bboxMaxLS.z, cb.sceneBboxMaxLS.z);
+
+    float T = (2.0 * radius) / float(cb.shadowRes);
+    if (T > 0.0) {
+        centroidLS.x = round(centroidLS.x / T) * T;
+        centroidLS.y = round(centroidLS.y / T) * T;
     }
 
-    // Z clamp to scene bbox in light space (matches ViewHandler: both mins use min()).
-    bboxMinLS.z = min(bboxMinLS.z, cb.sceneBboxMinLS.z);
-    bboxMaxLS.z = min(bboxMaxLS.z, cb.sceneBboxMaxLS.z);
+    // Pack into the bbox vars consumed by the ortho-construction block below.
+    bboxMinLS = float3(centroidLS.x - radius, centroidLS.y - radius, zMinLS);
+    bboxMaxLS = float3(centroidLS.x + radius, centroidLS.y + radius, zMaxLS);
 
     // Build orthographic projection — mirrors donut::math::orthoProjD3DStyle(l, r, b, t, zn, zf):
     //   [2/(r-l),  0,        0,           0]

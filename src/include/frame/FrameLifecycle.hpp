@@ -2,6 +2,7 @@
 #define XYLEM_FRAME_LIFECYCLE_H
 
 #include <donut/core/math/math.h>
+#include <cmath>
 
 #include "../Render.hpp"
 #include "../SceneRegistry.hpp"
@@ -13,6 +14,8 @@ namespace Xylem::frame {
 inline constexpr float kDefaultNearPlane = 0.1f;
 inline constexpr float kDefaultFarPlane = 1000.f;
 inline constexpr float kDefaultVerticalFovDegrees = 60.f;
+
+inline constexpr float k_ShadowDistanceBucketRatio = 1.1f;
 
 inline void UpdateProjectionAndViewport(ViewHandler& viewHandler,
                                         const nvrhi::FramebufferInfoEx& fbInfo,
@@ -35,18 +38,20 @@ inline void UpdateProjectionAndViewport(ViewHandler& viewHandler,
     );
 }
 
-inline float ComputeForwardShadowDistance(const dm::box3& sceneBbox,
-                                          const dm::float3& cameraPos,
-                                          const dm::float3& cameraDir)
+inline float ComputeShadowDistance(const dm::box3& sceneBbox,
+                                   const dm::float3& cameraPos)
 {
     float maxShadowDist = 0.f;
     for (int i = 0; i < dm::box3::numCorners; i++) {
         dm::float3 corner = sceneBbox.getCorner(i);
-        float cornerDir = dm::dot(corner - cameraPos, cameraDir);
-        if (cornerDir > 0.f)
-            maxShadowDist = dm::max(maxShadowDist, cornerDir);
+        maxShadowDist = dm::max(maxShadowDist, dm::length(corner - cameraPos));
     }
-    return dm::max(maxShadowDist, 1.f);
+    maxShadowDist = dm::max(maxShadowDist, 1.f);
+
+    // Quantize up to next geometric bucket: buckets at {ratio^k} for k in N.
+    const float lnRatio   = std::logf(k_ShadowDistanceBucketRatio);
+    const float bucketIdx = std::ceilf(std::logf(maxShadowDist) / lnRatio);
+    return std::expf(bucketIdx * lnRatio);
 }
 
 template<typename TConstantBuffer>
@@ -72,10 +77,9 @@ inline void ComputeCascades(ViewHandler& viewHandler,
 {
     const dm::box3& sceneBounds = registry.getSceneBounds();
 
-    float maxShadowDist = ComputeForwardShadowDistance(
+    float maxShadowDist = ComputeShadowDistance(
         sceneBounds,
-        viewHandler.camera.GetPosition(),
-        viewHandler.camera.GetDir());
+        viewHandler.camera.GetPosition());
 
     viewHandler.computeCascades(
         sceneBounds,

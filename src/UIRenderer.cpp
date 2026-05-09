@@ -965,8 +965,24 @@ void UIRenderer::_buildShadowMapSection() {
 
     if (m_ui.selectedCascadeTexture) {
         ImVec2 avail = ImGui::GetContentRegionAvail();
-        float size  = std::max(std::min(avail.x, avail.y), 64.f);
+        // Reserve room below the image for the texel-size readout.
+        const float kFooterHeight = ImGui::GetTextLineHeightWithSpacing() * (numCascades + 2);
+        float size  = std::max(std::min(avail.x, avail.y - kFooterHeight), 64.f);
         ImGui::Image(ImTextureRef(m_ui.selectedCascadeTexture), ImVec2(size, size));
+    }
+
+    ImGui::Separator();
+    ImGui::TextDisabled("Texel size (world units / shadow texel):");
+    for (int c = 0; c < numCascades; ++c) {
+        float t = m_ui.cascadeTexelSize[c];
+        bool  isSel = (c == m_ui.selectedCascade);
+        if (t > 0.f) {
+            if (isSel) ImGui::Text("> C%d: %.4f", c, t);
+            else       ImGui::Text("  C%d: %.4f", c, t);
+        } else {
+            if (isSel) ImGui::TextDisabled("> C%d: (empty)", c);
+            else       ImGui::TextDisabled("  C%d: (empty)", c);
+        }
     }
 
     ImGui::End();

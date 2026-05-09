@@ -96,6 +96,10 @@ struct UIData {
     float    sdsmShadowCasterMinLS[4][3] = {};
     float    sdsmShadowCasterMaxLS[4][3] = {};
 
+    // World-space size of one shadow texel per cascade (cascade XY extent / shadowRes).
+    // Populated by every render pass after its cascade fit; 0 if cascade is empty.
+    float    cascadeTexelSize[Render::c_NumCascades] = {};
+
     void*    shadowMapTexture = nullptr;  // nvrhi::ITexture*, set by active render pass
     // Single per-pass scratch texture into which the active pass copies the
     // currently-selected cascade slice. UIRenderer drives selectedCascade via the slider.

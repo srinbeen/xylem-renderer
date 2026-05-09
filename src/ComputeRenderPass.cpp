@@ -1734,6 +1734,9 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
                     m_UI.sdsmShadowCasterMaxLS[c][0] = out->shadowCasterMaxLS[c].x;
                     m_UI.sdsmShadowCasterMaxLS[c][1] = out->shadowCasterMaxLS[c].y;
                     m_UI.sdsmShadowCasterMaxLS[c][2] = out->shadowCasterMaxLS[c].z;
+
+                    float extX = out->shadowCasterMaxLS[c].x - out->shadowCasterMinLS[c].x;
+                    m_UI.cascadeTexelSize[c] = (extX > 0.f) ? extX / float(k_ShadowRes) : 0.f;
                 }
 
                 GetDevice()->unmapBuffer(m_SDSMReadbackBuffers[readSlot]);

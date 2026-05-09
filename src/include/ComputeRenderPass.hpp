@@ -28,7 +28,7 @@ using namespace donut;
 class ComputeRenderPass : public app::IRenderPass, public frame::IFrameStagedPass {
 public:
     static constexpr uint32_t k_QueuedFrames  = 3;
-    static constexpr uint32_t k_ShadowRes     = 1 << 10;
+    static constexpr uint32_t k_ShadowRes     = 1 << 11;
     static constexpr float    k_CapacitySlack = 1.5f;
     // Hemi-octahedral view counts mirror SharedGPUAssets — kept here for the
     // per-pass impostor slot/visibility buffer sizing math.

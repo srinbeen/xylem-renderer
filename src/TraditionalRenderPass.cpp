@@ -611,6 +611,13 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         m_ShadowRes,
         m_UI.pssmLambda);
 
+    for (uint32_t c = 0; c < Render::c_NumCascades; ++c) {
+        const dm::box3& cBbox = m_ViewHandler.cascades[c].shadowCasterBboxLS;
+        m_UI.cascadeTexelSize[c] = cBbox.isempty()
+            ? 0.f
+            : cBbox.diagonal().x / float(m_ShadowRes);
+    }
+
     Render::CullConstantBufferEntry constants{};
     frame::FillCommonFrameConstants(constants, m_ViewHandler, m_Registry.getSunDirection());
 

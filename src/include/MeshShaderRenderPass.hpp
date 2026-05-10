@@ -402,7 +402,11 @@ private:
     // Readback ring for SDSM debug (mirrors ComputeRenderPass)
     nvrhi::BufferHandle                               m_SDSMReadbackBuffers[k_QueuedFrames];
     uint32_t                                          m_SDSMReadbackFrameIndex = 0;
-    bool                                              m_SDSMReadbackPending[k_QueuedFrames] = { false, false, false };
+    bool                                              m_SDSMReadbackPending[k_QueuedFrames] = {};
+
+    // GPU frame timer ring buffer
+    nvrhi::TimerQueryHandle                            m_GpuTimers[k_QueuedFrames];
+    uint32_t                                           m_NextTimerIdx = 0;
 
     // -----------------------------------------------------------------------
     // Init helpers

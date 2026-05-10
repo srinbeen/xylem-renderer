@@ -595,6 +595,7 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
 
     m_CommandList->open();
 
+    frame::ResetGpuTimerForFrame(GetDevice(), m_GpuTimers, m_NextTimerIdx);
     m_CommandList->beginTimerQuery(m_GpuTimers[m_NextTimerIdx]);
 
     nvrhi::utils::ClearColorAttachment(m_CommandList, framebuffer, 0, nvrhi::Color(0.f));
@@ -1786,12 +1787,6 @@ bool TraditionalRenderPass::_InitShadowImpostorPass() {
     sip.bindingLayout = GetDevice()->createBindingLayout(layoutDesc);
     return sip.bindingLayout != nullptr;
 }
-
-// bool TraditionalRenderPass::_InitTimerQueries() {
-//     for (uint32_t i = 0; i < k_QueuedFrames; i++)
-//         m_GpuTimers[i] = GetDevice()->createTimerQuery();
-//     return true;
-// }
 
 bool TraditionalRenderPass::_InitShadowPass() {
     m_StageResources.shadowStage.depthTexture = GetDevice()->createTexture(

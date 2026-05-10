@@ -122,6 +122,12 @@ void RenderOrchestrator::_switchPipelineIfNeeded()
 
     m_UI.activePipeline = m_UI.requestedPipeline;
 
+    // Clear shared timing fields so the UI doesn't display the previous
+    // pipeline's last value during the incoming pipeline's timer-ring warmup
+    // (~k_QueuedFrames frames before the first GPU result lands).
+    m_UI.gpuFrameTimeMs  = -1.0f;
+    m_UI.cpuRenderTimeMs = 0.0f;
+
     // The incoming pipeline's GPU state may be stale from registry edits made
     // while it was inactive (only the active pipeline gets dirty notifications).
     // Force a full rebuild from the current registry.

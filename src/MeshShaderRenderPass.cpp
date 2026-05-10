@@ -12,6 +12,7 @@
 #include <donut/core/log.h>
 #include <donut/core/vfs/VFS.h>
 #include <donut/core/math/math.h>
+#include <donut/app/Timer.h>
 
 #include <meshoptimizer.h>
 
@@ -112,6 +113,11 @@ bool MeshShaderRenderPass::_InitShared() {
                 .setDebugName("MeshCullCountReadback_" + std::to_string(i))
         );
     }
+
+    for (uint32_t i = 0; i < k_QueuedFrames; ++i) {
+        m_GpuTimers[i] = GetDevice()->createTimerQuery();
+    }
+
     return true;
 }
 
@@ -1639,6 +1645,9 @@ void MeshShaderRenderPass::BackBufferResizing() {
 }
 
 void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
+    app::HiResTimer cpuTimer;
+    cpuTimer.Start();
+
     m_UI.shadowMapTexture       = m_StageResources.shadow.depthTexture.Get();
     m_UI.selectedCascadeTexture = m_StageResources.shadow.debugSelectedCascadeTexture.Get();
     m_UI.hizMipTextures.resize(m_StageResources.hiz.debugMipTextures.size());
@@ -1681,6 +1690,8 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_UI.hizActiveThisFrame = hizActive;
 
     m_CommandList->open();
+    frame::ResetGpuTimerForFrame(GetDevice(), m_GpuTimers, m_NextTimerIdx);
+    m_CommandList->beginTimerQuery(m_GpuTimers[m_NextTimerIdx]);
 
     // Make sure Hi-Z / depth-prepass resources match the back-buffer resolution.
     _EnsureHiZResources(fbW, fbH);
@@ -2066,8 +2077,10 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
                                   8 * sizeof(uint32_t));
     }
 
+    m_CommandList->endTimerQuery(m_GpuTimers[m_NextTimerIdx]);
     m_CommandList->close();
     GetDevice()->executeCommandList(m_CommandList);
+    frame::RotateAndReadGpuTimer(GetDevice(), m_GpuTimers, m_NextTimerIdx, m_UI.gpuFrameTimeMs);
 
     // ----- 7. UI stats -----
     m_UI.totalInstanceCount     = static_cast<uint32_t>(m_Registry.totalInstanceCount());
@@ -2223,6 +2236,9 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
             m_SDSMReadbackPending[readSlot] = false;
         }
     }
+
+    cpuTimer.Stop();
+    m_UI.cpuRenderTimeMs = (float)cpuTimer.Milliseconds();
 }
 
 // ===========================================================================

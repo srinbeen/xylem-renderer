@@ -259,6 +259,10 @@ private:
     ViewHandler&                                       m_ViewHandler;
     std::shared_ptr<engine::ShaderFactory>             m_ShaderFactory;
 
+    // GPU frame timer ring buffer
+    nvrhi::TimerQueryHandle                            m_GpuTimers[k_QueuedFrames];
+    uint32_t                                           m_NextTimerIdx = 0;
+
     // Readback ring buffer for GPU cull count display
     nvrhi::BufferHandle                                m_ReadbackBuffers[k_QueuedFrames];
     uint32_t                                           m_ReadbackFrameIndex    = 0;
@@ -269,7 +273,7 @@ private:
     // Readback ring for SDSM debug (mirrors cascadeDataBuffer; one slot per queued frame)
     nvrhi::BufferHandle                                m_SDSMReadbackBuffers[k_QueuedFrames];
     uint32_t                                           m_SDSMReadbackFrameIndex = 0;
-    bool                                               m_SDSMReadbackPending[k_QueuedFrames] = { false, false, false };
+    bool                                               m_SDSMReadbackPending[k_QueuedFrames] = {};
 
     UIData&                                            m_UI;
     SceneRegistry&                                     m_Registry;
@@ -332,7 +336,6 @@ private:
     bool _InitSkyPass();
     bool _InitHiZShaders();
     bool _InitSDSMPass();
-    // bool _InitTimerQueries();
 
     void _UploadAllAssets(nvrhi::ICommandList* commandList);
     void _UploadAsset(const TreeAssetDef& assetDef, GPUTreeAsset& gpuAsset, nvrhi::ICommandList* commandList);

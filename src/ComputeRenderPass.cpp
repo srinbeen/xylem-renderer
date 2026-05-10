@@ -1228,7 +1228,10 @@ bool ComputeRenderPass::Init() {
     if (!_InitCullPass(nullptr))                       return false;
 
     m_CommandList = GetDevice()->createCommandList();
-    // _InitTimerQueries();
+
+    for (uint32_t i = 0; i < k_QueuedFrames; ++i) {
+        m_GpuTimers[i] = GetDevice()->createTimerQuery();
+    }
 
     return LoadResources();
 }
@@ -1377,7 +1380,8 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     const float aspectRatio = m_ViewHandler.view.GetAspectRatio();
 
     m_CommandList->open();
-    // m_CommandList->beginTimerQuery(m_GpuTimers[m_NextTimerIdx]);
+    frame::ResetGpuTimerForFrame(GetDevice(), m_GpuTimers, m_NextTimerIdx);
+    m_CommandList->beginTimerQuery(m_GpuTimers[m_NextTimerIdx]);
 
     // m_CommandList->beginMarker("Frame");
 
@@ -1593,14 +1597,11 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
 
     // m_CommandList->endMarker(); // Frame
 
-    // m_CommandList->endTimerQuery(m_GpuTimers[m_NextTimerIdx]);
+    m_CommandList->endTimerQuery(m_GpuTimers[m_NextTimerIdx]);
     m_CommandList->close();
     GetDevice()->executeCommandList(m_CommandList);
 
-    // int prevIdx = (m_NextTimerIdx + k_QueuedFrames - 1) % k_QueuedFrames;
-    // if (GetDevice()->pollTimerQuery(m_GpuTimers[prevIdx]))
-    //     m_UI.gpuFrameTimeMs = GetDevice()->getTimerQueryTime(m_GpuTimers[prevIdx]) * 1000.0f;
-    // m_NextTimerIdx = (m_NextTimerIdx + 1) % k_QueuedFrames;
+    frame::RotateAndReadGpuTimer(GetDevice(), m_GpuTimers, m_NextTimerIdx, m_UI.gpuFrameTimeMs);
 
     m_UI.totalInstanceCount     = m_Registry.totalInstanceCount();
     m_UI.totalLeafInstanceCount = m_Registry.totalLeafInstanceCount();
@@ -2516,11 +2517,6 @@ bool ComputeRenderPass::_InitShadowImpostorPass() {
     return sip.sampler != nullptr && sip.depthSampler != nullptr;
 }
 
-// bool ComputeRenderPass::_InitTimerQueries() {
-//     for (uint32_t i = 0; i < k_QueuedFrames; i++)
-//         m_GpuTimers[i] = GetDevice()->createTimerQuery();
-//     return true;
-// }
 
 bool ComputeRenderPass::_InitShadowPass() {
     m_StageResources.shadow.depthTexture = GetDevice()->createTexture(

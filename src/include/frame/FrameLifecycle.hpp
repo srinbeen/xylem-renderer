@@ -18,9 +18,11 @@ inline constexpr float kDefaultVerticalFovDegrees = 60.f;
 inline constexpr float k_ShadowDistanceBucketRatio = 1.1f;
 
 // Shared across all render passes — depth of the per-pass timer query
-// and GPU readback rings. Set to the minimum verified-safe value so
-// stalls are avoided without paying for unnecessary in-flight memory.
-inline constexpr uint32_t k_QueuedFrames = 3;
+// and GPU readback rings. Sized for "CPU runs N frames ahead of GPU"
+// scenarios. Donut's work_graphs example uses 10; 8 covers the heaviest
+// GPU-bound P1/P2 workloads here without unnecessary memory overhead.
+// Increase if timer values stall or readback values lag noticeably.
+inline constexpr uint32_t k_QueuedFrames = 8;
 
 inline void UpdateProjectionAndViewport(ViewHandler& viewHandler,
                                         const nvrhi::FramebufferInfoEx& fbInfo,
@@ -99,24 +101,46 @@ inline void ComputeCascades(ViewHandler& viewHandler,
 
 // Per-pass GPU timer ring rotate-and-read.
 //
-// Call once per frame after executeCommandList. Reads the previous-frame's
-// timer result if available (non-blocking poll), writes outMs in milliseconds,
-// and advances nextIdx. Each pass owns its own ring; this just encapsulates
-// the rotate/poll boilerplate so it isn't copy-pasted across three passes.
+// Call once per frame after executeCommandList. Walks the ring MRU-first,
+// returning the most recent slot whose result is available; writes outMs in
+// milliseconds and advances nextIdx. Each pass owns its own ring; this just
+// encapsulates the rotate/poll boilerplate so it isn't copy-pasted across
+// three passes.
 //
-// outMs is left unchanged when no result is available yet (typical for the
-// first k_QueuedFrames-1 frames after init or after a pipeline switch).
+// Pairs with ResetGpuTimerForFrame, which MUST be called before each
+// beginTimerQuery to clear the slot's resolved/cached-time state. Without
+// the reset, getTimerQueryTime short-circuits and returns the cached time
+// from the previous read on the same slot — the value never changes.
+//
+// outMs is left unchanged when no slot has a fresh result yet (typical for
+// the first ~k_QueuedFrames frames after init or a pipeline switch).
 inline void RotateAndReadGpuTimer(
     nvrhi::IDevice* device,
     nvrhi::TimerQueryHandle (&timers)[k_QueuedFrames],
     uint32_t& nextIdx,
     float& outMs)
 {
-    const uint32_t prevIdx = (nextIdx + k_QueuedFrames - 1) % k_QueuedFrames;
-    if (timers[prevIdx] && device->pollTimerQuery(timers[prevIdx])) {
-        outMs = device->getTimerQueryTime(timers[prevIdx]) * 1000.0f;
+    for (uint32_t step = 1; step <= k_QueuedFrames; ++step) {
+        const uint32_t idx = (nextIdx + k_QueuedFrames - step) % k_QueuedFrames;
+        if (timers[idx] && device->pollTimerQuery(timers[idx])) {
+            outMs = device->getTimerQueryTime(timers[idx]) * 1000.0f;
+            break;
+        }
     }
     nextIdx = (nextIdx + 1) % k_QueuedFrames;
+}
+
+// Reset the slot before reusing it for beginTimerQuery. Required to make
+// getTimerQueryTime read fresh data instead of returning the cached value
+// from the previous read on this slot.
+inline void ResetGpuTimerForFrame(
+    nvrhi::IDevice* device,
+    nvrhi::TimerQueryHandle (&timers)[k_QueuedFrames],
+    uint32_t nextIdx)
+{
+    if (timers[nextIdx]) {
+        device->resetTimerQuery(timers[nextIdx]);
+    }
 }
 
 } // namespace Xylem::frame

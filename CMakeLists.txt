@@ -56,7 +56,7 @@ add_subdirectory(meshoptimizer)
 
 include(donut/compileshaders.cmake)
 # file(GLOB SHADERS "${SOURCE_DIR}/shaders/*.hlsl")
-file(GLOB ${PROJECT_NAME}_SOURCES "${${PROJECT_NAME}_SOURCE_DIR}/*.cpp")
+file(GLOB ${PROJECT_NAME}_SOURCES CONFIGURE_DEPENDS "${${PROJECT_NAME}_SOURCE_DIR}/*.cpp")
 
 set(SHADER_REG_SPEC "${${PROJECT_NAME}_SOURCE_DIR}/shaders/shader_register_map.json")
 set(SHADER_REG_GEN_CMAKE "${CMAKE_CURRENT_SOURCE_DIR}/generate_shader_register_map.cmake")

@@ -62,6 +62,7 @@ void UIRenderer::buildUI() {
     ImGui::Begin("Xylem", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
 
     _buildSceneFileSection();
+    _buildBenchmarkSection();
 
     // =====================================================================
     // PERFORMANCE METRICS
@@ -196,6 +197,40 @@ void UIRenderer::_buildSceneFileSection() {
             ? ImVec4(1.0f, 0.4f, 0.4f, 1.0f)   // red
             : ImVec4(0.7f, 0.7f, 0.7f, 1.0f);  // gray
         ImGui::TextColored(col, "Status: %s", m_ui.sceneLoadStatus.c_str());
+    }
+}
+
+
+void UIRenderer::_buildBenchmarkSection() {
+    if (!ImGui::CollapsingHeader("Benchmark", ImGuiTreeNodeFlags_DefaultOpen))
+        return;
+
+    ImGui::TextDisabled("Path: scene/benchmark_path.json");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Reload")) {
+        m_ui.benchmarkPathReloadRequested = true;
+    }
+
+    ImGui::TextWrapped("Vsync will be disabled during the run and restored after.");
+
+    if (m_ui.benchmarkInProgress) {
+        if (ImGui::Button("Cancel##bench")) {
+            m_ui.benchmarkCancelRequested = true;
+        }
+        if (!m_ui.benchmarkProgressLabel.empty()) {
+            ImGui::TextUnformatted(m_ui.benchmarkProgressLabel.c_str());
+        }
+    } else {
+        if (ImGui::Button("Run Benchmark")) {
+            m_ui.benchmarkRunRequested = true;
+        }
+    }
+
+    if (!m_ui.benchmarkLastStatus.empty()) {
+        const ImVec4 col = m_ui.benchmarkLastStatusIsError
+            ? ImVec4(1.0f, 0.4f, 0.4f, 1.0f)   // red
+            : ImVec4(0.4f, 1.0f, 0.4f, 1.0f);  // green
+        ImGui::TextColored(col, "Status: %s", m_ui.benchmarkLastStatus.c_str());
     }
 }
 

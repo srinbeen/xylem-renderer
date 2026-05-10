@@ -36,6 +36,7 @@ bool RenderOrchestrator::Init()
 
     m_UI.activePipeline = m_UI.requestedPipeline = Pipeline::Traditional;
     m_UIPass.Init(m_ShaderFactory);
+    m_Benchmark.Init();
     return true;
 }
 
@@ -140,9 +141,14 @@ void RenderOrchestrator::_switchPipelineIfNeeded()
 
 void RenderOrchestrator::Animate(float seconds)
 {
+    const bool benchmarkOwnsCamera = m_Benchmark.PreAnimate(seconds);
+
     _loadSceneIfRequested();
     _switchPipelineIfNeeded();
-    m_ViewHandler.camera.Animate(seconds);
+
+    if (!benchmarkOwnsCamera) {
+        m_ViewHandler.camera.Animate(seconds);
+    }
 
     // Drive the dirty cycle here so SharedGPUAssets re-bakes the impostor atlas
     // *after* CPU mesh data is regenerated and *before* the active pass rebuilds
@@ -197,6 +203,7 @@ void RenderOrchestrator::Render(nvrhi::IFramebuffer* framebuffer)
     }
 
     _activePass()->Render(framebuffer);
+    m_Benchmark.PostRender();
     m_UIPass.Render(framebuffer);
 }
 

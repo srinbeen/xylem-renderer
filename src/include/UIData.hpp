@@ -145,6 +145,18 @@ struct UIData {
     // after _loadSceneIfRequested completes.
     std::string sceneLoadStatus;
     bool        sceneLoadStatusIsError = false;
+
+    // --- Benchmark ---
+    // UIRenderer writes the *Requested flags; BenchmarkRunner clears them and
+    // writes the read-only progress/status fields. Mirrors the scene-load
+    // pattern above so UIRenderer never directly references BenchmarkRunner.
+    bool        benchmarkRunRequested        = false;  // UIRenderer writes; runner clears
+    bool        benchmarkCancelRequested     = false;
+    bool        benchmarkPathReloadRequested = false;
+    bool        benchmarkInProgress          = false;  // runner writes
+    std::string benchmarkProgressLabel;                // runner writes (e.g. "Pipeline 1/3 ...")
+    std::string benchmarkLastStatus;                   // runner writes on completion
+    bool        benchmarkLastStatusIsError   = false;
 };
 
 } // namespace Xylem

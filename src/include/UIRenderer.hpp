@@ -99,6 +99,7 @@ protected:
 
 private:
     void _buildSceneFileSection();
+    void _buildBenchmarkSection();
     void _buildLSystemsSection();
     void _buildAssetsSection();
     void _buildRegionsSection();

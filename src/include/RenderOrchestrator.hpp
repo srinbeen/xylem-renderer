@@ -14,6 +14,7 @@
 #include "ComputeRenderPass.hpp"
 #include "MeshShaderRenderPass.hpp"
 #include "UIRenderer.hpp"
+#include "BenchmarkRunner.hpp"
 #include "frame/FrameStages.hpp"
 
 namespace Xylem {
@@ -34,6 +35,7 @@ public:
         , m_Compute{dm, registry, ui, m_ViewHandler}
         , m_MeshShader{dm, registry, ui, m_ViewHandler}
         , m_UIPass{dm, &registry, ui, &m_ViewHandler}
+        , m_Benchmark{dm, ui, m_ViewHandler}
     {
         m_Traditional.SetSharedAssets(&m_Shared);
         m_Compute.SetSharedAssets(&m_Shared);
@@ -69,6 +71,7 @@ private:
     ComputeRenderPass       m_Compute;
     MeshShaderRenderPass    m_MeshShader;
     UIRenderer              m_UIPass;
+    BenchmarkRunner         m_Benchmark;
 
     std::shared_ptr<engine::ShaderFactory> m_ShaderFactory;
 

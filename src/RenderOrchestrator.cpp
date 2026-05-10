@@ -128,6 +128,9 @@ void RenderOrchestrator::_switchPipelineIfNeeded()
     // (~k_QueuedFrames frames before the first GPU result lands).
     m_UI.gpuFrameTimeMs  = -1.0f;
     m_UI.cpuRenderTimeMs = 0.0f;
+    for (size_t s = 0; s < static_cast<size_t>(frame::FrameStage::COUNT); ++s) {
+        m_UI.gpuStageTimeMs[s] = -1.0f;
+    }
 
     // The incoming pipeline's GPU state may be stale from registry edits made
     // while it was inactive (only the active pipeline gets dirty notifications).

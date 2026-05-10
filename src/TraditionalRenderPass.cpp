@@ -445,6 +445,12 @@ bool TraditionalRenderPass::Init() {
         m_GpuTimers[i] = GetDevice()->createTimerQuery();
     }
 
+    for (size_t s = 0; s < kStageCount; ++s) {
+        for (uint32_t i = 0; i < k_QueuedFrames; ++i) {
+            m_StageTimers[s][i] = GetDevice()->createTimerQuery();
+        }
+    }
+
     // GPU resources
     if (!LoadResources())                               return false;
     return true;
@@ -656,7 +662,13 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_CommandList->beginMarker("Draw");
 
     m_CommandList->beginMarker("Shadow");
+    frame::BeginGpuStage(m_CommandList, GetDevice(),
+                         m_StageTimers[static_cast<size_t>(frame::FrameStage::Shadow)],
+                         m_StageNextIdx[static_cast<size_t>(frame::FrameStage::Shadow)]);
     _RenderShadowPass();
+    frame::EndGpuStage(m_CommandList,
+                       m_StageTimers[static_cast<size_t>(frame::FrameStage::Shadow)],
+                       m_StageNextIdx[static_cast<size_t>(frame::FrameStage::Shadow)]);
     m_CommandList->endMarker();
 
     if (m_UI.showShadowMap) {
@@ -672,8 +684,18 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_CommandList->beginMarker("Main");
 
     m_CommandList->beginMarker("Sky");
+    frame::BeginGpuStage(m_CommandList, GetDevice(),
+                         m_StageTimers[static_cast<size_t>(frame::FrameStage::Sky)],
+                         m_StageNextIdx[static_cast<size_t>(frame::FrameStage::Sky)]);
     _RenderSkyPass(framebuffer);
+    frame::EndGpuStage(m_CommandList,
+                       m_StageTimers[static_cast<size_t>(frame::FrameStage::Sky)],
+                       m_StageNextIdx[static_cast<size_t>(frame::FrameStage::Sky)]);
     m_CommandList->endMarker();
+
+    frame::BeginGpuStage(m_CommandList, GetDevice(),
+                         m_StageTimers[static_cast<size_t>(frame::FrameStage::Scene)],
+                         m_StageNextIdx[static_cast<size_t>(frame::FrameStage::Scene)]);
 
     m_CommandList->beginMarker("Trunk");
     _RenderTrunkPass(framebuffer);
@@ -691,6 +713,10 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     _RenderImpostorPass(framebuffer);
     m_CommandList->endMarker();
 
+    frame::EndGpuStage(m_CommandList,
+                       m_StageTimers[static_cast<size_t>(frame::FrameStage::Scene)],
+                       m_StageNextIdx[static_cast<size_t>(frame::FrameStage::Scene)]);
+
     m_CommandList->endMarker(); // Main
 
     m_CommandList->endMarker(); // Draw
@@ -703,6 +729,12 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     GetDevice()->executeCommandList(m_CommandList);
 
     frame::RotateAndReadGpuTimer(GetDevice(), m_GpuTimers, m_NextTimerIdx, m_UI.gpuFrameTimeMs);
+
+    for (size_t s = 0; s < kStageCount; ++s) {
+        frame::RotateAndReadGpuTimer(GetDevice(),
+                                     m_StageTimers[s], m_StageNextIdx[s],
+                                     m_UI.gpuStageTimeMs[s]);
+    }
 
     const uint32_t meshVisibleCount = static_cast<uint32_t>(m_VisibleInstanceReferences.size());
     const uint32_t impostorVisibleCount = static_cast<uint32_t>(m_VisibleImpostorReferences.size());

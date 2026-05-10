@@ -263,6 +263,12 @@ private:
     nvrhi::TimerQueryHandle                            m_GpuTimers[k_QueuedFrames];
     uint32_t                                           m_NextTimerIdx = 0;
 
+    // Per-stage GPU timer rings. Indexed by [FrameStage][ringSlot].
+    // Wrapped via frame::BeginGpuStage / frame::EndGpuStage in Render().
+    static constexpr size_t kStageCount = static_cast<size_t>(frame::FrameStage::COUNT);
+    nvrhi::TimerQueryHandle                            m_StageTimers[kStageCount][k_QueuedFrames];
+    uint32_t                                           m_StageNextIdx[kStageCount] = {};
+
     // Readback ring buffer for GPU cull count display
     nvrhi::BufferHandle                                m_ReadbackBuffers[k_QueuedFrames];
     uint32_t                                           m_ReadbackFrameIndex    = 0;

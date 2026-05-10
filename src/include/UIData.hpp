@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "Render.hpp"
+#include "frame/FrameStages.hpp"
 
 namespace Xylem {
 
@@ -24,6 +25,13 @@ struct UIData {
 
     float    gpuFrameTimeMs       = -1.0f; // -1 = not yet available
     float    cpuRenderTimeMs      = 0.0f;
+
+    // Per-stage GPU timing in milliseconds. Indexed by frame::FrameStage.
+    // -1 sentinel means "no value yet" — either the active pipeline doesn't
+    // run this stage, or the timer ring is still warming up after a switch.
+    // Reset to all -1 in RenderOrchestrator::_switchPipelineIfNeeded.
+    float    gpuStageTimeMs[static_cast<size_t>(frame::FrameStage::COUNT)] =
+        { -1.f, -1.f, -1.f, -1.f, -1.f, -1.f, -1.f };
     uint32_t visibleInstanceCount = 0;
     uint32_t impostorVisibleCount = 0;
     uint32_t totalInstanceCount   = 0;

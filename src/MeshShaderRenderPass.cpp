@@ -118,6 +118,12 @@ bool MeshShaderRenderPass::_InitShared() {
         m_GpuTimers[i] = GetDevice()->createTimerQuery();
     }
 
+    for (size_t s = 0; s < kStageCount; ++s) {
+        for (uint32_t i = 0; i < k_QueuedFrames; ++i) {
+            m_StageTimers[s][i] = GetDevice()->createTimerQuery();
+        }
+    }
+
     return true;
 }
 
@@ -1744,18 +1750,36 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         m_CommandList->beginMarker("HiZ");
 
         m_CommandList->beginMarker("DepthPrepass");
+        frame::BeginGpuStage(m_CommandList, GetDevice(),
+                             m_StageTimers[static_cast<size_t>(frame::FrameStage::DepthPrepass)],
+                             m_StageNextIdx[static_cast<size_t>(frame::FrameStage::DepthPrepass)]);
         _RenderDepthPrepass();
+        frame::EndGpuStage(m_CommandList,
+                           m_StageTimers[static_cast<size_t>(frame::FrameStage::DepthPrepass)],
+                           m_StageNextIdx[static_cast<size_t>(frame::FrameStage::DepthPrepass)]);
         m_CommandList->endMarker();
 
         m_CommandList->beginMarker("BuildMipChain");
+        frame::BeginGpuStage(m_CommandList, GetDevice(),
+                             m_StageTimers[static_cast<size_t>(frame::FrameStage::HiZ)],
+                             m_StageNextIdx[static_cast<size_t>(frame::FrameStage::HiZ)]);
         _BuildHiZMipChain();
+        frame::EndGpuStage(m_CommandList,
+                           m_StageTimers[static_cast<size_t>(frame::FrameStage::HiZ)],
+                           m_StageNextIdx[static_cast<size_t>(frame::FrameStage::HiZ)]);
         m_CommandList->endMarker();
 
         m_CommandList->beginMarker("SDSM");
+        frame::BeginGpuStage(m_CommandList, GetDevice(),
+                             m_StageTimers[static_cast<size_t>(frame::FrameStage::SDSM)],
+                             m_StageNextIdx[static_cast<size_t>(frame::FrameStage::SDSM)]);
         float regionNear, regionFar;
         _ComputeRegionEnvelope(camPos, camDir, regionNear, regionFar);
         _RunSDSMBuildCascades(m_Registry.getSceneBounds(), aspectRatio, dm::radians(60.f),
                               regionNear, regionFar);
+        frame::EndGpuStage(m_CommandList,
+                           m_StageTimers[static_cast<size_t>(frame::FrameStage::SDSM)],
+                           m_StageNextIdx[static_cast<size_t>(frame::FrameStage::SDSM)]);
         m_CommandList->endMarker();
 
         m_CommandList->endMarker();
@@ -1828,6 +1852,9 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
 
     // ----- 4. GPU cull dispatches -----
     m_CommandList->beginMarker("Cull");
+    frame::BeginGpuStage(m_CommandList, GetDevice(),
+                         m_StageTimers[static_cast<size_t>(frame::FrameStage::Cull)],
+                         m_StageNextIdx[static_cast<size_t>(frame::FrameStage::Cull)]);
     {
         nvrhi::ComputeState cs;
         cs.bindings = { m_StageResources.cull.bindingSet };
@@ -1850,6 +1877,9 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         m_CommandList->dispatch((m_TotalCapacity + 255) / 256, 1, 1);
         m_CommandList->endMarker();
     }
+    frame::EndGpuStage(m_CommandList,
+                       m_StageTimers[static_cast<size_t>(frame::FrameStage::Cull)],
+                       m_StageNextIdx[static_cast<size_t>(frame::FrameStage::Cull)]);
     m_CommandList->endMarker();
 
     // Readback ring copy: [main counts][shadow counts][impostor counts][shadowImpostor counts][shadow unique]
@@ -1882,6 +1912,9 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     // ----- 4. Shadow pass: 4 cascades via ExecuteIndirect(DISPATCH_MESH) -----
     if (m_StageResources.shadow.pipeline && m_StageResources.shadow.dispatchMeshSignature) {
         m_CommandList->beginMarker("Shadow");
+        frame::BeginGpuStage(m_CommandList, GetDevice(),
+                             m_StageTimers[static_cast<size_t>(frame::FrameStage::Shadow)],
+                             m_StageNextIdx[static_cast<size_t>(frame::FrameStage::Shadow)]);
 
         // Clear all cascades.
         for (uint32_t c = 0; c < Render::c_NumCascades; c++) {
@@ -1997,6 +2030,9 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
 
             m_CommandList->endMarker(); // C<c>
         }
+        frame::EndGpuStage(m_CommandList,
+                           m_StageTimers[static_cast<size_t>(frame::FrameStage::Shadow)],
+                           m_StageNextIdx[static_cast<size_t>(frame::FrameStage::Shadow)]);
         m_CommandList->endMarker(); // Shadow
     }
 
@@ -2020,9 +2056,18 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_CommandList->beginMarker("Main");
 
     m_CommandList->beginMarker("Sky");
+    frame::BeginGpuStage(m_CommandList, GetDevice(),
+                         m_StageTimers[static_cast<size_t>(frame::FrameStage::Sky)],
+                         m_StageNextIdx[static_cast<size_t>(frame::FrameStage::Sky)]);
     _RenderSkyPass(framebuffer);
+    frame::EndGpuStage(m_CommandList,
+                       m_StageTimers[static_cast<size_t>(frame::FrameStage::Sky)],
+                       m_StageNextIdx[static_cast<size_t>(frame::FrameStage::Sky)]);
     m_CommandList->endMarker();
 
+    frame::BeginGpuStage(m_CommandList, GetDevice(),
+                         m_StageTimers[static_cast<size_t>(frame::FrameStage::Scene)],
+                         m_StageNextIdx[static_cast<size_t>(frame::FrameStage::Scene)]);
     m_CommandList->beginMarker("Trunk");
     _RenderTrunkPass(framebuffer);
     m_CommandList->endMarker();
@@ -2038,6 +2083,9 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_CommandList->beginMarker("Impostors");
     _RenderImpostorPass(framebuffer);
     m_CommandList->endMarker();
+    frame::EndGpuStage(m_CommandList,
+                       m_StageTimers[static_cast<size_t>(frame::FrameStage::Scene)],
+                       m_StageNextIdx[static_cast<size_t>(frame::FrameStage::Scene)]);
 
     m_CommandList->endMarker(); // Main
 
@@ -2078,6 +2126,22 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_CommandList->close();
     GetDevice()->executeCommandList(m_CommandList);
     frame::RotateAndReadGpuTimer(GetDevice(), m_GpuTimers, m_NextTimerIdx, m_UI.gpuFrameTimeMs);
+
+    for (size_t s = 0; s < kStageCount; ++s) {
+        frame::RotateAndReadGpuTimer(GetDevice(),
+                                     m_StageTimers[s], m_StageNextIdx[s],
+                                     m_UI.gpuStageTimeMs[s]);
+    }
+
+    // When Hi-Z is toggled off, DepthPrepass / HiZ / SDSM don't emit timer
+    // queries this frame — without this, their UI/CSV slots would show stale
+    // values from when Hi-Z was last on. Force them to the -1 sentinel so
+    // the UI renders "—" and CSV writes -1.
+    if (!hizActive) {
+        m_UI.gpuStageTimeMs[static_cast<size_t>(frame::FrameStage::DepthPrepass)] = -1.f;
+        m_UI.gpuStageTimeMs[static_cast<size_t>(frame::FrameStage::HiZ)]          = -1.f;
+        m_UI.gpuStageTimeMs[static_cast<size_t>(frame::FrameStage::SDSM)]         = -1.f;
+    }
 
     // ----- 7. UI stats -----
     m_UI.totalInstanceCount     = static_cast<uint32_t>(m_Registry.totalInstanceCount());

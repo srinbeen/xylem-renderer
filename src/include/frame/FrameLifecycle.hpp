@@ -143,6 +143,32 @@ inline void ResetGpuTimerForFrame(
     }
 }
 
+// Reset + begin a stage-scoped GPU timer. Pairs with EndGpuStage.
+//
+// The reset is required for the same reason RotateAndReadGpuTimer's prologue
+// is required: nvrhi::d3d12::Device::getTimerQueryTime short-circuits when
+// query->resolved is already true and returns the cached time. resetTimerQuery
+// clears resolved/started so the next read sees fresh data.
+inline void BeginGpuStage(
+    nvrhi::ICommandList* cmdList,
+    nvrhi::IDevice*      device,
+    nvrhi::TimerQueryHandle (&ring)[k_QueuedFrames],
+    uint32_t&            nextIdx)
+{
+    if (ring[nextIdx]) device->resetTimerQuery(ring[nextIdx]);
+    cmdList->beginTimerQuery(ring[nextIdx]);
+}
+
+// End the stage timer. nextIdx is NOT incremented here — RotateAndReadGpuTimer
+// handles the increment as part of its rotate-and-read cycle.
+inline void EndGpuStage(
+    nvrhi::ICommandList* cmdList,
+    nvrhi::TimerQueryHandle (&ring)[k_QueuedFrames],
+    uint32_t             nextIdx)
+{
+    cmdList->endTimerQuery(ring[nextIdx]);
+}
+
 } // namespace Xylem::frame
 
 #endif // XYLEM_FRAME_LIFECYCLE_H

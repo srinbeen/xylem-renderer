@@ -189,6 +189,12 @@ private:
     nvrhi::TimerQueryHandle                            m_GpuTimers[k_QueuedFrames];
     uint32_t                                           m_NextTimerIdx = 0;
 
+    // Per-stage GPU timer rings. Indexed by [FrameStage][ringSlot].
+    // Wrapped via frame::BeginGpuStage / frame::EndGpuStage in Render().
+    static constexpr size_t kStageCount = static_cast<size_t>(frame::FrameStage::COUNT);
+    nvrhi::TimerQueryHandle                            m_StageTimers[kStageCount][k_QueuedFrames];
+    uint32_t                                           m_StageNextIdx[kStageCount] = {};
+
     UIData&                                            m_UI;
     SceneRegistry&                                     m_Registry;
     SharedGPUAssets*                                   m_Shared = nullptr;

@@ -82,6 +82,95 @@ void UIRenderer::buildUI() {
         else
             ImGui::TextDisabled("GPU pass:   (pending)");
 
+        // ----- Per-stage GPU breakdown -----
+        {
+            const size_t kCount = static_cast<size_t>(frame::FrameStage::COUNT);
+
+            // Hide the section entirely if no stage has reported a value yet
+            // (warmup right after a pipeline switch).
+            bool anyStageReady = false;
+            for (size_t s = 0; s < kCount; ++s) {
+                if (m_ui.gpuStageTimeMs[s] >= 0.f) { anyStageReady = true; break; }
+            }
+
+            if (anyStageReady) {
+                ImGui::Spacing();
+                ImGui::TextDisabled("GPU stages:");
+
+                // Fixed palette per FrameStage so colors are stable across
+                // pipeline switches. Defined once and reused for both the
+                // colorized text rows (which act as the legend) and the bar.
+                static constexpr ImU32 kStageColors[7] = {
+                    IM_COL32( 64, 192, 192, 255), // DepthPrepass — teal
+                    IM_COL32(160, 224,  64, 255), // HiZ          — lime
+                    IM_COL32(240, 200,  64, 255), // SDSM         — gold
+                    IM_COL32(240, 144,  64, 255), // Cull         — orange
+                    IM_COL32(208,  96, 192, 255), // Shadow       — magenta
+                    IM_COL32( 96, 176, 240, 255), // Sky          — sky
+                    IM_COL32(144, 144, 168, 255), // Scene        — slate
+                };
+                const ImU32 kMiscColor = IM_COL32(96, 96, 96, 255);
+
+                // Colorized stage rows. Each row is rendered in its bar color
+                // — that's the legend; the bar is then unambiguous without a
+                // separate swatch list.
+                float stageSum = 0.f;
+                for (size_t s = 0; s < kCount; ++s) {
+                    const char* name = frame::ToString(static_cast<frame::FrameStage>(s));
+                    const float v = m_ui.gpuStageTimeMs[s];
+                    const ImVec4 col = ImGui::ColorConvertU32ToFloat4(kStageColors[s]);
+                    if (v >= 0.f) {
+                        ImGui::TextColored(col, "  %-13s %.2f ms", name, v);
+                        stageSum += v;
+                    } else {
+                        // Stage not run by this pipeline — render in dim gray
+                        // so it doesn't visually claim a color slot in the bar.
+                        ImGui::TextDisabled("  %-13s   \xE2\x80\x94", name);
+                    }
+                }
+
+                // Misc row: gpuFrameTimeMs - sum(stages where >= 0).
+                // Hidden if gpuFrameTimeMs hasn't reported yet (warmup).
+                float miscMs = -1.f;
+                if (m_ui.gpuFrameTimeMs >= 0.f) {
+                    miscMs = m_ui.gpuFrameTimeMs - stageSum;
+                    if (miscMs < 0.f) miscMs = 0.f;  // clamp negative noise
+                    const ImVec4 miscCol = ImGui::ColorConvertU32ToFloat4(kMiscColor);
+                    ImGui::TextColored(miscCol, "  %-13s %.2f ms", "Misc", miscMs);
+                }
+
+                const float barTotal = (miscMs >= 0.f) ? (stageSum + miscMs) : stageSum;
+                if (barTotal > 0.f) {
+                    const float barHeight = 20.f;
+                    const float barWidth  = ImGui::GetContentRegionAvail().x;
+                    const ImVec2 cursor   = ImGui::GetCursorScreenPos();
+                    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+                    float xOffset = 0.f;
+                    for (size_t s = 0; s < kCount; ++s) {
+                        const float v = m_ui.gpuStageTimeMs[s];
+                        if (v < 0.f) continue;
+                        const float w = (v / barTotal) * barWidth;
+                        dl->AddRectFilled(
+                            ImVec2(cursor.x + xOffset,     cursor.y),
+                            ImVec2(cursor.x + xOffset + w, cursor.y + barHeight),
+                            kStageColors[s]);
+                        xOffset += w;
+                    }
+                    if (miscMs > 0.f) {
+                        const float w = (miscMs / barTotal) * barWidth;
+                        dl->AddRectFilled(
+                            ImVec2(cursor.x + xOffset,     cursor.y),
+                            ImVec2(cursor.x + xOffset + w, cursor.y + barHeight),
+                            kMiscColor);
+                    }
+
+                    // Reserve the bar's screen space.
+                    ImGui::Dummy(ImVec2(barWidth, barHeight));
+                }
+            }
+        }
+
         ImGui::Separator();
         _buildTreesFunnel();
         ImGui::Separator();

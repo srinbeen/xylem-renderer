@@ -20,6 +20,7 @@
 #include "UIData.hpp"
 #include "ViewHandler.hpp"
 #include "frame/FrameStages.hpp"
+#include "frame/FrameLifecycle.hpp"
 
 namespace Xylem {
 
@@ -27,7 +28,7 @@ using namespace donut;
 
 class TraditionalRenderPass : public app::IRenderPass, public frame::IFrameStagedPass {
 public:
-    static constexpr uint32_t m_QueuedFrames = 4;
+    static constexpr uint32_t k_QueuedFrames = Xylem::frame::k_QueuedFrames;
     static constexpr uint32_t m_ShadowRes = 2048;
 
     TraditionalRenderPass(app::DeviceManager* dm, SceneRegistry& registry, UIData& ui, ViewHandler& vh)
@@ -185,8 +186,8 @@ private:
     ViewHandler&                                       m_ViewHandler;
     std::shared_ptr<engine::ShaderFactory>             m_ShaderFactory;
 
-    // nvrhi::TimerQueryHandle                            m_GpuTimers[m_QueuedFrames];
-    // int                                                m_NextTimerIdx = 0;
+    nvrhi::TimerQueryHandle                            m_GpuTimers[k_QueuedFrames];
+    uint32_t                                           m_NextTimerIdx = 0;
 
     UIData&                                            m_UI;
     SceneRegistry&                                     m_Registry;

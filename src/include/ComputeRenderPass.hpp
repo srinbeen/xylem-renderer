@@ -20,6 +20,7 @@
 #include "ViewHandler.hpp"
 #include "macros.h"
 #include "frame/FrameStages.hpp"
+#include "frame/FrameLifecycle.hpp"
 
 namespace Xylem {
 
@@ -27,7 +28,7 @@ using namespace donut;
 
 class ComputeRenderPass : public app::IRenderPass, public frame::IFrameStagedPass {
 public:
-    static constexpr uint32_t k_QueuedFrames  = 3;
+    static constexpr uint32_t k_QueuedFrames = Xylem::frame::k_QueuedFrames;
     static constexpr uint32_t k_ShadowRes     = 1 << 11;
     static constexpr float    k_CapacitySlack = 1.5f;
     // Hemi-octahedral view counts mirror SharedGPUAssets — kept here for the

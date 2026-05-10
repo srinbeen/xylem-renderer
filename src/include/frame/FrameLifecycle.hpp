@@ -17,6 +17,11 @@ inline constexpr float kDefaultVerticalFovDegrees = 60.f;
 
 inline constexpr float k_ShadowDistanceBucketRatio = 1.1f;
 
+// Shared across all render passes — depth of the per-pass timer query
+// and GPU readback rings. Set to the minimum verified-safe value so
+// stalls are avoided without paying for unnecessary in-flight memory.
+inline constexpr uint32_t k_QueuedFrames = 3;
+
 inline void UpdateProjectionAndViewport(ViewHandler& viewHandler,
                                         const nvrhi::FramebufferInfoEx& fbInfo,
                                         float verticalFovRadians = dm::radians(kDefaultVerticalFovDegrees),
@@ -90,6 +95,28 @@ inline void ComputeCascades(ViewHandler& viewHandler,
         verticalFovRadians,
         shadowResolution,
         pssmLambda);
+}
+
+// Per-pass GPU timer ring rotate-and-read.
+//
+// Call once per frame after executeCommandList. Reads the previous-frame's
+// timer result if available (non-blocking poll), writes outMs in milliseconds,
+// and advances nextIdx. Each pass owns its own ring; this just encapsulates
+// the rotate/poll boilerplate so it isn't copy-pasted across three passes.
+//
+// outMs is left unchanged when no result is available yet (typical for the
+// first k_QueuedFrames-1 frames after init or after a pipeline switch).
+inline void RotateAndReadGpuTimer(
+    nvrhi::IDevice* device,
+    nvrhi::TimerQueryHandle (&timers)[k_QueuedFrames],
+    uint32_t& nextIdx,
+    float& outMs)
+{
+    const uint32_t prevIdx = (nextIdx + k_QueuedFrames - 1) % k_QueuedFrames;
+    if (timers[prevIdx] && device->pollTimerQuery(timers[prevIdx])) {
+        outMs = device->getTimerQueryTime(timers[prevIdx]) * 1000.0f;
+    }
+    nextIdx = (nextIdx + 1) % k_QueuedFrames;
 }
 
 } // namespace Xylem::frame

@@ -21,6 +21,7 @@
 #include "macros.h"
 #include "shaders/ShaderContracts.hpp"
 #include "frame/FrameStages.hpp"
+#include "frame/FrameLifecycle.hpp"
 
 namespace Xylem {
 
@@ -36,7 +37,7 @@ using namespace donut;
 //   7. Main color pass via mesh pipeline with AS-side meshlet cone + Hi-Z cull + PCF shadows
 class MeshShaderRenderPass : public app::IRenderPass, public frame::IFrameStagedPass {
 public:
-    static constexpr uint32_t k_QueuedFrames  = 3;
+    static constexpr uint32_t k_QueuedFrames = Xylem::frame::k_QueuedFrames;
     static constexpr uint32_t k_ShadowRes     = 2048;
     static constexpr float    k_CapacitySlack = 1.5f;
     // Hemi-octahedral view counts mirror SharedGPUAssets — kept here for

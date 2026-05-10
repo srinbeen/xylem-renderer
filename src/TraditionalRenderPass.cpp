@@ -441,7 +441,9 @@ bool TraditionalRenderPass::Init() {
     // Persistent render command list for per-frame drawing.
     m_CommandList = GetDevice()->createCommandList();
 
-    // _InitTimerQueries();
+    for (uint32_t i = 0; i < k_QueuedFrames; ++i) {
+        m_GpuTimers[i] = GetDevice()->createTimerQuery();
+    }
 
     // GPU resources
     if (!LoadResources())                               return false;
@@ -593,7 +595,7 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
 
     m_CommandList->open();
 
-    // m_CommandList->beginTimerQuery(m_GpuTimers[m_NextTimerIdx]);
+    m_CommandList->beginTimerQuery(m_GpuTimers[m_NextTimerIdx]);
 
     nvrhi::utils::ClearColorAttachment(m_CommandList, framebuffer, 0, nvrhi::Color(0.f));
     #if XYLEM_USE_REVERSE_Z
@@ -696,15 +698,11 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     if (m_UI.showImpostorAtlas && m_Shared)
         m_Shared->CopySelectedImpostorDebugAtlases(m_CommandList, m_UI.impostorSelectedAsset);
 
-    // m_CommandList->endTimerQuery(m_GpuTimers[m_NextTimerIdx]);
+    m_CommandList->endTimerQuery(m_GpuTimers[m_NextTimerIdx]);
     m_CommandList->close();
     GetDevice()->executeCommandList(m_CommandList);
 
-    // int prevIdx = (m_NextTimerIdx + m_QueuedFrames - 1) % m_QueuedFrames;
-    // if (GetDevice()->pollTimerQuery(m_GpuTimers[prevIdx]))
-    //     m_UI.gpuFrameTimeMs = GetDevice()->getTimerQueryTime(m_GpuTimers[prevIdx]) * 1000.0f;
-
-    // m_NextTimerIdx = (m_NextTimerIdx + 1) % m_QueuedFrames;
+    frame::RotateAndReadGpuTimer(GetDevice(), m_GpuTimers, m_NextTimerIdx, m_UI.gpuFrameTimeMs);
 
     const uint32_t meshVisibleCount = static_cast<uint32_t>(m_VisibleInstanceReferences.size());
     const uint32_t impostorVisibleCount = static_cast<uint32_t>(m_VisibleImpostorReferences.size());
@@ -1790,7 +1788,7 @@ bool TraditionalRenderPass::_InitShadowImpostorPass() {
 }
 
 // bool TraditionalRenderPass::_InitTimerQueries() {
-//     for (uint32_t i = 0; i < m_QueuedFrames; i++)
+//     for (uint32_t i = 0; i < k_QueuedFrames; i++)
 //         m_GpuTimers[i] = GetDevice()->createTimerQuery();
 //     return true;
 // }

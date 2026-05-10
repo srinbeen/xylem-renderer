@@ -370,3 +370,131 @@ void terrain_ps(
 
     o_color = float4(lighting * albedoSum, 1);
 }
+
+// =============================================================================
+// Shadow path: AS culls per-meshlet against the cascade's light frustum, MS
+// emits depth-only positions via lightViewProj[cascade]. Cascade index travels
+// through a root-constant CB at b3.
+// =============================================================================
+
+cbuffer ShadowPushCB : register(XY_REG_B_MESH_TERRAIN_PUSH_C_CASCADE)
+{
+    uint g_CascadeIdx;
+};
+
+// Gribb-Hartmann frustum extraction from a row-major lightViewProj. Planes use
+// the same dm::frustum convention as AABBOutsideFrustum: float4(n.xyz, d) with
+// "inside" iff dot(n, x) <= d.
+void ExtractLightFrustumPlanes(float4x4 m, out float4 planes[6])
+{
+    // m is row-major and we mul(point, m) -> clip = point * m. Rows of m are
+    // therefore (cols of column-major M^T). We want the 6 planes of the clip
+    // volume {-w <= clip.x,y,z <= +w} pulled back to world space.
+    // For row-vector convention with row-major storage:
+    //   clip.x = dot(point, m[0..3].x col)  i.e. uses column 0 of m -> (m[0][0], m[1][0], m[2][0], m[3][0])
+    // Easier: derive from rows of M^T, equivalent to columns of m. Build by hand.
+    float4 c0 = float4(m[0][0], m[1][0], m[2][0], m[3][0]);
+    float4 c1 = float4(m[0][1], m[1][1], m[2][1], m[3][1]);
+    float4 c2 = float4(m[0][2], m[1][2], m[2][2], m[3][2]);
+    float4 c3 = float4(m[0][3], m[1][3], m[2][3], m[3][3]);
+
+    // dm::frustum stores plane as (n, d) with inside = dot(n,x) <= d. The
+    // standard extraction gives planes with inside = dot(n,x) + d >= 0, i.e.
+    // float4(-n, d) in dm's convention. Convert by negating xyz and keeping w.
+    float4 left   = c3 + c0;  // inside: dot(left.xyz,x) + left.w >= 0
+    float4 right  = c3 - c0;
+    float4 bottom = c3 + c1;
+    float4 top    = c3 - c1;
+    float4 znear  = c2;       // standard DX clip range [0,1]: inside iff clip.z >= 0
+    float4 zfar   = c3 - c2;
+
+    planes[0] = float4(-left.xyz,   left.w);
+    planes[1] = float4(-right.xyz,  right.w);
+    planes[2] = float4(-bottom.xyz, bottom.w);
+    planes[3] = float4(-top.xyz,    top.w);
+    planes[4] = float4(-znear.xyz,  znear.w);
+    planes[5] = float4(-zfar.xyz,   zfar.w);
+}
+
+bool AABBOutsideLightFrustum(float3 bmin, float3 bmax, float4 planes[6])
+{
+    [unroll]
+    for (int i = 0; i < 6; i++)
+    {
+        float4 p = planes[i];
+        float3 v = float3(
+            p.x > 0 ? bmin.x : bmax.x,
+            p.y > 0 ? bmin.y : bmax.y,
+            p.z > 0 ? bmin.z : bmax.z);
+        if (dot(p.xyz, v) > p.w)
+            return true;
+    }
+    return false;
+}
+
+groupshared TerrainASPayload s_shadowPayload;
+groupshared uint             s_shadowSurvivors;
+
+[numthreads(XYLEM_AS_GROUP_SIZE, 1, 1)]
+void shadow_terrain_as(uint3 gid : SV_GroupID, uint gtid : SV_GroupThreadID)
+{
+    if (gtid == 0) s_shadowSurvivors = 0;
+    GroupMemoryBarrierWithGroupSync();
+
+    float4 planes[6];
+    ExtractLightFrustumPlanes(lightViewProj[g_CascadeIdx], planes);
+
+    uint totalMeshlets, meshletStride;
+    g_Meshlets.GetDimensions(totalMeshlets, meshletStride);
+
+    uint meshletIdx = gid.x * XYLEM_AS_GROUP_SIZE + gtid;
+    if (meshletIdx < totalMeshlets)
+    {
+        TerrainMeshletDesc m = g_Meshlets[meshletIdx];
+        if (!AABBOutsideLightFrustum(m.aabbMin, m.aabbMax, planes))
+        {
+            uint slot;
+            InterlockedAdd(s_shadowSurvivors, 1, slot);
+            s_shadowPayload.meshletIndices[slot] = meshletIdx;
+        }
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    DispatchMesh(s_shadowSurvivors, 1, 1, s_shadowPayload);
+}
+
+struct ShadowV2P
+{
+    float4 pos : SV_Position;
+};
+
+[numthreads(XYLEM_MS_GROUP_SIZE, 1, 1)]
+[outputtopology("triangle")]
+void shadow_terrain_ms(
+    uint   gtid : SV_GroupThreadID,
+    uint3  gid  : SV_GroupID,
+    in payload TerrainASPayload i_payload,
+    out indices  uint3     o_tris[XYLEM_MAX_MESHLET_PRIMS],
+    out vertices ShadowV2P o_verts[XYLEM_MAX_MESHLET_VERTS])
+{
+    uint meshletIdx = i_payload.meshletIndices[gid.x];
+    TerrainMeshletDesc m = g_Meshlets[meshletIdx];
+
+    SetMeshOutputCounts(m.vertCount, m.triCount);
+
+    if (gtid < m.vertCount)
+    {
+        uint globalVertIdx = g_MeshletVertIdx[m.vertOffset + gtid];
+        TerrainVertex v = LoadTerrainVertex(g_Verts, globalVertIdx);
+
+        ShadowV2P o;
+        o.pos = mul(float4(v.pos, 1), lightViewProj[g_CascadeIdx]);
+        o_verts[gtid] = o;
+    }
+
+    if (gtid < m.triCount)
+    {
+        uint triByte = m.triOffset + gtid * 3u;
+        o_tris[gtid] = LoadMeshletTriangle(triByte);
+    }
+}

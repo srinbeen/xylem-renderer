@@ -237,6 +237,7 @@
     { "namespace": ["Mesh", "Terrain"], "name": "kCB_Frame", "kind": "b", "slot": 0 },
     { "namespace": ["Mesh", "Terrain"], "name": "kCB_Shading", "kind": "b", "slot": 1 },
     { "namespace": ["Mesh", "Terrain"], "name": "kCB_ASCull", "kind": "b", "slot": 2 },
+    { "namespace": ["Mesh", "Terrain"], "name": "kPushC_Cascade", "kind": "b", "slot": 3 },
     { "namespace": ["Mesh", "Terrain"], "name": "kTex_ShadowMap", "kind": "t", "slot": 0 },
     { "namespace": ["Mesh", "Terrain"], "name": "kTex_ForestDiff", "kind": "t", "slot": 1 },
     { "namespace": ["Mesh", "Terrain"], "name": "kTex_ForestNor", "kind": "t", "slot": 2 },

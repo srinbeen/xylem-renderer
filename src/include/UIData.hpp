@@ -19,8 +19,8 @@ struct UIData {
 
     bool ShowUI = true;
 
-    Pipeline activePipeline    = Pipeline::Compute;
-    Pipeline requestedPipeline = Pipeline::Compute;
+    Pipeline activePipeline    = Pipeline::Traditional;
+    Pipeline requestedPipeline = Pipeline::Traditional;
 
     float    gpuFrameTimeMs       = -1.0f; // -1 = not yet available
     float    cpuRenderTimeMs      = 0.0f;

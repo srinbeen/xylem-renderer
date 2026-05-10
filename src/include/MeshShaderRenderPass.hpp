@@ -234,15 +234,14 @@ private:
 
         nvrhi::RefCountPtr<ID3D12CommandSignature> dispatchMeshSignature;
 
-        // Terrain shadow caster (traditional VS into the same per-cascade
-        // framebuffer slice). Has its own minimal binding layout (CB + push
-        // constant) — kept disjoint from the meshlet shadow bindingLayout so the
-        // graphics root signature doesn't mix with the mesh-shader root signature.
-        nvrhi::ShaderHandle              terrainVS;
-        nvrhi::InputLayoutHandle         terrainInputLayout;
+        // Terrain shadow caster (AS/MS path with per-meshlet light-frustum cull).
+        // Reuses the eye-view terrain meshlet buffers; minimal binding layout
+        // (push-constant cascade index + FrameCB + the four meshlet SRVs).
+        nvrhi::ShaderHandle              terrainAS;
+        nvrhi::ShaderHandle              terrainMS;
         nvrhi::BindingLayoutHandle       terrainBindingLayout;
         nvrhi::BindingSetHandle          terrainBindingSet;
-        nvrhi::GraphicsPipelineHandle    terrainPipeline;
+        nvrhi::MeshletPipelineHandle     terrainPipeline;
     };
 
     struct DepthPrepassResources {

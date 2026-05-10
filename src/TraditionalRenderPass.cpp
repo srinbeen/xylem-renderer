@@ -868,10 +868,7 @@ void TraditionalRenderPass::_RenderShadowPass() {
         pso.bindingLayouts = { m_StageResources.shadowStage.bindingLayout };
         pso.primType       = nvrhi::PrimitiveType::TriangleList;
         pso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
-        // cull=none so flat leaves cast shadows regardless of orientation. Bumped slope-bias
-        // a touch since we no longer skip front faces in the shadow pass — keeps trunks
-        // from self-shadowing into Peter-Pan.
-        pso.renderState.rasterState.setCullNone();
+        pso.renderState.rasterState.setCullBack();
         pso.renderState.rasterState.depthBias            = 2;
         pso.renderState.rasterState.slopeScaledDepthBias = 2.5f;
         m_StageResources.shadowStage.treePipeline = GetDevice()->createGraphicsPipeline(
@@ -1107,6 +1104,8 @@ void TraditionalRenderPass::_RenderShadowPass() {
         shadowState.framebuffer = m_StageResources.shadowStage.framebuffers[cascade];
         shadowState.viewport    = shadowVPState;
 
+        std::string cascadeMarker = "C" + std::to_string(cascade);
+        m_CommandList->beginMarker(cascadeMarker.c_str());
         for (const auto& cmd : csd.drawCmds) {
             shadowState.bindings = { m_StageResources.shadowStage.bindingSet };
             shadowState.vertexBuffers = {
@@ -1117,8 +1116,13 @@ void TraditionalRenderPass::_RenderShadowPass() {
             m_CommandList->setGraphicsState(shadowState);
             m_CommandList->setPushConstants(&cascade, sizeof(cascade));
 
+            const uint32_t ai = cmd.leafSlot / std::max(1u, Render::c_NumCascades);
+            std::string assetMarker = "A" + std::to_string(ai);
+            m_CommandList->beginMarker(assetMarker.c_str());
             m_CommandList->drawIndexed(cmd.drawArgs);
+            m_CommandList->endMarker();
         }
+        m_CommandList->endMarker();
 
         if (m_StageResources.leafStage.shadowPipeline && m_StageResources.leafStage.shadowBindingSet) {
             nvrhi::GraphicsState leafShadowState;
@@ -1132,6 +1136,8 @@ void TraditionalRenderPass::_RenderShadowPass() {
 
             const auto& assets = m_Registry.getAssets();
             const uint32_t numShadowSlots = std::max(1u, Render::c_NumCascades);
+            std::string leafCascadeMarker = "LC" + std::to_string(cascade);
+            m_CommandList->beginMarker(leafCascadeMarker.c_str());
             for (const auto& cmd : csd.drawCmds) {
                 const uint32_t ai = cmd.leafSlot / numShadowSlots;
                 if (ai >= assets.size() || assets[ai].leafAsset.lodSlots.empty()) continue;
@@ -1148,11 +1154,14 @@ void TraditionalRenderPass::_RenderShadowPass() {
                         .setInstanceCount(cmd.drawArgs.instanceCount)
                         .setStartInstanceLocation(cmd.drawArgs.startInstanceLocation));
             }
+            m_CommandList->endMarker();
         }
 
         // Draw terrain into this cascade
         if (m_StageResources.sceneTerrainStage.indexCount > 0 && terrainPtr
             && (terrainPtr->getBbox() * worldToLight).intersects(m_ViewHandler.shadowCasterBboxLS)) {
+            std::string terrainCascadeMarker = "T" + std::to_string(cascade);
+            m_CommandList->beginMarker(terrainCascadeMarker.c_str());
             nvrhi::GraphicsState terrShadow;
             terrShadow.pipeline    = m_StageResources.shadowStage.terrainPipeline;
             terrShadow.framebuffer = m_StageResources.shadowStage.framebuffers[cascade];
@@ -1165,10 +1174,13 @@ void TraditionalRenderPass::_RenderShadowPass() {
             m_CommandList->setPushConstants(&cascade, sizeof(cascade));
             m_CommandList->drawIndexed(
                 nvrhi::DrawArguments().setVertexCount(m_StageResources.sceneTerrainStage.indexCount));
+            m_CommandList->endMarker();
         }
 
         // Shadow impostors for this cascade (after geometry + leaf + terrain).
+        m_CommandList->beginMarker("ShadowImpostors");
         _RenderShadowImpostorPass(cascade);
+        m_CommandList->endMarker();
     }
 }
 
@@ -1186,9 +1198,7 @@ void TraditionalRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
         psoDesc.inputLayout  = m_StageResources.sceneTreeStage.inputLayout;
         psoDesc.bindingLayouts = { m_StageResources.sceneTreeStage.bindingLayout };
         psoDesc.primType     = nvrhi::PrimitiveType::TriangleList;
-        // cull=none so leaf cross-billboards (and trunk back-faces, slight cost) are visible
-        // from both sides. Single PSO for trunk + leaf — splitting would double draw count.
-        psoDesc.renderState.rasterState.setCullNone();
+        psoDesc.renderState.rasterState.setCullBack();
     #if XYLEM_USE_REVERSE_Z
         psoDesc.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Greater);
     #else
@@ -1419,7 +1429,7 @@ void TraditionalRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
     #else
             terrainPso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
     #endif
-            terrainPso.renderState.rasterState.setCullNone();
+            terrainPso.renderState.rasterState.setCullBack();
             m_StageResources.sceneTerrainStage.pipeline = GetDevice()->createGraphicsPipeline(terrainPso, fbinfo);
         }
 

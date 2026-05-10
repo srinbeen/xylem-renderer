@@ -443,7 +443,7 @@
   {
     "amplitude" : 65.0,
     "frequency" : 0.02,
-    "gridSpacing" : 0.5,
+    "gridSpacing" : 1,
     "lacunarity" : 2.0,
     "octaves" : 11,
     "persistence" : 0.5,

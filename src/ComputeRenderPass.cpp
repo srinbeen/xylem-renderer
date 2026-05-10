@@ -956,9 +956,7 @@ void ComputeRenderPass::_RenderDepthPrepass() {
     #else
         pso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
     #endif
-        // Leaves participate in Hi-Z occlusion — both faces of cross-billboards must reach
-        // the depth target for shape-correct occlusion of trees behind them.
-        pso.renderState.rasterState.setCullNone();
+        pso.renderState.rasterState.setCullBack();
         m_StageResources.depthPrepass.treePipeline = GetDevice()->createGraphicsPipeline(
             pso, m_StageResources.depthPrepass.framebuffer->getFramebufferInfo());
     }
@@ -1458,8 +1456,6 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         _BuildHiZMipChain();
         m_CommandList->endMarker();
 
-        m_CommandList->endMarker(); // HiZ
-
         // SDSM - GPU replaces cascade fields in the shared CB from the reduced depth.
         m_CommandList->beginMarker("SDSM");
         float regionNear, regionFar;
@@ -1467,6 +1463,8 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         _RunSDSMBuildCascades(m_Registry.getSceneBounds(), aspectRatio, dm::radians(60.f),
                               regionNear, regionFar);
         m_CommandList->endMarker();
+
+        m_CommandList->endMarker(); // HiZ
     }
 
     // --- GPU Cull Dispatch ---
@@ -1834,9 +1832,7 @@ void ComputeRenderPass::_RenderShadowPass() {
         pso.bindingLayouts = { m_StageResources.shadow.bindingLayout };
         pso.primType       = nvrhi::PrimitiveType::TriangleList;
         pso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
-        // cull=none so flat leaves cast shadows from both sides; bumped slope-bias since
-        // we no longer reject front faces in the shadow pass.
-        pso.renderState.rasterState.setCullNone();
+        pso.renderState.rasterState.setCullBack();
         pso.renderState.rasterState.depthBias            = 2;
         pso.renderState.rasterState.slopeScaledDepthBias = 2.5f;
         m_StageResources.shadow.treePipeline = GetDevice()->createGraphicsPipeline(
@@ -1888,6 +1884,9 @@ void ComputeRenderPass::_RenderShadowPass() {
     }
 
     for (uint32_t cascade = 0; cascade < Render::c_NumCascades; cascade++) {
+        std::string marker = "C" + std::to_string(cascade);
+        m_CommandList->beginMarker(marker.c_str());
+
         // Trees: one indirect draw per asset, reading its per-(asset x cascade)
         // window in shadowVisBuf via shadowSlotOffsets[ai * NUM_CASCADES + cascade].
         // Slots with no GPU-culled instances have instanceCount=0 → no-op draws.
@@ -1898,8 +1897,6 @@ void ComputeRenderPass::_RenderShadowPass() {
         shadowState.bindings    = { m_StageResources.shadow.bindingSet };
         shadowState.indirectParams = m_StageResources.cull.shadowIndirectArgsBuffer;
 
-        std::string marker = "C" + std::to_string(cascade);
-        m_CommandList->beginMarker(marker.c_str());
         for (uint32_t ai = 0; ai < m_GPUAssets.size(); ai++) {
             uint32_t maxCount = m_MaxSlotCounts[ai * numLods];  // livePerAsset[ai]
             if (maxCount == 0) continue;
@@ -1921,7 +1918,6 @@ void ComputeRenderPass::_RenderShadowPass() {
                 slot * sizeof(nvrhi::DrawIndexedIndirectArguments));
             m_CommandList->endMarker();
         }
-        m_CommandList->endMarker();
 
         // Leaves: indirect draw per asset using shadow vis buffer + leafShadowSlots,
         // mirroring the per-(asset x cascade) slot layout populated by CullShadow.
@@ -1960,6 +1956,8 @@ void ComputeRenderPass::_RenderShadowPass() {
         // matrix actually used to project; render unconditionally and rely on
         // ortho clip to discard fragments outside each cascade's NDC.
         if (m_StageResources.sceneTerrain.indexCount > 0 && terrainPtr) {
+            std::string terrainCascadeMarker = "T" + std::to_string(cascade);
+            m_CommandList->beginMarker(terrainCascadeMarker.c_str());
             nvrhi::GraphicsState terrShadow;
             terrShadow.pipeline    = m_StageResources.shadow.terrainPipeline;
             terrShadow.framebuffer = m_StageResources.shadow.framebuffers[cascade];
@@ -1975,7 +1973,10 @@ void ComputeRenderPass::_RenderShadowPass() {
 
             m_CommandList->drawIndexed(
                 nvrhi::DrawArguments().setVertexCount(m_StageResources.sceneTerrain.indexCount));
+            m_CommandList->endMarker();
         }
+
+        m_CommandList->endMarker();
     }
 
     // Copy the currently-selected cascade slice into the single debug texture for UI display.
@@ -2003,9 +2004,7 @@ void ComputeRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
         psoDesc.inputLayout  = m_StageResources.sceneTree.inputLayout;
         psoDesc.bindingLayouts = { m_StageResources.sceneTree.bindingLayout };
         psoDesc.primType     = nvrhi::PrimitiveType::TriangleList;
-        // cull=none so leaf cross-billboards are visible from both sides — single PSO for
-        // trunk + leaf to avoid splitting the indirect draw list.
-        psoDesc.renderState.rasterState.setCullNone();
+        psoDesc.renderState.rasterState.setCullBack();
     #if XYLEM_USE_REVERSE_Z
         psoDesc.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Greater);
     #else
@@ -2096,7 +2095,7 @@ void ComputeRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
     #else
             terrainPso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
     #endif
-            terrainPso.renderState.rasterState.setCullNone();
+            terrainPso.renderState.rasterState.setCullBack();
             m_StageResources.sceneTerrain.pipeline = GetDevice()->createGraphicsPipeline(terrainPso, fbinfo);
         }
 

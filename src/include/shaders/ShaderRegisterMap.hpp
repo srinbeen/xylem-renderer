@@ -257,6 +257,7 @@ namespace Terrain {
 inline constexpr uint32_t kCB_ASCull = 2;
 inline constexpr uint32_t kCB_Frame = 0;
 inline constexpr uint32_t kCB_Shading = 1;
+inline constexpr uint32_t kPushC_Cascade = 3;
 inline constexpr uint32_t kSRV_MeshletDescs = 10;
 inline constexpr uint32_t kSRV_MeshletPrimIdx = 12;
 inline constexpr uint32_t kSRV_MeshletVertIdx = 11;

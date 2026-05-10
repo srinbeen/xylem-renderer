@@ -62,20 +62,13 @@ void UIRenderer::buildUI() {
     ImGui::Begin("Xylem", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
 
     _buildSceneFileSection();
+    _buildRuntimeSettingsSection();
     _buildBenchmarkSection();
 
     // =====================================================================
     // PERFORMANCE METRICS
     // =====================================================================
     if (ImGui::CollapsingHeader("Performance Metrics", ImGuiTreeNodeFlags_DefaultOpen)) {
-        static const char* pipelineNames[] = { "Traditional (CPU cull)", "Compute Cull (GPU cull)", "Mesh Shader (AS/MS)" };
-        int pipelineIdx = static_cast<int>(m_ui.requestedPipeline);
-        if (ImGui::Combo("Pipeline", &pipelineIdx, pipelineNames, IM_ARRAYSIZE(pipelineNames)))
-            m_ui.requestedPipeline = static_cast<Pipeline>(pipelineIdx);
-        if (m_ui.activePipeline != m_ui.requestedPipeline)
-            ImGui::TextDisabled("(switching...)");
-        ImGui::Separator();
-
         ImGui::Text("Renderer: %s", GetDeviceManager()->GetRendererString());
 
         double ft = GetDeviceManager()->GetAverageFrameTimeSeconds();
@@ -93,38 +86,7 @@ void UIRenderer::buildUI() {
         _buildTreesFunnel();
         ImGui::Separator();
         _buildLeavesFunnel();
-        if (m_ui.activePipeline == Pipeline::MeshShader && m_ui.totalTerrainMeshletCount > 0) {
-            ImGui::Separator();
-            _buildTerrainFunnel();
-        }
-        ImGui::Separator();
-        ImGui::Text("Draw calls: %s", _fmtCount(m_ui.drawCallCount));
-    }
-
-    _buildLSystemsSection();
-    _buildAssetsSection();
-    _buildRegionsSection();
-
-    if (ImGui::CollapsingHeader("Debug")) {
-        ImGui::Checkbox("Top-Down View", &m_ui.showDebugTopDown);
-        ImGui::Checkbox("Shadow Top-Down View", &m_ui.showDebugShadowTopDown);
-        ImGui::Checkbox("Shadow Map", &m_ui.showShadowMap);
-        ImGui::Checkbox("Hi-Z Mip Chain", &m_ui.showHiZ);
-        ImGui::Checkbox("Impostor Atlas", &m_ui.showImpostorAtlas);
-        ImGui::Separator();
-        ImGui::SliderFloat("Hi-Z Bypass Angle", &m_ui.hizBypassAngle, 0.f, 1.f, "%.2f");
-        ImGui::SameLine();
-        ImGui::TextDisabled(m_ui.hizActiveThisFrame ? "(active)" : "(bypassed)");
-        ImGui::SliderFloat("PSSM Lambda", &m_ui.pssmLambda, 0.f, 1.f, "%.2f");
-        ImGui::SliderFloat("Impostor Alpha Clip", &m_ui.impostorAlphaClip, 0.01f, 0.95f, "%.2f");
-        ImGui::Checkbox("Shadow Impostors", &m_ui.showShadowImpostors);
-        ImGui::SameLine();
-        ImGui::TextDisabled("(?)");
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Distant trees cast billboard shadows instead of full geometry. Off = geometry-only shadows.");
-        }
-        ImGui::SliderFloat("Shadow Impostor Bias", &m_ui.shadowImpostorBias, 0.0f, 3.0f, "%.3f");
-
+        ImGui::Spacing();
         if (ImGui::TreeNode("SDSM Debug")) {
             if (!m_ui.sdsmDebugValid) {
                 ImGui::TextDisabled("(no SDSM readback yet)");
@@ -140,6 +102,22 @@ void UIRenderer::buildUI() {
             }
             ImGui::TreePop();
         }
+        if (m_ui.activePipeline == Pipeline::MeshShader && m_ui.totalTerrainMeshletCount > 0) {
+            ImGui::Separator();
+            _buildTerrainFunnel();
+        }
+    }
+
+    _buildLSystemsSection();
+    _buildAssetsSection();
+    _buildRegionsSection();
+
+    if (ImGui::CollapsingHeader("Debug")) {
+        ImGui::Checkbox("Top-Down View", &m_ui.showDebugTopDown);
+        ImGui::Checkbox("Shadow Top-Down View", &m_ui.showDebugShadowTopDown);
+        ImGui::Checkbox("Shadow Map", &m_ui.showShadowMap);
+        ImGui::Checkbox("Hi-Z Mip Chain", &m_ui.showHiZ);
+        ImGui::Checkbox("Impostor Atlas", &m_ui.showImpostorAtlas);
     }
 
     ImGui::Spacing();
@@ -198,6 +176,23 @@ void UIRenderer::_buildSceneFileSection() {
             : ImVec4(0.7f, 0.7f, 0.7f, 1.0f);  // gray
         ImGui::TextColored(col, "Status: %s", m_ui.sceneLoadStatus.c_str());
     }
+}
+
+
+void UIRenderer::_buildRuntimeSettingsSection() {
+    if (!ImGui::CollapsingHeader("Runtime Settings", ImGuiTreeNodeFlags_DefaultOpen))
+        return;
+
+    static const char* pipelineNames[] = { "Traditional (CPU cull)", "Compute Cull (GPU cull)", "Mesh Shader (AS/MS)" };
+    int pipelineIdx = static_cast<int>(m_ui.requestedPipeline);
+    if (ImGui::Combo("Pipeline", &pipelineIdx, pipelineNames, IM_ARRAYSIZE(pipelineNames)))
+        m_ui.requestedPipeline = static_cast<Pipeline>(pipelineIdx);
+    if (m_ui.activePipeline != m_ui.requestedPipeline)
+        ImGui::TextDisabled("(switching...)");
+
+    ImGui::Checkbox("Hi-Z", &m_ui.hizEnabled);
+    ImGui::SliderFloat("PSSM Lambda", &m_ui.pssmLambda, 0.f, 1.f, "%.2f");
+    ImGui::Checkbox("Shadow Impostors", &m_ui.showShadowImpostors);
 }
 
 

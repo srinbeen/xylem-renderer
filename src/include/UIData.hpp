@@ -26,7 +26,6 @@ struct UIData {
     float    cpuRenderTimeMs      = 0.0f;
     uint32_t visibleInstanceCount = 0;
     uint32_t impostorVisibleCount = 0;
-    uint32_t drawCallCount        = 0;
     uint32_t totalInstanceCount   = 0;
     uint32_t culledInstanceCount  = 0;
 
@@ -63,16 +62,13 @@ struct UIData {
     bool showHiZ                = false;
     bool showImpostorAtlas      = false;
 
-    float hizBypassAngle   = 1.0f;  // downwardness threshold to skip Hi-Z (0=never bypass, 1=always)
-    bool  hizActiveThisFrame = true; // read-only, set by render pass
+    bool  hizEnabled       = true;
 
     float pssmLambda       = 0.85f; // PSSM/SDSM blend: 0=linear splits, 1=logarithmic splits
-    float impostorAlphaClip = 0.25f;
 
     // Shadow impostor tier (P1 + P2). When false, cull falls back to
     // geometry-only shadows for A/B comparison.
     bool     showShadowImpostors      = true;
-    float    shadowImpostorBias       = 0.05f;   // world units along sun direction
     uint32_t shadowImpostorVisibleCount = 0;     // total across (asset, cascade)
 
     // Mesh-shader pipeline stats
@@ -95,7 +91,7 @@ struct UIData {
     uint32_t leafShadowMeshletsDispatched  = 0;
     uint32_t leafShadowMeshletsRendered    = 0;
 
-    // SDSM debug readback (populated when hizActiveThisFrame and SDSM ran).
+    // SDSM debug readback (populated when Hi-Z is enabled and SDSM ran).
     bool     sdsmDebugValid       = false;
     float    sdsmNearDepthVal     = 0.f;
     float    sdsmFarDepthVal      = 0.f;

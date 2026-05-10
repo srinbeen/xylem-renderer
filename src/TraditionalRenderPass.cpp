@@ -492,7 +492,6 @@ bool TraditionalRenderPass::LoadResources() {
     m_VisibleInstanceBuffer.assign(std::max<uint32_t>(1, totalInstances), {});
     m_DrawCmds.clear();
     m_DrawCmds.reserve(numAssets * numLods);
-    m_ImpostorDrawCallCount = 0;
 
     for (auto& csd : m_CascadeShadowData) {
         csd.instanceBuffer.assign(std::max<uint32_t>(1, totalInstances), {});
@@ -650,7 +649,7 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         static_cast<float>(fbInfo.height));
     constants.maxHiZMip = 0.f;
     constants.hizEnabled = 0u;
-    constants.impostorAlphaClip = m_UI.impostorAlphaClip;
+    constants.impostorAlphaClip = XYLEM_IMPOSTOR_ALPHA_CLIP;
 
     m_CommandList->writeBuffer(m_StageResources.frameShared.constantBuffer, &constants, shader_cb::kCullFrameSize);
 
@@ -733,7 +732,6 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_UI.impostorVisibleCount   = impostorVisibleCount;
     m_UI.culledInstanceCount  = (visibleTotal <= m_UI.totalInstanceCount)
         ? m_UI.totalInstanceCount - visibleTotal : 0;
-    m_UI.drawCallCount        = static_cast<uint32_t>(m_DrawCmds.size()) + m_ImpostorDrawCallCount;
 
     // Per-LOD geometric counts (impostors excluded; tracked separately).
     {
@@ -1462,8 +1460,6 @@ void TraditionalRenderPass::_RenderTerrainPass(nvrhi::IFramebuffer* framebuffer)
 }
 
 void TraditionalRenderPass::_RenderImpostorPass(nvrhi::IFramebuffer* framebuffer) {
-    m_ImpostorDrawCallCount = 0;
-
     if (m_GPUAssets.empty()
         || m_StageResources.impostorStage.bindingSets.empty()
         || !m_StageResources.impostorStage.instanceBuffer
@@ -1513,7 +1509,6 @@ void TraditionalRenderPass::_RenderImpostorPass(nvrhi::IFramebuffer* framebuffer
             nvrhi::DrawArguments()
                 .setVertexCount(4)
                 .setInstanceCount(m_ImpostorCounts[ai]));
-        m_ImpostorDrawCallCount++;
     }
 }
 

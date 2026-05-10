@@ -1430,18 +1430,15 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     for (uint32_t i = 0; i < constants.numLods; i++)
         constants.lodDistances[i] = lodDistances[i];
 
-    // Hi-Z fields - bypass when camera looks steeply downward (bird's-eye view)
-    float downwardness = -m_ViewHandler.camera.GetDir().y;  // 0 = horizontal, 1 = straight down
-    bool hizActive = downwardness < m_UI.hizBypassAngle;
-    m_UI.hizActiveThisFrame = hizActive;
+    bool hizActive = m_UI.hizEnabled;
 
     constants.hizDimensions = dm::float2(static_cast<float>(fbW),
                                          static_cast<float>(fbH));
     constants.maxHiZMip     = static_cast<float>(m_StageResources.hiz.numMips - 1);
     constants.hizEnabled    = hizActive ? 1u : 0u;
-    constants.impostorAlphaClip = m_UI.impostorAlphaClip;
+    constants.impostorAlphaClip = XYLEM_IMPOSTOR_ALPHA_CLIP;
     constants.showShadowImpostors = m_UI.showShadowImpostors ? 1u : 0u;
-    constants.shadowImpostorBias  = m_UI.shadowImpostorBias;
+    constants.shadowImpostorBias  = XYLEM_SHADOW_IMPOSTOR_BIAS;
 
     m_CommandList->writeBuffer(m_StageResources.frameShared.constantBuffer, &constants, shader_cb::kCullFrameSize);
 
@@ -1606,7 +1603,6 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_UI.totalInstanceCount     = m_Registry.totalInstanceCount();
     m_UI.totalLeafInstanceCount = m_Registry.totalLeafInstanceCount();
     m_UI.totalLeafMeshletCount  = m_Registry.totalLeafMeshletCount();
-    m_UI.drawCallCount      = m_NumSlots;
 
     // Read back cull counts from oldest ring slot (2 frames ago, GPU-complete)
     if (m_ReadbackFrameIndex >= (k_QueuedFrames - 1)) {

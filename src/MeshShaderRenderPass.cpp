@@ -1684,10 +1684,7 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         k_ShadowRes,
         m_UI.pssmLambda);
 
-    // Hi-Z bypass when camera looks steeply downward (mirrors ComputeRenderPass).
-    float downwardness = -m_ViewHandler.camera.GetDir().y;
-    bool hizActive = downwardness < m_UI.hizBypassAngle;
-    m_UI.hizActiveThisFrame = hizActive;
+    bool hizActive = m_UI.hizEnabled;
 
     m_CommandList->open();
     frame::ResetGpuTimerForFrame(GetDevice(), m_GpuTimers, m_NextTimerIdx);
@@ -1725,9 +1722,9 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     cb.hizDimensions = dm::float2(static_cast<float>(fbW), static_cast<float>(fbH));
     cb.maxHiZMip     = static_cast<float>((m_StageResources.hiz.numMips > 0) ? (m_StageResources.hiz.numMips - 1) : 0);
     cb.hizEnabled    = hizActive ? 1u : 0u;
-    cb.impostorAlphaClip    = m_UI.impostorAlphaClip;
+    cb.impostorAlphaClip    = XYLEM_IMPOSTOR_ALPHA_CLIP;
     cb.showShadowImpostors  = m_UI.showShadowImpostors ? 1u : 0u;
-    cb.shadowImpostorBias   = m_UI.shadowImpostorBias;
+    cb.shadowImpostorBias   = XYLEM_SHADOW_IMPOSTOR_BIAS;
 
     m_CommandList->writeBuffer(m_StageResources.frameShared.constantBuffer, &cb, shader_cb::kCullFrameSize);
 
@@ -2086,7 +2083,6 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_UI.totalInstanceCount     = static_cast<uint32_t>(m_Registry.totalInstanceCount());
     m_UI.totalLeafInstanceCount = m_Registry.totalLeafInstanceCount();
     m_UI.totalLeafMeshletCount  = m_Registry.totalLeafMeshletCount();
-    m_UI.drawCallCount          = m_NumMainSlots + m_NumShadowSlots;
     // Impostor atlas pointers + view-count metadata are published by SharedGPUAssets.
 
     if (m_ReadbackFrameIndex >= (k_QueuedFrames - 1)) {

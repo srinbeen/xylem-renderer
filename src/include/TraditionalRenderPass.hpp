@@ -212,7 +212,6 @@ private:
     std::vector<Render::InstanceBufferEntry>           m_ImpostorInstanceStaging;
     std::vector<Render::CullInstanceData>              m_ImpostorCullDataStaging;
     std::vector<uint32_t>                              m_ImpostorVisStaging;
-    uint32_t                                           m_ImpostorDrawCallCount = 0;
     uint32_t                                           m_TotalShadowInstancesDrawn;
 
     // Per-cascade shadow billboard refs (parallel to m_CascadeShadowData

@@ -116,6 +116,11 @@ private:
         float      simTimeMs  = 0.f;
         float      cpuMs      = 0.f;
         float      gpuMs      = -1.f;
+        // Per-stage GPU times in ms, indexed by frame::FrameStage.
+        // -1 = stage not run by this row's pipeline (or not yet bound).
+        // Populated atomically with gpuMs in _LateBindGpuTimes.
+        float      gpuStageMs[static_cast<size_t>(frame::FrameStage::COUNT)] =
+            { -1.f, -1.f, -1.f, -1.f, -1.f, -1.f, -1.f };
         bool       gpuMsBound = false;  // false until late-binding fills gpuMs
         dm::float3 camPos{};
         dm::float3 camDir{};

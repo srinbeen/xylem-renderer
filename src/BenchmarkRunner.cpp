@@ -508,7 +508,15 @@ void BenchmarkRunner::_LateBindGpuTimes()
             // -1.0f on pipeline switch by the orchestrator. Only bind when
             // the active pass has reported a real value.
             if (m_UI.gpuFrameTimeMs >= 0.f) {
-                r.gpuMs      = m_UI.gpuFrameTimeMs;
+                r.gpuMs = m_UI.gpuFrameTimeMs;
+                // Snapshot per-stage values atomically with gpuMs. They came
+                // from the same frame's GPU submission and share alignment.
+                // Stage slots that are -1 (pipeline doesn't run that stage,
+                // or Hi-Z toggled off) are copied as-is and surface as -1
+                // in the CSV.
+                for (size_t s = 0; s < static_cast<size_t>(frame::FrameStage::COUNT); ++s) {
+                    r.gpuStageMs[s] = m_UI.gpuStageTimeMs[s];
+                }
                 r.gpuMsBound = true;
             }
             return;  // bind only one row per frame to maintain alignment
@@ -561,13 +569,21 @@ void BenchmarkRunner::_WritePipelineCsv(const PipelineRun& run)
         return;
     }
 
-    out << "frameIdx,simTimeMs,cpuMs,gpuMs,camPosX,camPosY,camPosZ,camDirX,camDirY,camDirZ\n";
+    // Stage columns inserted between gpuMs and camPosX. Order matches
+    // frame::FrameStage enum (DepthPrepass=0 ... Scene=6). Stages a pipeline
+    // doesn't run write -1; analyst code can mask them out as `df > 0`.
+    out << "frameIdx,simTimeMs,cpuMs,gpuMs,"
+           "depthPrepassMs,hizMs,sdsmMs,cullMs,shadowMs,skyMs,sceneMs,"
+           "camPosX,camPosY,camPosZ,camDirX,camDirY,camDirZ\n";
     for (const auto& r : run.rows) {
         out << r.frameIdx << ','
             << r.simTimeMs << ','
             << r.cpuMs << ','
-            << (r.gpuMsBound ? r.gpuMs : -1.f) << ','
-            << r.camPos.x << ',' << r.camPos.y << ',' << r.camPos.z << ','
+            << (r.gpuMsBound ? r.gpuMs : -1.f) << ',';
+        for (size_t s = 0; s < static_cast<size_t>(frame::FrameStage::COUNT); ++s) {
+            out << (r.gpuMsBound ? r.gpuStageMs[s] : -1.f) << ',';
+        }
+        out << r.camPos.x << ',' << r.camPos.y << ',' << r.camPos.z << ','
             << r.camDir.x << ',' << r.camDir.y << ',' << r.camDir.z << '\n';
     }
 }

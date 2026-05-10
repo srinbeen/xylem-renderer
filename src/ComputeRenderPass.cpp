@@ -1558,21 +1558,33 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     // --- Draw passes (auto barriers: UAV->SRV transitions handled by setGraphicsState) ---
     m_CommandList->beginMarker("Draw");
 
-    m_CommandList->beginMarker("Sky");
-    _RenderSkyPass(framebuffer);
-    m_CommandList->endMarker();
-
     m_CommandList->beginMarker("Shadow");
     _RenderShadowPass();
     m_CommandList->endMarker();
 
-    m_CommandList->beginMarker("Scene");
-    _RenderScenePass(framebuffer);
+    m_CommandList->beginMarker("Main");
+
+    m_CommandList->beginMarker("Sky");
+    _RenderSkyPass(framebuffer);
+    m_CommandList->endMarker();
+
+    m_CommandList->beginMarker("Trunk");
+    _RenderTrunkPass(framebuffer);
+    m_CommandList->endMarker();
+
+    m_CommandList->beginMarker("Leaves");
+    _RenderLeavesPass(framebuffer);
+    m_CommandList->endMarker();
+
+    m_CommandList->beginMarker("Terrain");
+    _RenderTerrainPass(framebuffer);
     m_CommandList->endMarker();
 
     m_CommandList->beginMarker("Impostors");
     _RenderImpostorPass(framebuffer);
     m_CommandList->endMarker();
+
+    m_CommandList->endMarker(); // Main
 
     m_CommandList->endMarker(); // Draw
 
@@ -1884,12 +1896,13 @@ void ComputeRenderPass::_RenderShadowPass() {
     }
 
     for (uint32_t cascade = 0; cascade < Render::c_NumCascades; cascade++) {
-        std::string marker = "C" + std::to_string(cascade);
-        m_CommandList->beginMarker(marker.c_str());
+        std::string cascadeMarker = "C" + std::to_string(cascade);
+        m_CommandList->beginMarker(cascadeMarker.c_str());
 
-        // Trees: one indirect draw per asset, reading its per-(asset x cascade)
+        // Trunk: one indirect draw per asset, reading its per-(asset x cascade)
         // window in shadowVisBuf via shadowSlotOffsets[ai * NUM_CASCADES + cascade].
         // Slots with no GPU-culled instances have instanceCount=0 → no-op draws.
+        m_CommandList->beginMarker("Trunk");
         nvrhi::GraphicsState shadowState;
         shadowState.pipeline    = m_StageResources.shadow.treePipeline;
         shadowState.framebuffer = m_StageResources.shadow.framebuffers[cascade];
@@ -1911,17 +1924,15 @@ void ComputeRenderPass::_RenderShadowPass() {
             m_CommandList->setPushConstants(pushConstants, sizeof(pushConstants));
 
             uint32_t slot = ai * Render::c_NumCascades + cascade;
-
-            std::string marker = "A" + std::to_string(ai);
-            m_CommandList->beginMarker(marker.c_str());
             m_CommandList->drawIndexedIndirect(
                 slot * sizeof(nvrhi::DrawIndexedIndirectArguments));
-            m_CommandList->endMarker();
         }
+        m_CommandList->endMarker(); // Trunk
 
         // Leaves: indirect draw per asset using shadow vis buffer + leafShadowSlots,
         // mirroring the per-(asset x cascade) slot layout populated by CullShadow.
         if (m_StageResources.sceneLeaves.shadowPipeline && m_StageResources.sceneLeaves.shadowBindingSet) {
+            m_CommandList->beginMarker("Leaves");
             nvrhi::GraphicsState leafShadowState;
             leafShadowState.pipeline       = m_StageResources.sceneLeaves.shadowPipeline;
             leafShadowState.framebuffer    = m_StageResources.shadow.framebuffers[cascade];
@@ -1929,8 +1940,6 @@ void ComputeRenderPass::_RenderShadowPass() {
             leafShadowState.bindings       = { m_StageResources.sceneLeaves.shadowBindingSet };
             leafShadowState.indirectParams = m_StageResources.cull.leafShadowIndirectArgsBuffer;
 
-            std::string leafMarker = "LC" + std::to_string(cascade);
-            m_CommandList->beginMarker(leafMarker.c_str());
             for (uint32_t ai = 0; ai < m_GPUAssets.size(); ai++) {
                 if (m_MaxSlotCounts[ai * numLods] == 0) continue;
                 uint32_t slot = ai * Render::c_NumCascades + cascade;
@@ -1942,13 +1951,7 @@ void ComputeRenderPass::_RenderShadowPass() {
                 m_CommandList->setPushConstants(pc, sizeof(pc));
                 m_CommandList->drawIndirect(slot * sizeof(nvrhi::DrawIndirectArguments));
             }
-            m_CommandList->endMarker();
-        }
-
-        if (m_UI.showShadowImpostors) {
-            m_CommandList->beginMarker("ShadowImpostors");
-            _RenderShadowImpostorPass(cascade);
-            m_CommandList->endMarker();
+            m_CommandList->endMarker(); // Leaves
         }
 
         // Terrain shadow. The CPU per-cascade intersection test would use the
@@ -1956,8 +1959,7 @@ void ComputeRenderPass::_RenderShadowPass() {
         // matrix actually used to project; render unconditionally and rely on
         // ortho clip to discard fragments outside each cascade's NDC.
         if (m_StageResources.sceneTerrain.indexCount > 0 && terrainPtr) {
-            std::string terrainCascadeMarker = "T" + std::to_string(cascade);
-            m_CommandList->beginMarker(terrainCascadeMarker.c_str());
+            m_CommandList->beginMarker("Terrain");
             nvrhi::GraphicsState terrShadow;
             terrShadow.pipeline    = m_StageResources.shadow.terrainPipeline;
             terrShadow.framebuffer = m_StageResources.shadow.framebuffers[cascade];
@@ -1973,10 +1975,16 @@ void ComputeRenderPass::_RenderShadowPass() {
 
             m_CommandList->drawIndexed(
                 nvrhi::DrawArguments().setVertexCount(m_StageResources.sceneTerrain.indexCount));
-            m_CommandList->endMarker();
+            m_CommandList->endMarker(); // Terrain
         }
 
-        m_CommandList->endMarker();
+        if (m_UI.showShadowImpostors) {
+            m_CommandList->beginMarker("Impostors");
+            _RenderShadowImpostorPass(cascade);
+            m_CommandList->endMarker(); // Impostors
+        }
+
+        m_CommandList->endMarker(); // C<cascade>
     }
 
     // Copy the currently-selected cascade slice into the single debug texture for UI display.
@@ -1990,10 +1998,10 @@ void ComputeRenderPass::_RenderShadowPass() {
 }
 
 // ===========================================================================
-// Scene pass - GPU cull results, visibility buffer indirection in VS
+// Main color passes - GPU cull results, visibility buffer indirection in VS
 // ===========================================================================
 
-void ComputeRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
+void ComputeRenderPass::_RenderTrunkPass(nvrhi::IFramebuffer* framebuffer) {
     const nvrhi::FramebufferInfoEx& fbinfo = framebuffer->getFramebufferInfo();
     const uint32_t numLods = static_cast<uint32_t>(m_Registry.getLodSegments().size());
 
@@ -2011,21 +2019,6 @@ void ComputeRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
         psoDesc.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
     #endif
         m_StageResources.sceneTree.pipeline = GetDevice()->createGraphicsPipeline(psoDesc, fbinfo);
-    }
-    if (!m_StageResources.sceneLeaves.pipeline) {
-        nvrhi::GraphicsPipelineDesc leafPso;
-        leafPso.VS = m_StageResources.sceneLeaves.vertexShader;
-        leafPso.PS = m_StageResources.sceneLeaves.pixelShader;
-        leafPso.inputLayout = nullptr;
-        leafPso.bindingLayouts = { m_StageResources.sceneLeaves.bindingLayout };
-        leafPso.primType = nvrhi::PrimitiveType::TriangleList;
-        leafPso.renderState.rasterState.setCullNone();
-    #if XYLEM_USE_REVERSE_Z
-        leafPso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Greater);
-    #else
-        leafPso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
-    #endif
-        m_StageResources.sceneLeaves.pipeline = GetDevice()->createGraphicsPipeline(leafPso, fbinfo);
     }
 
     nvrhi::GraphicsState state;
@@ -2060,59 +2053,85 @@ void ComputeRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
                 slot * sizeof(nvrhi::DrawIndexedIndirectArguments));
         }
     }
+}
 
-    if (m_StageResources.sceneLeaves.pipeline && m_StageResources.sceneLeaves.bindingSet) {
-        nvrhi::GraphicsState leafState;
-        leafState.pipeline = m_StageResources.sceneLeaves.pipeline;
-        leafState.framebuffer = framebuffer;
-        leafState.viewport = m_ViewHandler.view.GetViewportState();
-        leafState.bindings = { m_StageResources.sceneLeaves.bindingSet };
-        leafState.indirectParams = m_StageResources.cull.leafIndirectArgsBuffer;
+void ComputeRenderPass::_RenderLeavesPass(nvrhi::IFramebuffer* framebuffer) {
+    const nvrhi::FramebufferInfoEx& fbinfo = framebuffer->getFramebufferInfo();
+    const uint32_t numLods = static_cast<uint32_t>(m_Registry.getLodSegments().size());
 
-        for (uint32_t ai = 0; ai < m_GPUAssets.size(); ai++) {
-            for (uint32_t li = 0; li < numLods; li++) {
-                uint32_t slot = ai * numLods + li;
-                if (m_MaxSlotCounts[slot] == 0) continue;
-                m_CommandList->setGraphicsState(leafState);
-                uint32_t pc[2] = { slot, 0 };
-                m_CommandList->setPushConstants(pc, sizeof(pc));
-                m_CommandList->drawIndirect(slot * sizeof(nvrhi::DrawIndirectArguments));
-            }
-        }
-    }
-
-    // Terrain color pass
-    if (m_StageResources.sceneTerrain.indexCount > 0) {
-        if (!m_StageResources.sceneTerrain.pipeline) {
-            nvrhi::GraphicsPipelineDesc terrainPso;
-            terrainPso.VS = m_StageResources.sceneTerrain.vertexShader;
-            terrainPso.PS = m_StageResources.sceneTerrain.pixelShader;
-            terrainPso.inputLayout = m_StageResources.sceneTerrain.inputLayout;
-            terrainPso.bindingLayouts = { m_StageResources.sceneTerrain.bindingLayout };
-            terrainPso.primType = nvrhi::PrimitiveType::TriangleList;
+    if (!m_StageResources.sceneLeaves.pipeline) {
+        nvrhi::GraphicsPipelineDesc leafPso;
+        leafPso.VS = m_StageResources.sceneLeaves.vertexShader;
+        leafPso.PS = m_StageResources.sceneLeaves.pixelShader;
+        leafPso.inputLayout = nullptr;
+        leafPso.bindingLayouts = { m_StageResources.sceneLeaves.bindingLayout };
+        leafPso.primType = nvrhi::PrimitiveType::TriangleList;
+        leafPso.renderState.rasterState.setCullNone();
     #if XYLEM_USE_REVERSE_Z
-            terrainPso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Greater);
+        leafPso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Greater);
     #else
-            terrainPso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
+        leafPso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
     #endif
-            terrainPso.renderState.rasterState.setCullBack();
-            m_StageResources.sceneTerrain.pipeline = GetDevice()->createGraphicsPipeline(terrainPso, fbinfo);
-        }
-
-        nvrhi::GraphicsState terrainState;
-        terrainState.pipeline   = m_StageResources.sceneTerrain.pipeline;
-        terrainState.framebuffer = framebuffer;
-        terrainState.viewport   = m_ViewHandler.view.GetViewportState();
-        terrainState.bindings   = { m_StageResources.sceneTerrain.bindingSet };
-        terrainState.vertexBuffers = { { m_StageResources.sceneTerrain.vertexBuffer, 0, 0 } };
-        terrainState.indexBuffer   = { m_StageResources.sceneTerrain.indexBuffer, nvrhi::Format::R32_UINT, 0 };
-        m_CommandList->setGraphicsState(terrainState);
-        
-        m_CommandList->drawIndexed(
-            nvrhi::DrawArguments()
-                .setVertexCount(m_StageResources.sceneTerrain.indexCount)
-        );
+        m_StageResources.sceneLeaves.pipeline = GetDevice()->createGraphicsPipeline(leafPso, fbinfo);
     }
+
+    if (!m_StageResources.sceneLeaves.pipeline || !m_StageResources.sceneLeaves.bindingSet)
+        return;
+
+    nvrhi::GraphicsState leafState;
+    leafState.pipeline = m_StageResources.sceneLeaves.pipeline;
+    leafState.framebuffer = framebuffer;
+    leafState.viewport = m_ViewHandler.view.GetViewportState();
+    leafState.bindings = { m_StageResources.sceneLeaves.bindingSet };
+    leafState.indirectParams = m_StageResources.cull.leafIndirectArgsBuffer;
+
+    for (uint32_t ai = 0; ai < m_GPUAssets.size(); ai++) {
+        for (uint32_t li = 0; li < numLods; li++) {
+            uint32_t slot = ai * numLods + li;
+            if (m_MaxSlotCounts[slot] == 0) continue;
+            m_CommandList->setGraphicsState(leafState);
+            uint32_t pc[2] = { slot, 0 };
+            m_CommandList->setPushConstants(pc, sizeof(pc));
+            m_CommandList->drawIndirect(slot * sizeof(nvrhi::DrawIndirectArguments));
+        }
+    }
+}
+
+void ComputeRenderPass::_RenderTerrainPass(nvrhi::IFramebuffer* framebuffer) {
+    if (m_StageResources.sceneTerrain.indexCount == 0)
+        return;
+
+    const nvrhi::FramebufferInfoEx& fbinfo = framebuffer->getFramebufferInfo();
+
+    if (!m_StageResources.sceneTerrain.pipeline) {
+        nvrhi::GraphicsPipelineDesc terrainPso;
+        terrainPso.VS = m_StageResources.sceneTerrain.vertexShader;
+        terrainPso.PS = m_StageResources.sceneTerrain.pixelShader;
+        terrainPso.inputLayout = m_StageResources.sceneTerrain.inputLayout;
+        terrainPso.bindingLayouts = { m_StageResources.sceneTerrain.bindingLayout };
+        terrainPso.primType = nvrhi::PrimitiveType::TriangleList;
+    #if XYLEM_USE_REVERSE_Z
+        terrainPso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Greater);
+    #else
+        terrainPso.renderState.depthStencilState.setDepthFunc(nvrhi::ComparisonFunc::Less);
+    #endif
+        terrainPso.renderState.rasterState.setCullBack();
+        m_StageResources.sceneTerrain.pipeline = GetDevice()->createGraphicsPipeline(terrainPso, fbinfo);
+    }
+
+    nvrhi::GraphicsState terrainState;
+    terrainState.pipeline   = m_StageResources.sceneTerrain.pipeline;
+    terrainState.framebuffer = framebuffer;
+    terrainState.viewport   = m_ViewHandler.view.GetViewportState();
+    terrainState.bindings   = { m_StageResources.sceneTerrain.bindingSet };
+    terrainState.vertexBuffers = { { m_StageResources.sceneTerrain.vertexBuffer, 0, 0 } };
+    terrainState.indexBuffer   = { m_StageResources.sceneTerrain.indexBuffer, nvrhi::Format::R32_UINT, 0 };
+    m_CommandList->setGraphicsState(terrainState);
+
+    m_CommandList->drawIndexed(
+        nvrhi::DrawArguments()
+            .setVertexCount(m_StageResources.sceneTerrain.indexCount)
+    );
 }
 
 void ComputeRenderPass::_RenderImpostorPass(nvrhi::IFramebuffer* framebuffer) {

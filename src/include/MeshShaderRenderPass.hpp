@@ -449,7 +449,9 @@ private:
                                 float& outNearZ, float& outFarZ) const;
     void _RenderSkyPass(nvrhi::IFramebuffer* framebuffer);
     void _RenderShadowPass();
-    void _RenderScenePass(nvrhi::IFramebuffer* framebuffer);
+    void _RenderTrunkPass(nvrhi::IFramebuffer* framebuffer);
+    void _RenderLeavesPass(nvrhi::IFramebuffer* framebuffer);
+    void _RenderTerrainPass(nvrhi::IFramebuffer* framebuffer);
     void _RenderImpostorPass(nvrhi::IFramebuffer* framebuffer);
     void _RebuildImpostorBindingSets();
     void _RenderShadowImpostorPass(uint32_t cascade);

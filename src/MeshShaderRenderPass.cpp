@@ -1889,7 +1889,9 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         for (uint32_t c = 0; c < Render::c_NumCascades; c++) {
             std::string cascadeMarker = "C" + std::to_string(c);
             m_CommandList->beginMarker(cascadeMarker.c_str());
-            
+
+            // Trunk
+            m_CommandList->beginMarker("Trunk");
             nvrhi::MeshletState ms;
             ms.pipeline       = m_StageResources.shadow.pipeline;
             ms.framebuffer    = m_StageResources.shadow.framebuffers[c];
@@ -1906,12 +1908,10 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
                 m_CommandList->getNativeObject(nvrhi::ObjectTypes::D3D12_GraphicsCommandList));
             auto* argBuffer = static_cast<ID3D12Resource*>(
                 m_StageResources.cull.shadowDispatchArgsBuffer->getNativeObject(nvrhi::ObjectTypes::D3D12_Resource));
-            
+
             if (d3dList && argBuffer) {
                 for (uint32_t ai = 0; ai < numAssets; ai++) {
                     const uint32_t slot = ai * Render::c_NumCascades + c;
-                    std::string assetMarker = "A" + std::to_string(ai);
-                    m_CommandList->beginMarker(assetMarker.c_str());
                     d3dList->ExecuteIndirect(
                         m_StageResources.shadow.dispatchMeshSignature.Get(),
                         1,
@@ -1919,14 +1919,15 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
                         slot * sizeof(DispatchRecord),
                         nullptr,
                         0);
-                    m_CommandList->endMarker();
                 }
             }
+            m_CommandList->endMarker(); // Trunk
 
             // Leaves into the same cascade slice.
             auto& L = m_StageResources.sceneLeaves;
             if (L.shadowPipeline && L.shadowSignature && L.shadowBindingSet
                 && m_StageResources.cull.shadowLeafDispatchArgsBuffer) {
+                m_CommandList->beginMarker("Leaves");
                 nvrhi::MeshletState leafMS;
                 leafMS.pipeline       = L.shadowPipeline;
                 leafMS.framebuffer    = m_StageResources.shadow.framebuffers[c];
@@ -1941,8 +1942,6 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
 
                 auto* leafArgBuf = static_cast<ID3D12Resource*>(
                     m_StageResources.cull.shadowLeafDispatchArgsBuffer->getNativeObject(nvrhi::ObjectTypes::D3D12_Resource));
-                std::string leafCascadeMarker = "LC" + std::to_string(c);
-                m_CommandList->beginMarker(leafCascadeMarker.c_str());
                 if (d3dList && leafArgBuf) {
                     for (uint32_t ai = 0; ai < numAssets; ai++) {
                         const uint32_t slot = ai * Render::c_NumCascades + c;
@@ -1955,7 +1954,7 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
                             0);
                     }
                 }
-                m_CommandList->endMarker();
+                m_CommandList->endMarker(); // Leaves
             }
 
             // Terrain into this cascade slice via AS/MS — the AS culls each
@@ -1965,8 +1964,7 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
             if (m_StageResources.shadow.terrainPipeline
                 && m_StageResources.shadow.terrainBindingSet
                 && m_StageResources.sceneTerrain.meshletCount > 0) {
-                std::string terrainCascadeMarker = "T" + std::to_string(c);
-                m_CommandList->beginMarker(terrainCascadeMarker.c_str());
+                m_CommandList->beginMarker("Terrain");
                 nvrhi::MeshletState terrShadow;
                 terrShadow.pipeline    = m_StageResources.shadow.terrainPipeline;
                 terrShadow.framebuffer = m_StageResources.shadow.framebuffers[c];
@@ -1980,18 +1978,18 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
                 const uint32_t numGroups = (m_StageResources.sceneTerrain.meshletCount
                     + Render::k_ASGroupSize - 1) / Render::k_ASGroupSize;
                 m_CommandList->dispatchMesh(numGroups, 1, 1);
-                m_CommandList->endMarker();
+                m_CommandList->endMarker(); // Terrain
             }
 
             if (m_UI.showShadowImpostors) {
-                m_CommandList->beginMarker("ShadowImpostors");
+                m_CommandList->beginMarker("Impostors");
                 _RenderShadowImpostorPass(c);
-                m_CommandList->endMarker();
+                m_CommandList->endMarker(); // Impostors
             }
 
-            m_CommandList->endMarker();
+            m_CommandList->endMarker(); // C<c>
         }
-        m_CommandList->endMarker();
+        m_CommandList->endMarker(); // Shadow
     }
 
     // Copy the currently-selected cascade slice into the single debug texture for UI display.
@@ -2011,88 +2009,31 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     nvrhi::utils::ClearDepthStencilAttachment(m_CommandList, framebuffer, 1.f, 0);
 #endif
 
-    // ----- 5b. Sky -----
+    m_CommandList->beginMarker("Main");
+
     m_CommandList->beginMarker("Sky");
     _RenderSkyPass(framebuffer);
     m_CommandList->endMarker();
 
-    // ----- 6. Main color pass via ExecuteIndirect(DISPATCH_MESH) -----
-    m_CommandList->beginMarker("Scene");
-    {
-        nvrhi::MeshletState meshState;
-        meshState.pipeline       = m_StageResources.sceneDraw.pipeline;
-        meshState.framebuffer    = framebuffer;
-        meshState.indirectParams = m_StageResources.cull.mainDispatchArgsBuffer;
-        meshState.viewport.addViewportAndScissorRect(fbInfo.getViewport());
-        if (m_DispatchMeshSignature && !m_StageResources.sceneDraw.bindingSets.empty()) {
-            auto* d3dList = static_cast<ID3D12GraphicsCommandList6*>(
-                m_CommandList->getNativeObject(nvrhi::ObjectTypes::D3D12_GraphicsCommandList));
-            auto* argBuffer = static_cast<ID3D12Resource*>(
-                m_StageResources.cull.mainDispatchArgsBuffer->getNativeObject(nvrhi::ObjectTypes::D3D12_Resource));
-
-            if (d3dList && argBuffer) {
-                for (uint32_t texIdx = 0; texIdx < m_StageResources.sceneDraw.bindingSets.size(); texIdx++) {
-                    meshState.bindings = { m_StageResources.sceneDraw.bindingSets[texIdx] };
-                    m_CommandList->setMeshletState(meshState);
-
-                    uint32_t placeholder = 0;
-                    m_CommandList->setPushConstants(&placeholder, sizeof(uint32_t));
-
-                    for (uint32_t slot = 0; slot < m_NumMainSlots; slot++) {
-                        if (slot >= m_MainSlotTextureSet.size()) continue;
-                        if (m_MainSlotTextureSet[slot] != texIdx) continue;
-
-                        d3dList->ExecuteIndirect(
-                            m_DispatchMeshSignature.Get(),
-                            1,
-                            argBuffer,
-                            slot * sizeof(DispatchRecord),
-                            nullptr,
-                            0);
-                    }
-                }
-            }
-        }
-
-        // Leaves: single PSO + binding set, ExecuteIndirect over all main slots.
-        auto& L = m_StageResources.sceneLeaves;
-        if (L.mainPipeline && L.mainSignature && L.mainBindingSet
-            && m_StageResources.cull.mainLeafDispatchArgsBuffer) {
-            nvrhi::MeshletState leafMS;
-            leafMS.pipeline       = L.mainPipeline;
-            leafMS.framebuffer    = framebuffer;
-            leafMS.bindings       = { L.mainBindingSet };
-            leafMS.indirectParams = m_StageResources.cull.mainLeafDispatchArgsBuffer;
-            leafMS.viewport.addViewportAndScissorRect(fbInfo.getViewport());
-            m_CommandList->setMeshletState(leafMS);
-
-            uint32_t placeholder = 0;
-            m_CommandList->setPushConstants(&placeholder, sizeof(uint32_t));
-
-            auto* d3dList = static_cast<ID3D12GraphicsCommandList6*>(
-                m_CommandList->getNativeObject(nvrhi::ObjectTypes::D3D12_GraphicsCommandList));
-            auto* leafArgBuf = static_cast<ID3D12Resource*>(
-                m_StageResources.cull.mainLeafDispatchArgsBuffer->getNativeObject(nvrhi::ObjectTypes::D3D12_Resource));
-            if (d3dList && leafArgBuf) {
-                d3dList->ExecuteIndirect(
-                    L.mainSignature.Get(),
-                    m_NumMainSlots, leafArgBuf, 0, nullptr, 0);
-            }
-        }
-    }
+    m_CommandList->beginMarker("Trunk");
+    _RenderTrunkPass(framebuffer);
     m_CommandList->endMarker();
 
-    // ----- 6b. Terrain color -----
+    m_CommandList->beginMarker("Leaves");
+    _RenderLeavesPass(framebuffer);
+    m_CommandList->endMarker();
+
     m_CommandList->beginMarker("Terrain");
-    _RenderScenePass(framebuffer);
+    _RenderTerrainPass(framebuffer);
     m_CommandList->endMarker();
 
-    // ----- 6c. Hemi-octahedral impostors -----
     m_CommandList->beginMarker("Impostors");
     _RenderImpostorPass(framebuffer);
     m_CommandList->endMarker();
-    
-    m_CommandList->endMarker();
+
+    m_CommandList->endMarker(); // Main
+
+    m_CommandList->endMarker(); // Draw
     
     if (m_UI.showImpostorAtlas && m_Shared)
         m_Shared->CopySelectedImpostorDebugAtlases(m_CommandList, m_UI.impostorSelectedAsset);
@@ -3158,12 +3099,82 @@ void MeshShaderRenderPass::_RenderSkyPass(nvrhi::IFramebuffer* framebuffer) {
 }
 
 // ===========================================================================
-// Terrain color pass - used inside _RenderScenePass below
+// Main color passes — trunk meshlets, leaf meshlets, and terrain.
 // ===========================================================================
 
 void MeshShaderRenderPass::_RenderShadowPass() {}
 
-void MeshShaderRenderPass::_RenderScenePass(nvrhi::IFramebuffer* framebuffer) {
+void MeshShaderRenderPass::_RenderTrunkPass(nvrhi::IFramebuffer* framebuffer) {
+    if (!m_DispatchMeshSignature || m_StageResources.sceneDraw.bindingSets.empty())
+        return;
+
+    const auto& fbInfo = framebuffer->getFramebufferInfo();
+
+    nvrhi::MeshletState meshState;
+    meshState.pipeline       = m_StageResources.sceneDraw.pipeline;
+    meshState.framebuffer    = framebuffer;
+    meshState.indirectParams = m_StageResources.cull.mainDispatchArgsBuffer;
+    meshState.viewport.addViewportAndScissorRect(fbInfo.getViewport());
+
+    auto* d3dList = static_cast<ID3D12GraphicsCommandList6*>(
+        m_CommandList->getNativeObject(nvrhi::ObjectTypes::D3D12_GraphicsCommandList));
+    auto* argBuffer = static_cast<ID3D12Resource*>(
+        m_StageResources.cull.mainDispatchArgsBuffer->getNativeObject(nvrhi::ObjectTypes::D3D12_Resource));
+    if (!d3dList || !argBuffer) return;
+
+    for (uint32_t texIdx = 0; texIdx < m_StageResources.sceneDraw.bindingSets.size(); texIdx++) {
+        meshState.bindings = { m_StageResources.sceneDraw.bindingSets[texIdx] };
+        m_CommandList->setMeshletState(meshState);
+
+        uint32_t placeholder = 0;
+        m_CommandList->setPushConstants(&placeholder, sizeof(uint32_t));
+
+        for (uint32_t slot = 0; slot < m_NumMainSlots; slot++) {
+            if (slot >= m_MainSlotTextureSet.size()) continue;
+            if (m_MainSlotTextureSet[slot] != texIdx) continue;
+
+            d3dList->ExecuteIndirect(
+                m_DispatchMeshSignature.Get(),
+                1,
+                argBuffer,
+                slot * sizeof(DispatchRecord),
+                nullptr,
+                0);
+        }
+    }
+}
+
+void MeshShaderRenderPass::_RenderLeavesPass(nvrhi::IFramebuffer* framebuffer) {
+    auto& L = m_StageResources.sceneLeaves;
+    if (!L.mainPipeline || !L.mainSignature || !L.mainBindingSet
+        || !m_StageResources.cull.mainLeafDispatchArgsBuffer)
+        return;
+
+    const auto& fbInfo = framebuffer->getFramebufferInfo();
+
+    nvrhi::MeshletState leafMS;
+    leafMS.pipeline       = L.mainPipeline;
+    leafMS.framebuffer    = framebuffer;
+    leafMS.bindings       = { L.mainBindingSet };
+    leafMS.indirectParams = m_StageResources.cull.mainLeafDispatchArgsBuffer;
+    leafMS.viewport.addViewportAndScissorRect(fbInfo.getViewport());
+    m_CommandList->setMeshletState(leafMS);
+
+    uint32_t placeholder = 0;
+    m_CommandList->setPushConstants(&placeholder, sizeof(uint32_t));
+
+    auto* d3dList = static_cast<ID3D12GraphicsCommandList6*>(
+        m_CommandList->getNativeObject(nvrhi::ObjectTypes::D3D12_GraphicsCommandList));
+    auto* leafArgBuf = static_cast<ID3D12Resource*>(
+        m_StageResources.cull.mainLeafDispatchArgsBuffer->getNativeObject(nvrhi::ObjectTypes::D3D12_Resource));
+    if (d3dList && leafArgBuf) {
+        d3dList->ExecuteIndirect(
+            L.mainSignature.Get(),
+            m_NumMainSlots, leafArgBuf, 0, nullptr, 0);
+    }
+}
+
+void MeshShaderRenderPass::_RenderTerrainPass(nvrhi::IFramebuffer* framebuffer) {
     auto& T = m_StageResources.sceneTerrain;
     if (T.meshletCount == 0 || !T.amplificationShader || !T.meshShader || !T.pixelShader)
         return;

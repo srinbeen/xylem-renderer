@@ -196,8 +196,9 @@ struct LeafPayload
 
 groupshared LeafPayload s_payload;
 groupshared uint s_survivors;
-groupshared uint s_considered;
-groupshared uint s_survivingLeafCount;  // Σ meshlet.meta.y over surviving meshlets in this AS group.
+
+// AS group size = XYLEM_AS_GROUP_SIZE (32). Single-wave invariant identical
+// to MeshShaderPass.hlsl — see comment there for the wave-size assumption.
 
 // Main + depth-prepass leaf AS. Eye-camera frustum + Hi-Z reject per leaf
 // meshlet using the asset-local bounding sphere transformed by the visible
@@ -206,65 +207,59 @@ groupshared uint s_survivingLeafCount;  // Σ meshlet.meta.y over surviving mesh
 [numthreads(XYLEM_AS_GROUP_SIZE, 1, 1)]
 void leaf_as(uint3 gid : SV_GroupID, uint gtid : SV_GroupThreadID)
 {
-    if (gtid == 0)
-    {
-        s_survivors          = 0;
-        s_considered         = 0;
-        s_survivingLeafCount = 0;
-    }
-    GroupMemoryBarrierWithGroupSync();
-
-    uint slotIdx = g_SlotIdx;
+    uint slotIdx       = g_SlotIdx;
     uint invocsPerInst = max(1u, g_ASInvocsPerSlot[slotIdx]);
-    uint visibleCount = g_SlotCounts[slotIdx];
+    uint visibleCount  = g_SlotCounts[slotIdx];
     LeafSlotData leafSlot = g_LeafSlots[slotIdx];
 
-    uint flatGroup = gid.x + gid.y * XYLEM_DISPATCH_X;
+    uint flatGroup      = gid.x + gid.y * XYLEM_DISPATCH_X;
     uint instanceInSlot = flatGroup / invocsPerInst;
-    uint invocIdx = flatGroup % invocsPerInst;
+    uint invocIdx       = flatGroup % invocsPerInst;
 
-    if (instanceInSlot < visibleCount)
+    bool inInst = (instanceInSlot < visibleCount);
+    uint persistentInstIdx = 0;
+    InstanceRenderData inst = (InstanceRenderData)0;
+    if (inInst)
     {
-        uint persistentInstIdx = g_VisBuf[g_SlotOffsets[slotIdx] + instanceInSlot];
-        InstanceRenderData inst = g_Instances[persistentInstIdx];
-        if (gtid == 0)
-        {
-            s_payload.instanceIdx = persistentInstIdx;
-            s_payload.slotIdx = slotIdx;
-        }
-
-        uint meshletLocalIdx = invocIdx * XYLEM_AS_GROUP_SIZE + gtid;
-        if (meshletLocalIdx < leafSlot.meshletCount)
-        {
-            InterlockedAdd(s_considered, 1);
-            LeafMeshletData m = g_LeafMeshlets[leafSlot.meshletOffset + meshletLocalIdx];
-            bool cull =
-                LeafMeshletFrustumCulled(m, inst.model) ||
-                LeafMeshletHiZOccluded(m, inst.model);
-            if (!cull)
-            {
-                uint survivor;
-                InterlockedAdd(s_survivors, 1, survivor);
-                s_payload.meshletIndices[survivor] = meshletLocalIdx;
-                InterlockedAdd(s_survivingLeafCount, m.meta.y);
-            }
-        }
+        persistentInstIdx = g_VisBuf[g_SlotOffsets[slotIdx] + instanceInSlot];
+        inst              = g_Instances[persistentInstIdx];
     }
+
+    uint meshletLocalIdx = invocIdx * XYLEM_AS_GROUP_SIZE + gtid;
+    bool considered      = inInst && (meshletLocalIdx < leafSlot.meshletCount);
+    bool survived        = false;
+    uint leafContribution = 0;
+
+    if (considered)
+    {
+        LeafMeshletData m = g_LeafMeshlets[leafSlot.meshletOffset + meshletLocalIdx];
+        bool cull =
+            LeafMeshletFrustumCulled(m, inst.model) ||
+            LeafMeshletHiZOccluded(m, inst.model);
+        survived = !cull;
+        if (survived) leafContribution = m.meta.y;
+    }
+
+    uint myRank    = WavePrefixCountBits(survived);
+    uint survivors = WaveActiveCountBits(survived);
+    uint considCnt = WaveActiveCountBits(considered);
+    uint leafCnt   = WaveActiveSum(leafContribution);
+
+    if (WaveIsFirstLane())
+    {
+        s_survivors           = survivors;
+        s_payload.instanceIdx = persistentInstIdx;
+        s_payload.slotIdx     = slotIdx;
+
+        uint dummy;
+        if (leafCnt   > 0u) g_LeafSurvivors.InterlockedAdd(0,  leafCnt,   dummy);
+        if (considCnt > 0u) g_MeshletStats.InterlockedAdd(16, considCnt, dummy);
+        if (survivors > 0u) g_MeshletStats.InterlockedAdd(20, survivors, dummy);
+    }
+    if (survived)
+        s_payload.meshletIndices[myRank] = meshletLocalIdx;
 
     GroupMemoryBarrierWithGroupSync();
-
-    // One global atomic per AS group instead of one per surviving meshlet.
-    if (gtid == 0)
-    {
-        uint dummy;
-        if (s_survivingLeafCount > 0)
-            g_LeafSurvivors.InterlockedAdd(0, s_survivingLeafCount, dummy);
-        if (s_considered > 0)
-            g_MeshletStats.InterlockedAdd(16, s_considered, dummy);
-        if (s_survivors > 0)
-            g_MeshletStats.InterlockedAdd(20, s_survivors,  dummy);
-    }
-
     DispatchMesh(s_survivors, 1, 1, s_payload);
 }
 
@@ -276,58 +271,52 @@ void leaf_as(uint3 gid : SV_GroupID, uint gtid : SV_GroupThreadID)
 [numthreads(XYLEM_AS_GROUP_SIZE, 1, 1)]
 void leaf_shadow_as(uint3 gid : SV_GroupID, uint gtid : SV_GroupThreadID)
 {
-    if (gtid == 0)
-    {
-        s_survivors          = 0;
-        s_considered         = 0;
-        s_survivingLeafCount = 0;
-    }
-    GroupMemoryBarrierWithGroupSync();
-
-    uint slotIdx = g_SlotIdx;
+    uint slotIdx       = g_SlotIdx;
     uint invocsPerInst = max(1u, g_ASInvocsPerSlot[slotIdx]);
-    uint visibleCount = g_SlotCounts[slotIdx];
+    uint visibleCount  = g_SlotCounts[slotIdx];
     LeafSlotData leafSlot = g_LeafSlots[slotIdx];
 
-    uint flatGroup = gid.x + gid.y * XYLEM_DISPATCH_X;
+    uint flatGroup      = gid.x + gid.y * XYLEM_DISPATCH_X;
     uint instanceInSlot = flatGroup / invocsPerInst;
-    uint invocIdx = flatGroup % invocsPerInst;
+    uint invocIdx       = flatGroup % invocsPerInst;
 
-    if (instanceInSlot < visibleCount)
+    bool inInst = (instanceInSlot < visibleCount);
+    uint persistentInstIdx = 0;
+    if (inInst)
+        persistentInstIdx = g_VisBuf[g_SlotOffsets[slotIdx] + instanceInSlot];
+
+    uint meshletLocalIdx = invocIdx * XYLEM_AS_GROUP_SIZE + gtid;
+    // No per-meshlet cull on shadow path. considered == survived.
+    bool survived         = inInst && (meshletLocalIdx < leafSlot.meshletCount);
+    uint leafContribution = 0;
+    if (survived)
     {
-        uint persistentInstIdx = g_VisBuf[g_SlotOffsets[slotIdx] + instanceInSlot];
-        if (gtid == 0)
-        {
-            s_payload.instanceIdx = persistentInstIdx;
-            s_payload.slotIdx = slotIdx;
-        }
+        LeafMeshletData m = g_LeafMeshlets[leafSlot.meshletOffset + meshletLocalIdx];
+        leafContribution  = m.meta.y;
+    }
 
-        uint meshletLocalIdx = invocIdx * XYLEM_AS_GROUP_SIZE + gtid;
-        if (meshletLocalIdx < leafSlot.meshletCount)
+    uint myRank    = WavePrefixCountBits(survived);
+    uint survivors = WaveActiveCountBits(survived);
+    uint leafCnt   = WaveActiveSum(leafContribution);
+
+    if (WaveIsFirstLane())
+    {
+        s_survivors           = survivors;
+        s_payload.instanceIdx = persistentInstIdx;
+        s_payload.slotIdx     = slotIdx;
+
+        uint dummy;
+        if (leafCnt   > 0u) g_LeafSurvivors.InterlockedAdd(0,  leafCnt,   dummy);
+        if (survivors > 0u)
         {
-            // No per-meshlet cull on shadow path. considered == survived.
-            InterlockedAdd(s_considered, 1);
-            LeafMeshletData m = g_LeafMeshlets[leafSlot.meshletOffset + meshletLocalIdx];
-            uint survivor;
-            InterlockedAdd(s_survivors, 1, survivor);
-            s_payload.meshletIndices[survivor] = meshletLocalIdx;
-            InterlockedAdd(s_survivingLeafCount, m.meta.y);
+            g_MeshletStats.InterlockedAdd(24, survivors, dummy);
+            g_MeshletStats.InterlockedAdd(28, survivors, dummy);
         }
     }
+    if (survived)
+        s_payload.meshletIndices[myRank] = meshletLocalIdx;
 
     GroupMemoryBarrierWithGroupSync();
-
-    if (gtid == 0)
-    {
-        uint dummy;
-        if (s_survivingLeafCount > 0)
-            g_LeafSurvivors.InterlockedAdd(0, s_survivingLeafCount, dummy);
-        if (s_considered > 0)
-            g_MeshletStats.InterlockedAdd(24, s_considered, dummy);
-        if (s_survivors > 0)
-            g_MeshletStats.InterlockedAdd(28, s_survivors,  dummy);
-    }
-
     DispatchMesh(s_survivors, 1, 1, s_payload);
 }
 

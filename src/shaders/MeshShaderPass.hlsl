@@ -236,62 +236,71 @@ bool MeshletHiZOccluded(MeshletDesc m, float4x4 model)
 
 groupshared ASPayload s_payload;
 groupshared uint      s_survivors;
-groupshared uint      s_considered;
+
+// AS group size = XYLEM_AS_GROUP_SIZE (32). Maps to a single wave on every
+// current SM 6.5 driver (full on wave32, half on wave64). We rely on this to
+// replace groupshared atomics with wave intrinsics. The retained barrier
+// before DispatchMesh guards s_payload writes against the unlikely future
+// case where a driver splits the group across waves.
 
 [numthreads(XYLEM_AS_GROUP_SIZE, 1, 1)]
 void main_as(uint3 gid  : SV_GroupID,
              uint  gtid : SV_GroupThreadID)
 {
-    if (gtid == 0) { s_survivors = 0; s_considered = 0; }
-    GroupMemoryBarrierWithGroupSync();
-
-    uint slotIdx            = g_SlotIdx;
-    uint ASInvocsPerInst    = max(1u, g_ASInvocsPerSlot[slotIdx]);
-    uint visibleCount       = g_SlotCounts[slotIdx];
+    uint slotIdx         = g_SlotIdx;
+    uint ASInvocsPerInst = max(1u, g_ASInvocsPerSlot[slotIdx]);
+    uint visibleCount    = g_SlotCounts[slotIdx];
 
     uint flatGroup      = gid.x + gid.y * XYLEM_DISPATCH_X;
     uint instanceInSlot = flatGroup / ASInvocsPerInst;
     uint invocIdx       = flatGroup % ASInvocsPerInst;
 
-    if (instanceInSlot < visibleCount)
+    // Invariant: flatGroup is identical across all lanes in the group, so
+    // instanceInSlot / invocIdx / inInst are uniform. Lane 0's load of
+    // persistentInstIdx is the correct group-wide value.
+    bool inInst = (instanceInSlot < visibleCount);
+    uint persistentInstIdx = 0;
+    AssetLodRange      al   = (AssetLodRange)0;
+    InstanceRenderData inst = (InstanceRenderData)0;
+
+    if (inInst)
     {
-        uint persistentInstIdx = g_VisBuf[g_SlotOffsets[slotIdx] + instanceInSlot];
-        AssetLodRange al = g_AssetLodRanges[slotIdx];
-        InstanceRenderData inst = g_Instances[persistentInstIdx];
-
-        if (gtid == 0)
-        {
-            s_payload.instanceIdx = persistentInstIdx;
-            s_payload.assetLod    = slotIdx;
-        }
-
-        uint meshletLocalIdx = invocIdx * XYLEM_AS_GROUP_SIZE + gtid;
-        if (meshletLocalIdx < al.meshletCount)
-        {
-            InterlockedAdd(s_considered, 1);
-            MeshletDesc m = g_Meshlets[al.meshletOffset + meshletLocalIdx];
-            bool cull =
-                MeshletConeCull(m, inst.model, g_CameraPos) ||
-                MeshletHiZOccluded(m, inst.model);
-            if (!cull)
-            {
-                uint slot;
-                InterlockedAdd(s_survivors, 1, slot);
-                s_payload.meshletIndices[slot] = meshletLocalIdx;
-            }
-        }
+        persistentInstIdx = g_VisBuf[g_SlotOffsets[slotIdx] + instanceInSlot];
+        al                = g_AssetLodRanges[slotIdx];
+        inst              = g_Instances[persistentInstIdx];
     }
-    GroupMemoryBarrierWithGroupSync();
 
-    if (gtid == 0)
+    uint meshletLocalIdx = invocIdx * XYLEM_AS_GROUP_SIZE + gtid;
+    bool considered      = inInst && (meshletLocalIdx < al.meshletCount);
+    bool survived        = false;
+
+    if (considered)
     {
+        MeshletDesc m = g_Meshlets[al.meshletOffset + meshletLocalIdx];
+        bool cull =
+            MeshletConeCull(m, inst.model, g_CameraPos) ||
+            MeshletHiZOccluded(m, inst.model);
+        survived = !cull;
+    }
+
+    uint myRank    = WavePrefixCountBits(survived);
+    uint survivors = WaveActiveCountBits(survived);
+    uint considCnt = WaveActiveCountBits(considered);
+
+    if (WaveIsFirstLane())
+    {
+        s_survivors           = survivors;
+        s_payload.instanceIdx = persistentInstIdx;
+        s_payload.assetLod    = slotIdx;
+
         uint dummy;
-        if (s_considered > 0)
-            g_MeshletStats.InterlockedAdd(0, s_considered, dummy);
-        if (s_survivors > 0)
-            g_MeshletStats.InterlockedAdd(4, s_survivors,  dummy);
+        if (considCnt > 0u) g_MeshletStats.InterlockedAdd(0, considCnt, dummy);
+        if (survivors > 0u) g_MeshletStats.InterlockedAdd(4, survivors, dummy);
     }
+    if (survived)
+        s_payload.meshletIndices[myRank] = meshletLocalIdx;
 
+    GroupMemoryBarrierWithGroupSync();
     DispatchMesh(s_survivors, 1, 1, s_payload);
 }
 
@@ -378,9 +387,6 @@ void main_ms(
 void shadow_as(uint3 gid  : SV_GroupID,
                uint  gtid : SV_GroupThreadID)
 {
-    if (gtid == 0) { s_survivors = 0; s_considered = 0; }
-    GroupMemoryBarrierWithGroupSync();
-
     uint slotIdx         = g_SlotIdx;              // shadow slot = ai*XYLEM_NUM_CASCADES + c
     // Shadow casts from the lowest LOD (matches compute pipeline). Casting from
     // LOD 0 self-shadows the inscribed lower-LOD surface in the color pass.
@@ -392,39 +398,40 @@ void shadow_as(uint3 gid  : SV_GroupID,
     uint instanceInSlot = flatGroup / ASInvocsPerInst;
     uint invocIdx       = flatGroup % ASInvocsPerInst;
 
-    if (instanceInSlot < visibleCount)
+    bool inInst = (instanceInSlot < visibleCount);
+    uint persistentInstIdx = 0;
+    AssetLodRange al = (AssetLodRange)0;
+
+    if (inInst)
     {
-        uint persistentInstIdx = g_VisBuf[g_SlotOffsets[slotIdx] + instanceInSlot];
-        AssetLodRange al = g_AssetLodRanges[assetLodSlot];
-
-        if (gtid == 0)
-        {
-            s_payload.instanceIdx = persistentInstIdx;
-            s_payload.assetLod    = slotIdx;  // shadow MS decodes cascade from this
-        }
-
-        uint meshletLocalIdx = invocIdx * XYLEM_AS_GROUP_SIZE + gtid;
-        if (meshletLocalIdx < al.meshletCount)
-        {
-            // No per-meshlet cone/Hi-Z cull on shadow path — every meshlet of a
-            // cascade-visible instance survives. Considered == survived.
-            InterlockedAdd(s_considered, 1);
-            uint slot;
-            InterlockedAdd(s_survivors, 1, slot);
-            s_payload.meshletIndices[slot] = meshletLocalIdx;
-        }
+        persistentInstIdx = g_VisBuf[g_SlotOffsets[slotIdx] + instanceInSlot];
+        al                = g_AssetLodRanges[assetLodSlot];
     }
-    GroupMemoryBarrierWithGroupSync();
 
-    if (gtid == 0)
+    uint meshletLocalIdx = invocIdx * XYLEM_AS_GROUP_SIZE + gtid;
+    // No per-meshlet cull on shadow path — considered == survived.
+    bool survived = inInst && (meshletLocalIdx < al.meshletCount);
+
+    uint myRank    = WavePrefixCountBits(survived);
+    uint survivors = WaveActiveCountBits(survived);
+
+    if (WaveIsFirstLane())
     {
+        s_survivors           = survivors;
+        s_payload.instanceIdx = persistentInstIdx;
+        s_payload.assetLod    = slotIdx;  // shadow MS decodes cascade from this
+
         uint dummy;
-        if (s_considered > 0)
-            g_MeshletStats.InterlockedAdd(8,  s_considered, dummy);
-        if (s_survivors > 0)
-            g_MeshletStats.InterlockedAdd(12, s_survivors,  dummy);
+        if (survivors > 0u)
+        {
+            g_MeshletStats.InterlockedAdd(8,  survivors, dummy);
+            g_MeshletStats.InterlockedAdd(12, survivors, dummy);
+        }
     }
+    if (survived)
+        s_payload.meshletIndices[myRank] = meshletLocalIdx;
 
+    GroupMemoryBarrierWithGroupSync();
     DispatchMesh(s_survivors, 1, 1, s_payload);
 }
 

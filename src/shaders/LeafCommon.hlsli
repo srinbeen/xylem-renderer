@@ -1,6 +1,8 @@
 #ifndef XYLEM_LEAF_COMMON_HLSLI
 #define XYLEM_LEAF_COMMON_HLSLI
 
+#include "../include/MeshletConstants.h"
+
 // Force row-major matrix packing inside this header so InstanceRenderData reads
 // the C++ Render::InstanceBufferEntry layout correctly even when the including
 // shader hasn't issued #pragma pack_matrix(row_major) yet. Without this, the
@@ -37,9 +39,6 @@ struct LeafMeshletData
     uint4  meta;   // x = global leaf offset, y = leaf count
     float4 bounds; // xyz = local center, w = radius
 };
-
-static const uint XYLEM_LEAF_VERTS_PER_LEAF = 12;
-static const uint XYLEM_LEAFS_PER_MESHLET = 8;
 
 uint LeafCornerIndex(uint vertexInLeaf)
 {

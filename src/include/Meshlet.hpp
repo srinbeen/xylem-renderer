@@ -5,12 +5,19 @@
 #include <vector>
 #include <nvrhi/nvrhi.h>
 #include <donut/core/math/math.h>
+#include "MeshletConstants.h"
 
 namespace Xylem::Render {
 
-static constexpr uint32_t k_MaxMeshletVerts = 64;
-static constexpr uint32_t k_MaxMeshletPrims = 124;
-static constexpr uint32_t k_ASGroupSize     = 32;  // meshlets per AS threadgroup
+// Values live in MeshletConstants.h (shared with HLSL) — re-exposed here
+// as typed C++ constants so existing call sites can keep using Render::k_*.
+static constexpr uint32_t k_MaxMeshletVerts    = XYLEM_MAX_MESHLET_VERTS;
+static constexpr uint32_t k_MaxMeshletPrims    = XYLEM_MAX_MESHLET_PRIMS;
+static constexpr uint32_t k_ASGroupSize        = XYLEM_AS_GROUP_SIZE;   // meshlets per AS threadgroup
+static constexpr uint32_t k_MSGroupSize        = XYLEM_MS_GROUP_SIZE;
+static constexpr uint32_t k_DispatchAxisMax    = XYLEM_DISPATCH_X;
+static constexpr uint32_t k_LeafsPerMeshlet    = XYLEM_LEAFS_PER_MESHLET;
+static constexpr uint32_t k_LeafVertsPerLeaf   = XYLEM_LEAF_VERTS_PER_LEAF;
 
 // One per mesh -- N assets * M LODs = N*M MeshOffsets.
 // Layout mirrors HLSL AssetLodRange (meshlet_types.hlsli) — 32 bytes, 8 uints.

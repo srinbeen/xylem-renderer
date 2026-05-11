@@ -86,6 +86,7 @@ donut_compile_shaders_all_platforms(
     CONFIG ${${PROJECT_NAME}_SOURCE_DIR}/shaders/shaders.cfg
     OUTPUT_BASE ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders/custom
     SHADER_MODEL 6_5
+    SHADERMAKE_OPTIONS_DXIL "--PDB"
 )
 
 add_executable(${PROJECT_NAME} WIN32 ${${PROJECT_NAME}_SOURCES}
@@ -93,6 +94,15 @@ add_executable(${PROJECT_NAME} WIN32 ${${PROJECT_NAME}_SOURCES}
 )
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE DONUT_SHADERS_OUTPUT_SUBDIR="${DONUT_SHADERS_OUTPUT_SUBDIR}")
+
+find_package(CUDAToolkit QUIET)
+if (TARGET CUDA::nvtx3)
+    target_link_libraries(${PROJECT_NAME} PRIVATE CUDA::nvtx3)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE XYLEM_WITH_NVTX=1)
+    message(STATUS "Xylem: NVTX enabled (CUDAToolkit ${CUDAToolkit_VERSION})")
+else()
+    message(STATUS "Xylem: NVTX disabled (CUDAToolkit not found)")
+endif()
 
 if (DONUT_WITH_AFTERMATH)
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD

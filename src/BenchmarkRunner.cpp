@@ -15,6 +15,15 @@
 #include <donut/core/log.h>
 #include <donut/core/math/quat.h>
 
+#if defined(XYLEM_WITH_NVTX)
+#  include <nvtx3/nvToolsExt.h>
+#  define XYLEM_NVTX_PUSH(name) ::nvtxRangePushA(name)
+#  define XYLEM_NVTX_POP()      ::nvtxRangePop()
+#else
+#  define XYLEM_NVTX_PUSH(name) ((void)0)
+#  define XYLEM_NVTX_POP()      ((void)0)
+#endif
+
 using namespace Xylem;
 using namespace donut::engine::animation;
 
@@ -78,6 +87,16 @@ const char* PipelineFileName(Xylem::Pipeline p)
         case Xylem::Pipeline::MeshShader:  return "meshshader.csv";
     }
     return "unknown.csv";
+}
+
+const char* PipelineNvtxName(Xylem::Pipeline p)
+{
+    switch (p) {
+        case Xylem::Pipeline::Traditional: return "Pipeline:Traditional";
+        case Xylem::Pipeline::Compute:     return "Pipeline:Compute";
+        case Xylem::Pipeline::MeshShader:  return "Pipeline:MeshShader";
+    }
+    return "Pipeline:Unknown";
 }
 
 } // anonymous namespace
@@ -380,6 +399,7 @@ void BenchmarkRunner::PostRender()
         case State::FlushPipelineCsv: {
             // currentIdx still points at the just-finished pipeline at this
             // point; _StartNextPipeline advances it.
+            XYLEM_NVTX_POP();  // paired with the per-pipeline push in _BeginSession/_StartNextPipeline
             _WritePipelineCsv(sess.pipelines[sess.currentIdx]);
             _StartNextPipeline();
             break;
@@ -430,6 +450,9 @@ void BenchmarkRunner::_BeginSession()
         sess.vsyncWasOverridden = true;
     }
 
+    XYLEM_NVTX_PUSH("XylemBenchmark");
+    XYLEM_NVTX_PUSH(PipelineNvtxName(sess.pipelines[0].pipeline));
+
     m_Session = std::move(sess);
     m_State = State::StartPipeline;
 }
@@ -437,6 +460,7 @@ void BenchmarkRunner::_BeginSession()
 void BenchmarkRunner::_EndSession()
 {
     if (!m_Session) return;
+    XYLEM_NVTX_POP();  // paired with the "XylemBenchmark" push in _BeginSession
     if (m_Session->vsyncWasOverridden) {
         m_DeviceManager->SetVsyncEnabled(m_Session->savedVsync);
     }
@@ -460,6 +484,7 @@ void BenchmarkRunner::_StartNextPipeline()
     if (sess.currentIdx >= sess.pipelines.size() || sess.aborted) {
         m_State = State::WriteRunSummary;
     } else {
+        XYLEM_NVTX_PUSH(PipelineNvtxName(sess.pipelines[sess.currentIdx].pipeline));
         m_State = State::StartPipeline;
     }
 }

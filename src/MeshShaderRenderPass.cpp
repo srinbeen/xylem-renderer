@@ -376,6 +376,7 @@ bool MeshShaderRenderPass::_InitShadowPass() {
     bld.bindings = {
         nvrhi::BindingLayoutItem::PushConstants(mesh_reg::Draw::kPushC_Slot, mesh_reg::Draw::kPushCBytes),
         nvrhi::BindingLayoutItem::ConstantBuffer(mesh_reg::Draw::kCB_Frame),
+        nvrhi::BindingLayoutItem::ConstantBuffer(mesh_reg::Draw::kCB_ASCull),
 
         nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Positions),
         nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Normals),
@@ -1250,6 +1251,8 @@ void MeshShaderRenderPass::_RebuildShadowBindingSet() {
         nvrhi::BindingSetItem::PushConstants(mesh_reg::Draw::kPushC_Slot, mesh_reg::Draw::kPushCBytes),
         nvrhi::BindingSetItem::ConstantBuffer(mesh_reg::Draw::kCB_Frame, m_StageResources.frameShared.constantBuffer,
             nvrhi::BufferRange(0, shader_cb::kCullFrameSize)),
+        nvrhi::BindingSetItem::ConstantBuffer(mesh_reg::Draw::kCB_ASCull, m_StageResources.frameShared.asCullCB,
+            nvrhi::BufferRange(0, shader_cb::kMeshASCullSize)),
 
         nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Positions,     m_StageResources.sceneMeshletData.positions),
         nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Draw::kSRV_Normals,       m_StageResources.sceneMeshletData.normals),

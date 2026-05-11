@@ -164,6 +164,20 @@ bool MeshletConeCull(MeshletDesc m, float4x4 model, float3 cameraWS)
     return cosAngle >= m.coneAxisCutoff.w;
 }
 
+// Directional-light variant: viewer at infinity along -sunDirWS, so the
+// "from camera to meshlet" direction is constant = sunDirWS. Collapses the
+// per-meshlet subtract+normalize into a single dot product.
+bool MeshletConeCullSun(MeshletDesc m, float4x4 model, float3 sunDirWS)
+{
+    if (!g_ASConeCullEnabled)            return false;
+    if (m.coneAxisCutoff.w >= 1.0)       return false;
+
+    float3 axisLS = m.coneAxisCutoff.xyz;
+    // Assumes rotation + uniform scale (per project convention).
+    float3 axisWS = normalize(mul(float4(axisLS, 0), model).xyz);
+    return dot(axisWS, sunDirWS) >= m.coneAxisCutoff.w;
+}
+
 bool MeshletHiZOccluded(MeshletDesc m, float4x4 model)
 {
     if (!g_HizEnabled) return false;
@@ -400,20 +414,34 @@ void shadow_as(uint3 gid  : SV_GroupID,
 
     bool inInst = (instanceInSlot < visibleCount);
     uint persistentInstIdx = 0;
-    AssetLodRange al = (AssetLodRange)0;
+    AssetLodRange      al   = (AssetLodRange)0;
+    InstanceRenderData inst = (InstanceRenderData)0;
 
     if (inInst)
     {
         persistentInstIdx = g_VisBuf[g_SlotOffsets[slotIdx] + instanceInSlot];
         al                = g_AssetLodRanges[assetLodSlot];
+        inst              = g_Instances[persistentInstIdx];
     }
 
     uint meshletLocalIdx = invocIdx * XYLEM_AS_GROUP_SIZE + gtid;
-    // No per-meshlet cull on shadow path — considered == survived.
-    bool survived = inInst && (meshletLocalIdx < al.meshletCount);
+    bool considered      = inInst && (meshletLocalIdx < al.meshletCount);
+    bool survived        = false;
+
+    if (considered)
+    {
+        MeshletDesc m = g_Meshlets[al.meshletOffset + meshletLocalIdx];
+        // Shadow PSO is back-face culling (cullMode=Back), so meshlets whose
+        // entire normal cone faces away from the sun contribute nothing.
+        // Frustum cull intentionally omitted — the per-instance cascade AABB
+        // cull in MeshCullShadow already handles it; per-meshlet edge wins
+        // aren't worth the plane tests.
+        survived = !MeshletConeCullSun(m, inst.model, sunLightDir);
+    }
 
     uint myRank    = WavePrefixCountBits(survived);
     uint survivors = WaveActiveCountBits(survived);
+    uint considCnt = WaveActiveCountBits(considered);
 
     if (WaveIsFirstLane())
     {
@@ -422,11 +450,8 @@ void shadow_as(uint3 gid  : SV_GroupID,
         s_payload.assetLod    = slotIdx;  // shadow MS decodes cascade from this
 
         uint dummy;
-        if (survivors > 0u)
-        {
-            g_MeshletStats.InterlockedAdd(8,  survivors, dummy);
-            g_MeshletStats.InterlockedAdd(12, survivors, dummy);
-        }
+        if (considCnt > 0u) g_MeshletStats.InterlockedAdd(8,  considCnt, dummy);
+        if (survivors > 0u) g_MeshletStats.InterlockedAdd(12, survivors, dummy);
     }
     if (survived)
         s_payload.meshletIndices[myRank] = meshletLocalIdx;

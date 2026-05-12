@@ -291,6 +291,15 @@ bool SceneLoader::Load(const std::filesystem::path& path, SceneRegistry& registr
             tNode["persistence"] >> terrainConfig.persistence;
             tNode["gridSpacing"] >> terrainConfig.gridSpacing;
 
+            if (tNode.isMember("largeScale")) {
+                const auto& lsNode = tNode["largeScale"];
+                if (lsNode.isMember("amplitude")) lsNode["amplitude"] >> terrainConfig.largeScaleAmp;
+                if (lsNode.isMember("periodX"))   lsNode["periodX"]   >> terrainConfig.largeScalePeriodX;
+                if (lsNode.isMember("periodZ"))   lsNode["periodZ"]   >> terrainConfig.largeScalePeriodZ;
+                if (lsNode.isMember("phaseX"))    lsNode["phaseX"]    >> terrainConfig.largeScalePhaseX;
+                if (lsNode.isMember("phaseZ"))    lsNode["phaseZ"]    >> terrainConfig.largeScalePhaseZ;
+            }
+
             // Required: textures block with all four named slots.
             if (!tNode.isMember("textures")) {
                 donut::log::error("SceneLoader: terrain block missing required 'textures' sub-block");
@@ -502,6 +511,18 @@ bool SceneLoader::Save(const std::filesystem::path& path, const SceneRegistry& r
             t["persistence"] = cfg.persistence;
             t["gridSpacing"] = cfg.gridSpacing;
             // worldMin/Max are derived from region bounds at load time, so don't save them.
+
+            if (cfg.largeScaleAmp != 0.f ||
+                cfg.largeScalePeriodX != 0.f ||
+                cfg.largeScalePeriodZ != 0.f) {
+                Json::Value ls(Json::objectValue);
+                ls["amplitude"] = cfg.largeScaleAmp;
+                ls["periodX"]   = cfg.largeScalePeriodX;
+                ls["periodZ"]   = cfg.largeScalePeriodZ;
+                ls["phaseX"]    = cfg.largeScalePhaseX;
+                ls["phaseZ"]    = cfg.largeScalePhaseZ;
+                t["largeScale"] = ls;
+            }
 
             // textures
             Json::Value tex(Json::objectValue);

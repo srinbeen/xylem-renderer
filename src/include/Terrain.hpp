@@ -39,6 +39,16 @@ struct TerrainConfig {
     float    amplitude  = 8.0f;
     float    lacunarity = 2.0f;
     float    persistence = 0.5f;
+
+    // Deterministic large-scale shape added on top of the fbm noise. Each axis
+    // contributes sin(2*pi*world / period); set the period to 0 to disable that
+    // axis. e.g. for a single half-period bump along X, set periodX = 2 * width.
+    float    largeScaleAmp     = 0.0f;
+    float    largeScalePeriodX = 0.0f;
+    float    largeScalePeriodZ = 0.0f;
+    float    largeScalePhaseX  = 0.0f; // radians
+    float    largeScalePhaseZ  = 0.0f; // radians
+
     TerrainShadingParams shading;
 };
 

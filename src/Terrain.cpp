@@ -33,6 +33,18 @@ void Terrain::generate(const TerrainConfig& config) {
                 config.lacunarity,
                 config.persistence);
 
+            if (config.largeScaleAmp != 0.f) {
+                constexpr float k_TwoPi = 6.28318530717958647692f;
+                float largeScale = 0.f;
+                if (config.largeScalePeriodX > 0.f) {
+                    largeScale += std::sin(k_TwoPi * worldX / config.largeScalePeriodX + config.largeScalePhaseX);
+                }
+                if (config.largeScalePeriodZ > 0.f) {
+                    largeScale += std::sin(k_TwoPi * worldZ / config.largeScalePeriodZ + config.largeScalePhaseZ);
+                }
+                h += config.largeScaleAmp * largeScale;
+            }
+
             uint32_t idx = iz * m_GridWidth + ix;
             m_Heights[idx] = h;
 

@@ -1,0 +1,267 @@
+{
+  "assets" : 
+  [
+    {
+      "barkTexture" : "japanese_hackberry_bark_1k",
+      "baseLength" : 1.0,
+      "baseRadius" : 0.668,
+      "branchAngle" : 25.0,
+      "colonization" : 
+      {
+        "attractorCount" : 320,
+        "branchletTaper" : 0.93,
+        "crown" : 
+        {
+          "rotation" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale" : 
+          [
+            5.0,
+            5.0,
+            5.0
+          ],
+          "shear" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "translation" : 
+          [
+            0.0,
+            8.0,
+            0.0
+          ]
+        },
+        "influenceDistance" : 5.0,
+        "killDistance" : 0.8,
+        "maxIterations" : 64,
+        "seed" : 0,
+        "segmentLength" : 0.45
+      },
+      "generation" : 3,
+      "leaf" : 
+      {
+        "color" : 
+        [
+          0.22,
+          0.5,
+          0.18
+        ],
+        "perTip" : 2,
+        "size" : 0.42
+      },
+      "lsystem" : "Oak",
+      "name" : "OakMature",
+      "radialSegments" : 16,
+      "seed" : 67,
+      "stepRatio" : 0.9,
+      "taperRatio" : 0.799
+    },
+    {
+      "barkTexture" : "japanese_hackberry_bark_1k",
+      "baseLength" : 1.0,
+      "baseRadius" : 1.0,
+      "branchAngle" : 20.0,
+      "colonization" : 
+      {
+        "attractorCount" : 651,
+        "branchletTaper" : 1.0,
+        "crown" : 
+        {
+          "rotation" : 
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale" : 
+          [
+            5.0,
+            9.3,
+            5.0
+          ],
+          "shear" : 
+          [
+            0.18,
+            0.0,
+            0.23
+          ],
+          "translation" : 
+          [
+            1.1,
+            17.3,
+            0.0
+          ]
+        },
+        "influenceDistance" : 4.969,
+        "killDistance" : 0.274,
+        "maxIterations" : 86,
+        "seed" : 2,
+        "segmentLength" : 0.644
+      },
+      "generation" : 4,
+      "leaf" : 
+      {
+        "color" : 
+        [
+          0.0221069,
+          0.196078,
+          0.0323405
+        ],
+        "perTip" : 3,
+        "size" : 0.242
+      },
+      "lsystem" : "Pine",
+      "name" : "PineTall",
+      "radialSegments" : 16,
+      "seed" : 676767,
+      "stepRatio" : 0.88,
+      "taperRatio" : 0.832
+    }
+  ],
+  "camera" : 
+  {
+    "direction" : 
+    [
+      1.0,
+      -0.08,
+      0.0
+    ],
+    "moveSpeed" : 150.0,
+    "position" : 
+    [
+      -500.0,
+      40.0,
+      0.0
+    ]
+  },
+  "lods" : 
+  {
+    "distances" : 
+    [
+      25.0,
+      100.0,
+      400.0
+    ],
+    "radialSegments" : 
+    [
+      16,
+      8,
+      4
+    ]
+  },
+  "lsystems" : 
+  [
+    {
+      "axiom" : "X",
+      "name" : "Oak",
+      "rules" : 
+      {
+        "F" : "FF",
+        "X" : "F&[[>X]-^<X]-F[^-FX]&+X"
+      },
+      "seed" : 67
+    },
+    {
+      "axiom" : "X",
+      "name" : "Pine",
+      "rules" : 
+      {
+        "F" : "FF",
+        "X" : "F[+>X][-<X][&>X][^<X]FX"
+      },
+      "seed" : 676767
+    }
+  ],
+  "regions" : 
+  [
+    {
+      "assets" : 
+      [
+        "OakMature",
+        "PineTall"
+      ],
+      "boundsMaxX" : 150.0,
+      "boundsMaxY" : 300.0,
+      "boundsMinX" : 125.0,
+      "boundsMinY" : -300.0,
+      "density" : 0.01,
+      "name" : "Peak_OnTop"
+    },
+    {
+      "assets" : 
+      [
+        "OakMature",
+        "PineTall"
+      ],
+      "boundsMaxX" : 1000.0,
+      "boundsMaxY" : 300.0,
+      "boundsMinX" : 600.0,
+      "boundsMinY" : -300.0,
+      "density" : 0.0075,
+      "name" : "Valley_BehindPeak"
+    },
+    {
+      "assets" : 
+      [
+        "OakMature",
+        "PineTall"
+      ],
+      "boundsMaxX" : 100.0,
+      "boundsMaxY" : 300.0,
+      "boundsMinX" : -100.0,
+      "boundsMinY" : -300.0,
+      "density" : 0.0001,
+      "name" : "dummy"
+    }
+  ],
+  "sun" : 
+  {
+    "direction" : 
+    [
+      -0.324443,
+      -0.811107,
+      0.486664
+    ]
+  },
+  "terrain" : 
+  {
+    "amplitude" : 15.0,
+    "frequency" : 0.02,
+    "gridSpacing" : 0.5,
+    "lacunarity" : 2.0,
+    "largeScale" : 
+    {
+      "amplitude" : 100.0,
+      "periodX" : 2000.0,
+      "periodZ" : 0.0,
+      "phaseX" : 1.5708,
+      "phaseZ" : 0.0
+    },
+    "octaves" : 5,
+    "persistence" : 0.5,
+    "seed" : 67,
+    "shading" : 
+    {
+      "bandWidth" : 5.0,
+      "dirtToSnowY" : 75.0,
+      "forestToDirtY" : 15.0,
+      "macroNoiseAmp" : 2.5,
+      "slopeHi" : 0.45,
+      "slopeLo" : 0.15,
+      "tileSize" : 128.0
+    },
+    "textures" : 
+    {
+      "dirt" : "dry_ground_rocks_1k",
+      "forestFloor" : "brown_mud_leaves_01_1k",
+      "rock" : "rocky_terrain_02_1k",
+      "snow" : "snow_02_1k"
+    }
+  }
+}

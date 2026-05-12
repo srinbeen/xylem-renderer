@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <donut/app/ApplicationBase.h>
@@ -43,16 +44,8 @@ public:
         dm::float3 lookDir;  // unit vector
     };
 
-    // Load (or reload) the path from a JSON file.  Returns true on success.
-    // On failure the reason is available via GetLastError().
-    bool Load(const std::filesystem::path& jsonPath);
-
     bool               IsLoaded()            const { return m_Loaded; }
     float              GetDurationSeconds()  const { return m_DurationSeconds; }
-    float              GetSimulationDtMs()   const { return m_SimulationDtMs; }
-    uint32_t           GetWarmupFrames()     const { return m_WarmupFrames; }
-    const std::string& GetName()             const { return m_Name; }
-    const std::string& GetLastError()        const { return m_LastError; }
 
     // Evaluate the path at the given simulation time (seconds).
     // Returns nullopt if not loaded or time is out of range.
@@ -69,24 +62,73 @@ public:
     void Erase(size_t idx);
     void SetTime(size_t idx, float t);
 
-    // Writes a JSON file matching the schema Load parses.
-    // Returns true on success; on failure GetLastError() carries the reason.
-    bool SaveAs(const std::filesystem::path& path);
+    // Wholesale replace m_Waypoints (used when the user picks a different
+    // named entry from the collection dropdown).
+    void SetWaypoints(const std::vector<Waypoint>& wps);
 
     const std::vector<Waypoint>& GetWaypoints() const { return m_Waypoints; }
 
 private:
     bool                                       m_Loaded          = false;
-    std::string                                m_Name;
-    std::string                                m_LastError;
     float                                      m_DurationSeconds = 0.f;
-    float                                      m_SimulationDtMs  = 16.6667f;
-    uint32_t                                   m_WarmupFrames    = 30;
     donut::engine::animation::Sequence         m_Sequence;
     std::vector<Waypoint>                      m_Waypoints;
 
     // Rebuilds m_Sequence from m_Waypoints + refreshes m_DurationSeconds and m_Loaded.
     void _RebuildSequence();
+};
+
+// ---------------------------------------------------------------------------
+// CameraPathFile
+//
+// On-disk camera-path collection. The JSON file holds:
+//   {
+//     "simulationDtMs": <float>,
+//     "warmupFrames":   <uint>,
+//     "paths": {
+//       "<name>": { "waypoints": [ <Waypoint>, ... ] },
+//       ...
+//     }
+//   }
+// The bundled jsoncpp (1.9.6) serializes object keys alphabetically, and
+// getMemberNames() returns sorted order. We keep m_Entries sorted by name on
+// every SetPath so the in-memory dropdown order matches what Save+Reload
+// produces (avoids one-shot "new entry appears at the end then jumps after
+// reload" UX surprise).
+// ---------------------------------------------------------------------------
+class CameraPathFile {
+public:
+    bool Load(const std::filesystem::path& jsonPath);
+    bool Save(const std::filesystem::path& jsonPath);
+
+    std::vector<std::string> GetNames() const;
+    bool                     Has(const std::string& name) const;
+
+    // Returns nullptr if name is not present.
+    const std::vector<CameraPath::Waypoint>* GetPath(const std::string& name) const;
+
+    // Replaces in-place if name exists; otherwise inserts in alphabetical
+    // position to match what Save+Reload would produce.
+    void SetPath(const std::string& name,
+                 const std::vector<CameraPath::Waypoint>& waypoints);
+
+    bool Empty() const { return m_Entries.empty(); }
+
+    float              GetSimulationDtMs() const { return m_SimulationDtMs; }
+    uint32_t           GetWarmupFrames()   const { return m_WarmupFrames; }
+    const std::string& GetLastError()      const { return m_LastError; }
+
+private:
+    struct Entry {
+        std::string name;
+        std::vector<CameraPath::Waypoint> waypoints;
+    };
+    std::vector<Entry>                      m_Entries;
+    std::unordered_map<std::string, size_t> m_NameToIdx;
+
+    float       m_SimulationDtMs = 16.6667f;
+    uint32_t    m_WarmupFrames   = 30;
+    std::string m_LastError;
 };
 
 // ---------------------------------------------------------------------------
@@ -136,6 +178,8 @@ private:
     ViewHandler&               m_View;
     State                      m_State = State::Idle;
     CameraPath                 m_Path;
+    CameraPathFile             m_File;
+    std::string                m_ActiveName;
     std::filesystem::path      m_PathFile;
 
     struct MetricsRow {
@@ -189,6 +233,12 @@ private:
     void _WriteRunSummary();
     void _ServiceWaypointEdits();
     void _PublishWaypointSnapshot();
+
+    // After m_File has been (re)loaded, pick the active entry — preferring
+    // `preferred` if non-empty and present, otherwise the first entry — and
+    // apply it to m_Path. Updates m_ActiveName. If m_File is empty, clears
+    // m_ActiveName and gives m_Path an empty waypoint list.
+    void _AdoptActiveEntry(const std::string& preferred);
 };
 
 } // namespace Xylem

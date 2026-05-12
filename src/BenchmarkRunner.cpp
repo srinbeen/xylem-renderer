@@ -53,22 +53,6 @@ dm::float3 ForwardFromQuat(const dm::quat& q)
     return dm::normalize(dm::applyQuat(q, dm::float3(0.f, 0.f, 1.f)));
 }
 
-// Read a [x, y, z] JSON array into a dm::float3.
-// Returns dm::float3(0) and logs a warning if the node is malformed.
-dm::float3 ReadFloat3(const Json::Value& parent, const char* key)
-{
-    const Json::Value& node = parent[key];
-    if (!node.isArray() || node.size() < 3)
-    {
-        donut::log::warning("CameraPath: '%s' is not a 3-element array; defaulting to zero.", key);
-        return dm::float3(0.f);
-    }
-    return dm::float3(
-        node[0].asFloat(),
-        node[1].asFloat(),
-        node[2].asFloat());
-}
-
 std::string MakeTimestampString()
 {
     const auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
@@ -102,88 +86,6 @@ const char* PipelineNvtxName(Xylem::Pipeline p)
 } // anonymous namespace
 
 // ---------------------------------------------------------------------------
-// CameraPath::Load
-// ---------------------------------------------------------------------------
-bool CameraPath::Load(const std::filesystem::path& jsonPath)
-{
-    // Reset all state.
-    m_Loaded          = false;
-    m_LastError.clear();
-    m_Name.clear();
-    m_DurationSeconds = 0.f;
-    m_SimulationDtMs  = 16.6667f;
-    m_WarmupFrames    = 30;
-    m_Sequence        = Sequence{};
-    m_Waypoints.clear();
-
-    std::ifstream jsonStream(jsonPath);
-    if (!jsonStream.is_open()) {
-        m_LastError = "could not open " + jsonPath.string();
-        return false;
-    }
-
-    Json::CharReaderBuilder reader;
-    Json::Value root;
-    std::string parseErrors;
-    if (!Json::parseFromStream(reader, jsonStream, &root, &parseErrors)) {
-        m_LastError = "JSON parse failed: " + parseErrors;
-        return false;
-    }
-
-    m_Name           = root.get("name", "unnamed").asString();
-    m_SimulationDtMs = root.get("simulationDtMs", 16.6667f).asFloat();
-    m_WarmupFrames   = root.get("warmupFrames", 30u).asUInt();
-
-    if (m_SimulationDtMs <= 0.f) {
-        m_LastError = "simulationDtMs must be > 0";
-        return false;
-    }
-
-    const Json::Value& waypoints = root["waypoints"];
-    if (!waypoints.isArray()) {
-        m_LastError = "waypoints must be a JSON array";
-        return false;
-    }
-    if (waypoints.size() < 2) {
-        m_LastError = "waypoints must contain at least 2 entries";
-        return false;
-    }
-
-    float prevTime = -std::numeric_limits<float>::infinity();
-    m_Waypoints.reserve(waypoints.size());
-
-    for (Json::ArrayIndex i = 0; i < waypoints.size(); ++i) {
-        const Json::Value& wp = waypoints[i];
-
-        const float t = wp.get("time", 0.f).asFloat();
-        if (t <= prevTime) {
-            m_LastError = "waypoint times must be strictly increasing (failed at index "
-                          + std::to_string(i) + ")";
-            m_Waypoints.clear();
-            return false;
-        }
-        prevTime = t;
-
-        const dm::float3 pos = ReadFloat3(wp, "position");
-
-        dm::float3 dir = ReadFloat3(wp, "lookDir");
-        const float dirLen = dm::length(dir);
-        if (dirLen < 1e-6f) {
-            m_LastError = "waypoint lookDir is degenerate (zero length) at index "
-                          + std::to_string(i);
-            m_Waypoints.clear();
-            return false;
-        }
-        dir = dir / dirLen;
-
-        m_Waypoints.push_back(Waypoint{ t, pos, dir });
-    }
-
-    _RebuildSequence();
-    return m_Loaded;
-}
-
-// ---------------------------------------------------------------------------
 // CameraPath::Evaluate
 // ---------------------------------------------------------------------------
 std::optional<CameraPath::Sample> CameraPath::Evaluate(float simTimeSeconds)
@@ -215,8 +117,7 @@ void CameraPath::_RebuildSequence()
     m_DurationSeconds = 0.f;
 
     if (m_Waypoints.size() < 2) {
-        m_Loaded    = false;
-        m_LastError = "path has fewer than 2 waypoints";
+        m_Loaded = false;
         return;
     }
 
@@ -242,7 +143,6 @@ void CameraPath::_RebuildSequence()
     m_Sequence.AddTrack("position", positionTrack);
     m_Sequence.AddTrack("rotation", rotationTrack);
 
-    m_LastError.clear();
     m_DurationSeconds = m_Sequence.GetDuration();
     m_Loaded          = true;
 }
@@ -267,76 +167,10 @@ void CameraPath::SetTime(size_t idx, float t)
     _RebuildSequence();
 }
 
-bool CameraPath::SaveAs(const std::filesystem::path& path)
+void CameraPath::SetWaypoints(const std::vector<Waypoint>& wps)
 {
-    m_LastError.clear();
-
-    if (m_Waypoints.size() < 2) {
-        m_LastError = "SaveAs: need at least 2 waypoints";
-        return false;
-    }
-    for (size_t i = 1; i < m_Waypoints.size(); ++i) {
-        if (m_Waypoints[i].time <= m_Waypoints[i - 1].time) {
-            m_LastError = "SaveAs: waypoint times must be strictly increasing (failed at index "
-                          + std::to_string(i) + ")";
-            return false;
-        }
-    }
-    for (size_t i = 0; i < m_Waypoints.size(); ++i) {
-        if (dm::length(m_Waypoints[i].lookDir) < 1e-6f) {
-            m_LastError = "SaveAs: waypoint lookDir is degenerate (zero length) at index "
-                          + std::to_string(i);
-            return false;
-        }
-    }
-
-    std::error_code ec;
-    std::filesystem::create_directories(path.parent_path(), ec);
-    // create_directories returns false both for "already exists" and real failure;
-    // distinguish via the error_code. parent_path() may be empty for top-level files.
-    if (ec) {
-        m_LastError = "SaveAs: could not create parent directory: " + ec.message();
-        return false;
-    }
-
-    Json::Value root;
-    root["name"]           = m_Name.empty() ? std::string("unnamed") : m_Name;
-    root["simulationDtMs"] = m_SimulationDtMs;
-    root["warmupFrames"]   = m_WarmupFrames;
-
-    Json::Value arr(Json::arrayValue);
-    for (const auto& wp : m_Waypoints) {
-        Json::Value entry;
-        entry["time"] = wp.time;
-
-        Json::Value pos(Json::arrayValue);
-        pos.append(wp.position.x);
-        pos.append(wp.position.y);
-        pos.append(wp.position.z);
-        entry["position"] = pos;
-
-        Json::Value dir(Json::arrayValue);
-        dir.append(wp.lookDir.x);
-        dir.append(wp.lookDir.y);
-        dir.append(wp.lookDir.z);
-        entry["lookDir"] = dir;
-
-        arr.append(entry);
-    }
-    root["waypoints"] = arr;
-
-    std::ofstream out(path, std::ios::binary);
-    if (!out) {
-        m_LastError = "SaveAs: could not open for write: " + path.string();
-        return false;
-    }
-
-    Json::StreamWriterBuilder wb;
-    wb["indentation"] = "  ";
-    std::unique_ptr<Json::StreamWriter> writer(wb.newStreamWriter());
-    writer->write(root, &out);
-    out << '\n';
-    return true;
+    m_Waypoints = wps;
+    _RebuildSequence();
 }
 
 // ===========================================================================
@@ -361,11 +195,13 @@ void BenchmarkRunner::Init(std::filesystem::path pathFile)
         pathFile = Xylem::g_ProjectDirectory / pathFile;
     }
     m_PathFile = std::move(pathFile);
-    if (m_Path.Load(m_PathFile)) {
+    if (m_File.Load(m_PathFile)) {
+        _AdoptActiveEntry("");  // pick first entry
         m_UI.benchmarkLastStatus        = "Path loaded: " + m_PathFile.string();
         m_UI.benchmarkLastStatusIsError = false;
     } else {
-        m_UI.benchmarkLastStatus        = "Path load failed: " + m_Path.GetLastError();
+        // Leave m_File empty; m_Path stays empty (IsLoaded() false).
+        m_UI.benchmarkLastStatus        = "Path load failed: " + m_File.GetLastError();
         m_UI.benchmarkLastStatusIsError = true;
     }
     donut::log::info("BenchmarkRunner: %s", m_UI.benchmarkLastStatus.c_str());
@@ -381,11 +217,16 @@ bool BenchmarkRunner::PreAnimate(float /*seconds*/)
     // disables the button while running, but this is the defense-in-depth gate.
     if (m_UI.benchmarkPathReloadRequested && m_State == State::Idle) {
         m_UI.benchmarkPathReloadRequested = false;
-        if (m_Path.Load(m_PathFile)) {
+        if (m_File.Load(m_PathFile)) {
+            _AdoptActiveEntry(m_ActiveName);  // preserve current name if still present
             m_UI.benchmarkLastStatus        = "Path reloaded: " + m_PathFile.string();
             m_UI.benchmarkLastStatusIsError = false;
         } else {
-            m_UI.benchmarkLastStatus        = "Path reload failed: " + m_Path.GetLastError();
+            // CameraPathFile::Load clears its state on entry; failure leaves
+            // m_File empty. Mirror that in m_Path / m_ActiveName so the UI
+            // triad stays coherent (no orphaned waypoints + greyed-out Combo).
+            _AdoptActiveEntry(m_ActiveName);
+            m_UI.benchmarkLastStatus        = "Path reload failed: " + m_File.GetLastError();
             m_UI.benchmarkLastStatusIsError = true;
         }
         // Resync the edit-time vector and snapshot to the freshly-loaded path.
@@ -471,7 +312,7 @@ void BenchmarkRunner::PostRender()
         case State::WarmupFrames: {
             PipelineRun& run = sess.pipelines[sess.currentIdx];
             ++run.warmupFrameCount;
-            if (run.warmupFrameCount >= m_Path.GetWarmupFrames()) {
+            if (run.warmupFrameCount >= m_File.GetWarmupFrames()) {
                 m_State = State::Recording;
                 run.simTimeSeconds   = 0.f;
                 run.recordedFrameCount = 0;
@@ -486,7 +327,7 @@ void BenchmarkRunner::PostRender()
             ++run.recordedFrameCount;
 
             // Advance simulated clock for the *next* frame.
-            run.simTimeSeconds += m_Path.GetSimulationDtMs() / 1000.f;
+            run.simTimeSeconds += m_File.GetSimulationDtMs() / 1000.f;
             if (run.simTimeSeconds >= m_Path.GetDurationSeconds()) {
                 m_State = State::DrainTimers;
                 run.drainFrameCount = 0;
@@ -543,7 +384,8 @@ void BenchmarkRunner::_BeginSession()
     m_UI.benchmarkCaptureWaypointRequested = false;
     m_UI.benchmarkDeleteWaypointIndex      = -1;
     m_UI.benchmarkPreviewWaypointIndex     = -1;
-    m_UI.benchmarkSaveAsRequested          = false;
+    m_UI.benchmarkSaveRequested            = false;
+    m_UI.benchmarkSelectRequested          = false;
 
     // Guard: refuse to start a run if the in-memory waypoint list is not
     // strictly monotonic in time. This can happen mid-edit because SetTime
@@ -716,7 +558,7 @@ void BenchmarkRunner::_UpdateProgressLabel()
         m_State == State::Recording    ? "Recording" :
         m_State == State::DrainTimers  ? "Draining"  : "?";
     const uint32_t expectedFrames = static_cast<uint32_t>(
-        m_Path.GetDurationSeconds() * 1000.f / m_Path.GetSimulationDtMs());
+        m_Path.GetDurationSeconds() * 1000.f / m_File.GetSimulationDtMs());
 
     char buf[160];
     std::snprintf(buf, sizeof(buf),
@@ -724,7 +566,7 @@ void BenchmarkRunner::_UpdateProgressLabel()
         sess.currentIdx + 1, sess.pipelines.size(),
         pname,
         m_State == State::WarmupFrames ? run.warmupFrameCount : run.recordedFrameCount,
-        m_State == State::WarmupFrames ? m_Path.GetWarmupFrames() : expectedFrames,
+        m_State == State::WarmupFrames ? m_File.GetWarmupFrames() : expectedFrames,
         phase);
     m_UI.benchmarkProgressLabel = buf;
 }
@@ -774,12 +616,12 @@ void BenchmarkRunner::_WriteRunSummary()
     Json::Value root;
     root["timestamp"]      = sess.timestampStr;
     root["pathFile"]       = m_PathFile.string();
-    root["pathName"]       = m_Path.GetName();
+    root["pathName"]       = m_ActiveName;
     root["sceneFile"]      = m_UI.requestedScenePath.empty()
                                 ? std::string("(default)")
                                 : m_UI.requestedScenePath;
-    root["warmupFrames"]   = m_Path.GetWarmupFrames();
-    root["simulationDtMs"] = m_Path.GetSimulationDtMs();
+    root["warmupFrames"]   = m_File.GetWarmupFrames();
+    root["simulationDtMs"] = m_File.GetSimulationDtMs();
 
     uint32_t totalRecorded = 0;
     for (const auto& r : sess.pipelines) totalRecorded += static_cast<uint32_t>(r.rows.size());
@@ -879,7 +721,22 @@ void BenchmarkRunner::_ServiceWaypointEdits()
         m_UI.benchmarkPreviewWaypointIndex = -1;
     }
 
-    // (4) Diff inline time edits against authoritative state. Push only on
+    // (4) Select different named entry from the dropdown. Runs before the
+    // time-diff so the stale edit vector from the prior entry cannot push
+    // spurious SetTime calls into the freshly-loaded entry.
+    if (m_UI.benchmarkSelectRequested) {
+        m_UI.benchmarkSelectRequested = false;
+        const auto* wps = m_File.GetPath(m_UI.benchmarkSelectName);
+        if (wps) {
+            m_Path.SetWaypoints(*wps);
+            m_ActiveName = m_UI.benchmarkSelectName;
+            m_UI.benchmarkWaypointTimesEdited.clear();  // force snapshot resync
+        }
+        // If wps is null (race with external file change), silently no-op —
+        // the next snapshot publish will surface accurate names.
+    }
+
+    // (5) Diff inline time edits against authoritative state. Push only on
     // mismatch so we don't rebuild the Sequence every frame. Float-equality
     // here is intentional: the float IS the state, written by the user via
     // ImGui::InputFloat — repeat-equal writes do not occur.
@@ -891,23 +748,47 @@ void BenchmarkRunner::_ServiceWaypointEdits()
         }
     }
 
-    // (5) Save-As.
-    if (m_UI.benchmarkSaveAsRequested) {
-        m_UI.benchmarkSaveAsRequested = false;
-        std::filesystem::path target = m_UI.benchmarkSaveAsPath;
-        if (target.empty()) {
-            m_UI.benchmarkLastStatus        = "Save-As: path is empty";
+    // (6) Save by name into the collection. Validation lives here;
+    // CameraPathFile::Save serializes the full collection, not just the active entry.
+    if (m_UI.benchmarkSaveRequested) {
+        m_UI.benchmarkSaveRequested = false;
+        const std::string& name = m_UI.benchmarkNameField;
+        const auto& savewps = m_Path.GetWaypoints();
+
+        std::string err;
+        if (name.empty()) {
+            err = "Save: name is required";
+        } else if (savewps.size() < 2) {
+            err = "Save: need at least 2 waypoints";
+        } else {
+            for (size_t i = 1; i < savewps.size(); ++i) {
+                if (savewps[i].time <= savewps[i - 1].time) {
+                    err = "Save: times must be strictly increasing (failed at index "
+                          + std::to_string(i) + ")";
+                    break;
+                }
+            }
+        }
+        if (err.empty()) {
+            for (size_t i = 0; i < savewps.size(); ++i) {
+                if (dm::length(savewps[i].lookDir) < 1e-6f) {
+                    err = "Save: lookDir degenerate at index " + std::to_string(i);
+                    break;
+                }
+            }
+        }
+
+        if (!err.empty()) {
+            m_UI.benchmarkLastStatus        = err;
             m_UI.benchmarkLastStatusIsError = true;
         } else {
-            if (target.is_relative()) {
-                target = Xylem::g_ProjectDirectory / target;
-            }
-            if (m_Path.SaveAs(target)) {
-                m_PathFile = target;  // makes Reload follow the user's last explicit save
-                m_UI.benchmarkLastStatus        = "Path saved: " + target.string();
+            m_File.SetPath(name, savewps);
+            if (m_File.Save(m_PathFile)) {
+                m_ActiveName = name;
+                m_UI.benchmarkLastStatus        = "Saved as " + name;
                 m_UI.benchmarkLastStatusIsError = false;
             } else {
-                m_UI.benchmarkLastStatus        = "Save-As failed: " + m_Path.GetLastError();
+                m_UI.benchmarkLastStatus        = "Save failed: " + m_File.GetLastError();
                 m_UI.benchmarkLastStatusIsError = true;
             }
         }
@@ -939,4 +820,252 @@ void BenchmarkRunner::_PublishWaypointSnapshot()
 
     // Path-file indicator.
     m_UI.benchmarkPathFileName = m_PathFile.string();
+
+    // Publish names + active for the dropdown.
+    m_UI.benchmarkPathNames      = m_File.GetNames();
+    m_UI.benchmarkActivePathName = m_ActiveName;
+}
+
+void BenchmarkRunner::_AdoptActiveEntry(const std::string& preferred)
+{
+    if (!preferred.empty() && m_File.Has(preferred)) {
+        m_ActiveName = preferred;
+    } else {
+        const auto names = m_File.GetNames();
+        m_ActiveName = names.empty() ? std::string() : names.front();
+    }
+
+    if (!m_ActiveName.empty()) {
+        const auto* wps = m_File.GetPath(m_ActiveName);
+        m_Path.SetWaypoints(wps ? *wps : std::vector<CameraPath::Waypoint>{});
+    } else {
+        m_Path.SetWaypoints({});
+    }
+}
+
+// ===========================================================================
+// CameraPathFile
+// ===========================================================================
+
+bool CameraPathFile::Load(const std::filesystem::path& jsonPath)
+{
+    m_Entries.clear();
+    m_NameToIdx.clear();
+    m_LastError.clear();
+    m_SimulationDtMs = 16.6667f;
+    m_WarmupFrames   = 30;
+
+    std::ifstream jsonStream(jsonPath);
+    if (!jsonStream.is_open()) {
+        m_LastError = "could not open " + jsonPath.string();
+        return false;
+    }
+
+    Json::CharReaderBuilder reader;
+    Json::Value root;
+    std::string parseErrors;
+    if (!Json::parseFromStream(reader, jsonStream, &root, &parseErrors)) {
+        m_LastError = "JSON parse failed: " + parseErrors;
+        return false;
+    }
+
+    m_SimulationDtMs = root.get("simulationDtMs", 16.6667f).asFloat();
+    m_WarmupFrames   = root.get("warmupFrames", 30u).asUInt();
+
+    if (m_SimulationDtMs <= 0.f) {
+        m_LastError = "simulationDtMs must be > 0";
+        return false;
+    }
+
+    const Json::Value& paths = root["paths"];
+    if (!paths.isObject()) {
+        m_LastError = "paths must be a JSON object (name -> entry)";
+        return false;
+    }
+
+    // jsoncpp returns member names in sorted (alphabetical) order — that's
+    // also the order we want for the dropdown.
+    for (const std::string& name : paths.getMemberNames()) {
+        const Json::Value& entryNode = paths[name];
+        if (!entryNode.isObject()) {
+            m_LastError = "paths['" + name + "'] must be an object";
+            m_Entries.clear();
+            m_NameToIdx.clear();
+            return false;
+        }
+        const Json::Value& waypoints = entryNode["waypoints"];
+        if (!waypoints.isArray()) {
+            m_LastError = "paths['" + name + "'].waypoints must be a JSON array";
+            m_Entries.clear();
+            m_NameToIdx.clear();
+            return false;
+        }
+        if (waypoints.size() < 2) {
+            m_LastError = "paths['" + name + "'].waypoints must contain at least 2 entries";
+            m_Entries.clear();
+            m_NameToIdx.clear();
+            return false;
+        }
+
+        Entry entry;
+        entry.name = name;
+        entry.waypoints.reserve(waypoints.size());
+
+        float prevTime = -std::numeric_limits<float>::infinity();
+        for (Json::ArrayIndex i = 0; i < waypoints.size(); ++i) {
+            const Json::Value& wp = waypoints[i];
+            const float t = wp.get("time", 0.f).asFloat();
+            if (t <= prevTime) {
+                m_LastError = "paths['" + name + "'] times must be strictly increasing (failed at index "
+                              + std::to_string(i) + ")";
+                m_Entries.clear();
+                m_NameToIdx.clear();
+                return false;
+            }
+            prevTime = t;
+
+            CameraPath::Waypoint w;
+            w.time = t;
+
+            const Json::Value& pos = wp["position"];
+            if (!pos.isArray() || pos.size() < 3) {
+                m_LastError = "paths['" + name + "'][" + std::to_string(i)
+                              + "].position must be a 3-element array";
+                m_Entries.clear();
+                m_NameToIdx.clear();
+                return false;
+            }
+            w.position = dm::float3(pos[0].asFloat(), pos[1].asFloat(), pos[2].asFloat());
+
+            const Json::Value& dir = wp["lookDir"];
+            if (!dir.isArray() || dir.size() < 3) {
+                m_LastError = "paths['" + name + "'][" + std::to_string(i)
+                              + "].lookDir must be a 3-element array";
+                m_Entries.clear();
+                m_NameToIdx.clear();
+                return false;
+            }
+            dm::float3 d(dir[0].asFloat(), dir[1].asFloat(), dir[2].asFloat());
+            const float dirLen = dm::length(d);
+            if (dirLen < 1e-6f) {
+                m_LastError = "paths['" + name + "'][" + std::to_string(i)
+                              + "].lookDir is degenerate (zero length)";
+                m_Entries.clear();
+                m_NameToIdx.clear();
+                return false;
+            }
+            w.lookDir = d / dirLen;
+
+            entry.waypoints.push_back(w);
+        }
+
+        m_NameToIdx[name] = m_Entries.size();
+        m_Entries.push_back(std::move(entry));
+    }
+
+    return true;
+}
+
+bool CameraPathFile::Save(const std::filesystem::path& jsonPath)
+{
+    m_LastError.clear();
+
+    std::error_code ec;
+    std::filesystem::create_directories(jsonPath.parent_path(), ec);
+    if (ec) {
+        m_LastError = "could not create parent directory: " + ec.message();
+        return false;
+    }
+
+    Json::Value root;
+    root["simulationDtMs"] = m_SimulationDtMs;
+    root["warmupFrames"]   = m_WarmupFrames;
+
+    Json::Value paths(Json::objectValue);
+    for (const auto& entry : m_Entries) {
+        Json::Value e(Json::objectValue);
+
+        Json::Value arr(Json::arrayValue);
+        for (const auto& wp : entry.waypoints) {
+            Json::Value w;
+            w["time"] = wp.time;
+
+            Json::Value pos(Json::arrayValue);
+            pos.append(wp.position.x);
+            pos.append(wp.position.y);
+            pos.append(wp.position.z);
+            w["position"] = pos;
+
+            Json::Value dir(Json::arrayValue);
+            dir.append(wp.lookDir.x);
+            dir.append(wp.lookDir.y);
+            dir.append(wp.lookDir.z);
+            w["lookDir"] = dir;
+
+            arr.append(w);
+        }
+        e["waypoints"] = arr;
+        paths[entry.name] = e;
+    }
+    root["paths"] = paths;
+
+    std::ofstream out(jsonPath, std::ios::binary);
+    if (!out) {
+        m_LastError = "could not open for write: " + jsonPath.string();
+        return false;
+    }
+
+    Json::StreamWriterBuilder wb;
+    wb["indentation"] = "  ";
+    std::unique_ptr<Json::StreamWriter> writer(wb.newStreamWriter());
+    writer->write(root, &out);
+    out << '\n';
+    return true;
+}
+
+std::vector<std::string> CameraPathFile::GetNames() const
+{
+    std::vector<std::string> out;
+    out.reserve(m_Entries.size());
+    for (const auto& e : m_Entries) out.push_back(e.name);
+    return out;
+}
+
+bool CameraPathFile::Has(const std::string& name) const
+{
+    return m_NameToIdx.find(name) != m_NameToIdx.end();
+}
+
+const std::vector<CameraPath::Waypoint>* CameraPathFile::GetPath(const std::string& name) const
+{
+    auto it = m_NameToIdx.find(name);
+    if (it == m_NameToIdx.end()) return nullptr;
+    return &m_Entries[it->second].waypoints;
+}
+
+void CameraPathFile::SetPath(const std::string& name,
+                             const std::vector<CameraPath::Waypoint>& waypoints)
+{
+    auto it = m_NameToIdx.find(name);
+    if (it != m_NameToIdx.end()) {
+        m_Entries[it->second].waypoints = waypoints;
+        return;
+    }
+    // Insert in alphabetical position so the in-memory dropdown order matches
+    // what Save+Reload produces (jsoncpp serializes object keys alphabetically).
+    Entry entry;
+    entry.name      = name;
+    entry.waypoints = waypoints;
+
+    auto pos = std::lower_bound(
+        m_Entries.begin(), m_Entries.end(), name,
+        [](const Entry& e, const std::string& n) { return e.name < n; });
+    const size_t insertIdx = static_cast<size_t>(pos - m_Entries.begin());
+    m_Entries.insert(pos, std::move(entry));
+
+    // Reindex m_NameToIdx for all entries at or after the insertion point.
+    m_NameToIdx[name] = insertIdx;
+    for (size_t i = insertIdx + 1; i < m_Entries.size(); ++i) {
+        m_NameToIdx[m_Entries[i].name] = i;
+    }
 }

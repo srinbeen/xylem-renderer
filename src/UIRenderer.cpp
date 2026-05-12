@@ -301,6 +301,54 @@ void UIRenderer::_buildBenchmarkSection() {
     }
     ImGui::EndDisabled();
 
+    // Active path dropdown. Picking auto-loads the selected entry's waypoints
+    // into the editor — destroys unsaved captures in the prior entry by design.
+    ImGui::BeginDisabled(m_ui.benchmarkInProgress);
+    {
+        const auto& names = m_ui.benchmarkPathNames;
+        // Keep the selected index in sync with the runner-published active name.
+        int activeFromRunner = -1;
+        for (size_t i = 0; i < names.size(); ++i) {
+            if (names[i] == m_ui.benchmarkActivePathName) {
+                activeFromRunner = static_cast<int>(i);
+                break;
+            }
+        }
+        if (activeFromRunner >= 0) {
+            m_BenchmarkActiveIdx = activeFromRunner;
+        }
+
+        // Auto-sync the Name field to the active name, but only on actual change
+        // — otherwise we'd clobber the user's typing every frame.
+        if (m_ui.benchmarkActivePathName != m_LastSyncedActiveName) {
+            m_BenchmarkNameField = m_ui.benchmarkActivePathName;
+            m_LastSyncedActiveName = m_ui.benchmarkActivePathName;
+        }
+
+        // ImGui::Combo's simple overload wants a vector<const char*>.
+        std::vector<const char*> nameCstrs;
+        nameCstrs.reserve(names.size());
+        for (const auto& n : names) nameCstrs.push_back(n.c_str());
+
+        if (names.empty()) {
+            ImGui::TextDisabled("Active: (no paths in file)");
+        } else {
+            if (ImGui::Combo("Active", &m_BenchmarkActiveIdx,
+                             nameCstrs.data(),
+                             static_cast<int>(nameCstrs.size())))
+            {
+                // Selection changed — request the runner to swap entries.
+                if (m_BenchmarkActiveIdx >= 0 &&
+                    m_BenchmarkActiveIdx < static_cast<int>(names.size()))
+                {
+                    m_ui.benchmarkSelectName      = names[m_BenchmarkActiveIdx];
+                    m_ui.benchmarkSelectRequested = true;
+                }
+            }
+        }
+    }
+    ImGui::EndDisabled();
+
     ImGui::TextWrapped("Vsync will be disabled during the run and restored after.");
 
     // Pipelines: three checkboxes, disabled mid-run.
@@ -386,11 +434,11 @@ void UIRenderer::_buildBenchmarkSection() {
         }
 
         ImGui::Separator();
-        ImGui::InputText("Save As", &m_BenchmarkSaveAsPath);
+        ImGui::InputText("Name", &m_BenchmarkNameField);
         ImGui::SameLine();
         if (ImGui::Button("Save")) {
-            m_ui.benchmarkSaveAsPath      = m_BenchmarkSaveAsPath;
-            m_ui.benchmarkSaveAsRequested = true;
+            m_ui.benchmarkNameField     = m_BenchmarkNameField;
+            m_ui.benchmarkSaveRequested = true;
         }
 
         ImGui::EndDisabled();

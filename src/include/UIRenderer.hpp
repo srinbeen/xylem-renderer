@@ -81,7 +81,9 @@ private:
 
     // Scene file path text field
     std::string m_ScenePath;
-    std::string m_BenchmarkSaveAsPath;  // backing storage for the Save-As InputText
+    std::string m_BenchmarkNameField;       // backing for Name InputText
+    int         m_BenchmarkActiveIdx = 0;   // backing for Combo
+    std::string m_LastSyncedActiveName;     // change-detect for Name auto-sync
 
 public:
     UIRenderer(app::DeviceManager* dm, SceneRegistry* registry, UIData& ui, ViewHandler* vh)

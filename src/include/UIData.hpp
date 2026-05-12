@@ -168,8 +168,6 @@ struct UIData {
     bool        benchmarkCaptureWaypointRequested = false;
     int         benchmarkDeleteWaypointIndex      = -1;
     int         benchmarkPreviewWaypointIndex     = -1;
-    bool        benchmarkSaveAsRequested          = false;
-    std::string benchmarkSaveAsPath;
 
     // Inline per-row time edits. UIRenderer mutates entries in-place via
     // ImGui::InputFloat; runner diffs against CameraPath::GetWaypoints()[i].time
@@ -193,6 +191,19 @@ struct UIData {
     // filter the pipelines vector. Index order matches the Pipeline enum
     // (Traditional=0, Compute=1, MeshShader=2).
     bool benchmarkEnabledPipelines[3] = { true, true, true };
+
+    // --- Benchmark path collection (replaces Save-As flow) ---
+    // UIRenderer writes the *Requested fields + select-name; runner clears them
+    // in PreAnimate when idle, after applying. Name field is a pure backing
+    // string for the ImGui InputText — runner reads it on Save.
+    std::string benchmarkNameField;        // UI input; runner consumes on Save
+    bool        benchmarkSaveRequested        = false;
+    bool        benchmarkSelectRequested      = false;
+    std::string benchmarkSelectName;       // dropdown pick; runner reads on Service
+
+    // Runner publishes these every idle frame for the dropdown + name auto-sync.
+    std::vector<std::string> benchmarkPathNames;
+    std::string              benchmarkActivePathName;
 };
 
 } // namespace Xylem

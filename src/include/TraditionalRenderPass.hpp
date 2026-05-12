@@ -146,12 +146,15 @@ private:
         nvrhi::GraphicsPipelineHandle          terrainPipeline;
     };
 
-    // Terrain color pass
+    // Terrain color pass. Vertex streams are SoA (positions / normals / UVs in
+    // separate buffers) so depth-only paths can bind just `positionBuffer`.
     struct TerrainPassResources {
         nvrhi::ShaderHandle                    vertexShader;
         nvrhi::ShaderHandle                    pixelShader;
         nvrhi::InputLayoutHandle               inputLayout;
-        nvrhi::BufferHandle                    vertexBuffer;
+        nvrhi::BufferHandle                    positionBuffer;
+        nvrhi::BufferHandle                    normalBuffer;
+        nvrhi::BufferHandle                    uvBuffer;
         nvrhi::BufferHandle                    indexBuffer;
         uint32_t                               indexCount = 0;
         nvrhi::BindingLayoutHandle             bindingLayout;

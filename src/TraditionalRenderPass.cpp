@@ -1205,7 +1205,7 @@ void TraditionalRenderPass::_RenderShadowPass() {
             terrShadow.framebuffer = m_StageResources.shadowStage.framebuffers[cascade];
             terrShadow.viewport    = shadowVPState;
             terrShadow.bindings    = { m_StageResources.shadowStage.bindingSet };
-            terrShadow.vertexBuffers = { { m_StageResources.sceneTerrainStage.vertexBuffer, 0, 0 } };
+            terrShadow.vertexBuffers = { { m_StageResources.sceneTerrainStage.positionBuffer, 0, 0 } };
             terrShadow.indexBuffer   = { m_StageResources.sceneTerrainStage.indexBuffer, nvrhi::Format::R32_UINT, 0 };
             m_CommandList->setGraphicsState(terrShadow);
             m_CommandList->setPushConstants(&cascade, sizeof(cascade));
@@ -1483,7 +1483,11 @@ void TraditionalRenderPass::_RenderTerrainPass(nvrhi::IFramebuffer* framebuffer)
     terrainState.framebuffer = framebuffer;
     terrainState.viewport   = m_ViewHandler.view.GetViewportState();
     terrainState.bindings   = { m_StageResources.sceneTerrainStage.bindingSet };
-    terrainState.vertexBuffers = { { m_StageResources.sceneTerrainStage.vertexBuffer, 0, 0 } };
+    terrainState.vertexBuffers = {
+        { m_StageResources.sceneTerrainStage.positionBuffer, 0, 0 },
+        { m_StageResources.sceneTerrainStage.normalBuffer,   1, 0 },
+        { m_StageResources.sceneTerrainStage.uvBuffer,       2, 0 },
+    };
     terrainState.indexBuffer   = { m_StageResources.sceneTerrainStage.indexBuffer, nvrhi::Format::R32_UINT, 0 };
     m_CommandList->setGraphicsState(terrainState);
     m_CommandList->drawIndexed(
@@ -1872,9 +1876,9 @@ bool TraditionalRenderPass::_InitShadowPass() {
         nvrhi::VertexAttributeDesc()
             .setName("POSITION")
             .setFormat(nvrhi::Format::RGB32_FLOAT)
-            .setOffset(offsetof(Scene::TerrainVertex, pos))
+            .setOffset(0)
             .setBufferIndex(0)
-            .setElementStride(sizeof(Scene::TerrainVertex)),
+            .setElementStride(sizeof(dm::float3)),
     };
     m_StageResources.shadowStage.terrainInputLayout = GetDevice()->createInputLayout(
         terrainShadowAttrs, uint32_t(std::size(terrainShadowAttrs)), m_StageResources.shadowStage.terrainVS);
@@ -1937,35 +1941,56 @@ bool TraditionalRenderPass::_InitTerrainPass(nvrhi::ICommandList* initCL) {
         nvrhi::VertexAttributeDesc()
             .setName("POSITION")
             .setFormat(nvrhi::Format::RGB32_FLOAT)
-            .setOffset(offsetof(Scene::TerrainVertex, pos))
+            .setOffset(0)
             .setBufferIndex(0)
-            .setElementStride(sizeof(Scene::TerrainVertex)),
+            .setElementStride(sizeof(dm::float3)),
         nvrhi::VertexAttributeDesc()
             .setName("NORMAL")
             .setFormat(nvrhi::Format::RGB32_FLOAT)
-            .setOffset(offsetof(Scene::TerrainVertex, normal))
-            .setBufferIndex(0)
-            .setElementStride(sizeof(Scene::TerrainVertex)),
+            .setOffset(0)
+            .setBufferIndex(1)
+            .setElementStride(sizeof(dm::float3)),
         nvrhi::VertexAttributeDesc()
             .setName("UV")
             .setFormat(nvrhi::Format::RG32_FLOAT)
-            .setOffset(offsetof(Scene::TerrainVertex, uv))
-            .setBufferIndex(0)
-            .setElementStride(sizeof(Scene::TerrainVertex)),
+            .setOffset(0)
+            .setBufferIndex(2)
+            .setElementStride(sizeof(dm::float2)),
     };
     m_StageResources.sceneTerrainStage.inputLayout = GetDevice()->createInputLayout(
         terrainAttrs, uint32_t(std::size(terrainAttrs)), m_StageResources.sceneTerrainStage.vertexShader);
     if (!m_StageResources.sceneTerrainStage.inputLayout) return false;
 
-    nvrhi::BufferDesc vbDesc;
-    vbDesc.isVertexBuffer = true;
-    vbDesc.byteSize       = verts.size() * sizeof(Scene::TerrainVertex);
-    vbDesc.debugName      = "TerrainVB";
-    vbDesc.initialState   = nvrhi::ResourceStates::CopyDest;
-    m_StageResources.sceneTerrainStage.vertexBuffer = GetDevice()->createBuffer(vbDesc);
-    initCL->beginTrackingBufferState(m_StageResources.sceneTerrainStage.vertexBuffer, nvrhi::ResourceStates::CopyDest);
-    initCL->writeBuffer(m_StageResources.sceneTerrainStage.vertexBuffer, verts.data(), vbDesc.byteSize);
-    initCL->setPermanentBufferState(m_StageResources.sceneTerrainStage.vertexBuffer, nvrhi::ResourceStates::VertexBuffer);
+    // Deinterleave verts into 3 SoA streams. Depth/shadow paths bind only the
+    // position stream; color path binds all 3.
+    std::vector<dm::float3> positions(verts.size());
+    std::vector<dm::float3> normals  (verts.size());
+    std::vector<dm::float2> uvs      (verts.size());
+    for (size_t i = 0; i < verts.size(); i++) {
+        positions[i] = verts[i].pos;
+        normals  [i] = verts[i].normal;
+        uvs      [i] = verts[i].uv;
+    }
+
+    auto makeVB = [&](const char* name, const void* data, uint64_t bytes,
+                      nvrhi::BufferHandle& outHandle)
+    {
+        nvrhi::BufferDesc d;
+        d.isVertexBuffer = true;
+        d.byteSize       = bytes;
+        d.debugName      = name;
+        d.initialState   = nvrhi::ResourceStates::CopyDest;
+        outHandle = GetDevice()->createBuffer(d);
+        initCL->beginTrackingBufferState(outHandle, nvrhi::ResourceStates::CopyDest);
+        initCL->writeBuffer(outHandle, data, bytes);
+        initCL->setPermanentBufferState(outHandle, nvrhi::ResourceStates::VertexBuffer);
+    };
+    makeVB("TerrainVB_Pos", positions.data(), positions.size() * sizeof(dm::float3),
+           m_StageResources.sceneTerrainStage.positionBuffer);
+    makeVB("TerrainVB_Nor", normals.data(),   normals.size()   * sizeof(dm::float3),
+           m_StageResources.sceneTerrainStage.normalBuffer);
+    makeVB("TerrainVB_UV",  uvs.data(),       uvs.size()       * sizeof(dm::float2),
+           m_StageResources.sceneTerrainStage.uvBuffer);
 
     nvrhi::BufferDesc ibDesc;
     ibDesc.isIndexBuffer = true;

@@ -174,11 +174,15 @@ private:
         nvrhi::GraphicsPipelineHandle          terrainPipeline;
     };
 
+    // Vertex streams are SoA (positions / normals / UVs in separate buffers) so
+    // depth-only paths can bind just `positionBuffer`.
     struct TerrainPassResources {
         nvrhi::ShaderHandle                    vertexShader;
         nvrhi::ShaderHandle                    pixelShader;
         nvrhi::InputLayoutHandle               inputLayout;
-        nvrhi::BufferHandle                    vertexBuffer;
+        nvrhi::BufferHandle                    positionBuffer;
+        nvrhi::BufferHandle                    normalBuffer;
+        nvrhi::BufferHandle                    uvBuffer;
         nvrhi::BufferHandle                    indexBuffer;
         uint32_t                               indexCount = 0;
         nvrhi::BindingLayoutHandle             bindingLayout;
@@ -201,7 +205,7 @@ private:
         nvrhi::ShaderHandle                    treeVS;
         nvrhi::ShaderHandle                    terrainVS;
         nvrhi::InputLayoutHandle               treeInputLayout;    // position-only
-        nvrhi::InputLayoutHandle               terrainInputLayout; // pos+normal+uv (match VB stride)
+        nvrhi::InputLayoutHandle               terrainInputLayout; // position-only (SoA position stream)
         nvrhi::GraphicsPipelineHandle          treePipeline;
         nvrhi::GraphicsPipelineHandle          terrainPipeline;
         nvrhi::BindingLayoutHandle             bindingLayout;      // CB(0) + PushConstants(1) + SRV(0,1,2)

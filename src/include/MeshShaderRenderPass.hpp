@@ -257,10 +257,11 @@ private:
 
         nvrhi::RefCountPtr<ID3D12CommandSignature> dispatchMeshSignature;
 
-        // Terrain into the same depth target via traditional VS
-        nvrhi::ShaderHandle              terrainVS;
-        nvrhi::InputLayoutHandle         terrainInputLayout;
-        nvrhi::GraphicsPipelineHandle    terrainPipeline;
+        // Terrain into the same depth target via meshlet AS/MS — frustum +
+        // Hi-Z culled per terrain meshlet, position-only MS output.
+        nvrhi::ShaderHandle              terrainAS;        // depth_terrain_as
+        nvrhi::ShaderHandle              terrainMS;        // depth_terrain_ms
+        nvrhi::MeshletPipelineHandle     terrainPipeline;
         nvrhi::BindingLayoutHandle       terrainBindingLayout;
         nvrhi::BindingSetHandle          terrainBindingSet;
     };
@@ -287,10 +288,13 @@ private:
     };
 
     struct TerrainPassResources {
-        // VB + IB (VB doubles as StructuredBuffer<TerrainVertex> SRV for the
-        // meshlet path; IB is still consumed by the depth-prepass IA path).
-        nvrhi::BufferHandle                    vertexBuffer;
-        nvrhi::BufferHandle                    indexBuffer;
+        // Vertex streams are SoA — separate raw buffers for positions, normals,
+        // UVs. The meshlet AS/MS reads them as ByteAddressBuffer SRVs; the depth
+        // prepass meshlet path binds only positions.
+        nvrhi::BufferHandle                    positionBuffer;
+        nvrhi::BufferHandle                    normalBuffer;
+        nvrhi::BufferHandle                    uvBuffer;
+        nvrhi::BufferHandle                    indexBuffer;  // unused by mesh path, kept for parity
         uint32_t                               indexCount = 0;
 
         // Mesh-shader scene path

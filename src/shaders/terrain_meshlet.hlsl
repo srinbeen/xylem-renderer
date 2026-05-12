@@ -48,22 +48,22 @@ struct TerrainVertex
     float2 uv;
 };
 
-// Read TerrainVertex via ByteAddressBuffer with explicit offsets to avoid any
-// HLSL struct-packing rule ambiguity (CB-style padding would put `normal` at
-// offset 16 instead of 12 in a StructuredBuffer<TerrainVertex>, mismatching the
-// 32-byte C++ layout).
-static const uint kTerrainVertexStride = 32;
-static const uint kTerrainOffPos       = 0;
-static const uint kTerrainOffNormal    = 12;
-static const uint kTerrainOffUV        = 24;
+// Three SoA raw buffers — one per attribute stream. Depth-only paths bind only
+// g_Positions; color/shadow paths bind all three.
+ByteAddressBuffer g_Positions : register(XY_REG_T_MESH_TERRAIN_SRV_POSITIONS);
+ByteAddressBuffer g_Normals   : register(XY_REG_T_MESH_TERRAIN_SRV_NORMALS);
+ByteAddressBuffer g_UVs       : register(XY_REG_T_MESH_TERRAIN_SRV_UVS);
 
-TerrainVertex LoadTerrainVertex(ByteAddressBuffer buf, uint globalIdx)
+float3 LoadTerrainPos(uint globalIdx)    { return asfloat(g_Positions.Load3(globalIdx * 12u)); }
+float3 LoadTerrainNormal(uint globalIdx) { return asfloat(g_Normals.Load3(globalIdx * 12u)); }
+float2 LoadTerrainUV(uint globalIdx)     { return asfloat(g_UVs.Load2(globalIdx * 8u)); }
+
+TerrainVertex LoadTerrainVertex(uint globalIdx)
 {
-    uint base = globalIdx * kTerrainVertexStride;
     TerrainVertex v;
-    v.pos    = asfloat(buf.Load3(base + kTerrainOffPos));
-    v.normal = asfloat(buf.Load3(base + kTerrainOffNormal));
-    v.uv     = asfloat(buf.Load2(base + kTerrainOffUV));
+    v.pos    = LoadTerrainPos(globalIdx);
+    v.normal = LoadTerrainNormal(globalIdx);
+    v.uv     = LoadTerrainUV(globalIdx);
     return v;
 }
 
@@ -79,7 +79,6 @@ struct TerrainMeshletDesc
     uint   _pad1;
 };
 
-ByteAddressBuffer                    g_Verts          : register(XY_REG_T_MESH_TERRAIN_SRV_VERTEX_BUFFER);
 StructuredBuffer<TerrainMeshletDesc> g_Meshlets       : register(XY_REG_T_MESH_TERRAIN_SRV_MESHLET_DESCS);
 StructuredBuffer<uint>               g_MeshletVertIdx : register(XY_REG_T_MESH_TERRAIN_SRV_MESHLET_VERT_IDX);
 ByteAddressBuffer                    g_MeshletPrimIdx : register(XY_REG_T_MESH_TERRAIN_SRV_MESHLET_PRIM_IDX);
@@ -297,7 +296,7 @@ void terrain_ms(
     if (gtid < m.vertCount)
     {
         uint globalVertIdx = g_MeshletVertIdx[m.vertOffset + gtid];
-        TerrainVertex v = LoadTerrainVertex(g_Verts, globalVertIdx);
+        TerrainVertex v = LoadTerrainVertex(globalVertIdx);
 
         V2P o;
         o.pos      = mul(float4(v.pos, 1), viewProj);
@@ -485,10 +484,78 @@ void shadow_terrain_ms(
     if (gtid < m.vertCount)
     {
         uint globalVertIdx = g_MeshletVertIdx[m.vertOffset + gtid];
-        TerrainVertex v = LoadTerrainVertex(g_Verts, globalVertIdx);
+        float3 pos = LoadTerrainPos(globalVertIdx);
 
         ShadowV2P o;
-        o.pos = mul(float4(v.pos, 1), lightViewProj[g_CascadeIdx]);
+        o.pos = mul(float4(pos, 1), lightViewProj[g_CascadeIdx]);
+        o_verts[gtid] = o;
+    }
+
+    if (gtid < m.triCount)
+    {
+        uint triByte = m.triOffset + gtid * 3u;
+        o_tris[gtid] = LoadMeshletTriangle(triByte);
+    }
+}
+
+// =============================================================================
+// Depth prepass path: eye-view, position-only output, no survivor counter.
+// AS mirrors terrain_as (frustum + Hi-Z) but drops the InterlockedAdd into
+// u_VisibleCounter so we don't have to bind that UAV in the prepass layout and
+// don't double-count the per-frame survivor stat (color pass owns that count).
+// =============================================================================
+
+groupshared TerrainASPayload s_depthPayload;
+groupshared uint             s_depthSurvivors;
+
+[numthreads(XYLEM_AS_GROUP_SIZE, 1, 1)]
+void depth_terrain_as(uint3 gid : SV_GroupID, uint gtid : SV_GroupThreadID)
+{
+    if (gtid == 0) s_depthSurvivors = 0;
+    GroupMemoryBarrierWithGroupSync();
+
+    uint totalMeshlets, meshletStride;
+    g_Meshlets.GetDimensions(totalMeshlets, meshletStride);
+
+    uint meshletIdx = gid.x * XYLEM_AS_GROUP_SIZE + gtid;
+    if (meshletIdx < totalMeshlets)
+    {
+        TerrainMeshletDesc m = g_Meshlets[meshletIdx];
+        bool cull = AABBOutsideFrustum(m.aabbMin, m.aabbMax)
+                 || AABBHiZOccluded(m.aabbMin, m.aabbMax);
+        if (!cull)
+        {
+            uint slot;
+            InterlockedAdd(s_depthSurvivors, 1, slot);
+            s_depthPayload.meshletIndices[slot] = meshletIdx;
+        }
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    DispatchMesh(s_depthSurvivors, 1, 1, s_depthPayload);
+}
+
+[numthreads(XYLEM_MS_GROUP_SIZE, 1, 1)]
+[outputtopology("triangle")]
+void depth_terrain_ms(
+    uint   gtid : SV_GroupThreadID,
+    uint3  gid  : SV_GroupID,
+    in payload TerrainASPayload i_payload,
+    out indices  uint3     o_tris[XYLEM_MAX_MESHLET_PRIMS],
+    out vertices ShadowV2P o_verts[XYLEM_MAX_MESHLET_VERTS])
+{
+    uint meshletIdx = i_payload.meshletIndices[gid.x];
+    TerrainMeshletDesc m = g_Meshlets[meshletIdx];
+
+    SetMeshOutputCounts(m.vertCount, m.triCount);
+
+    if (gtid < m.vertCount)
+    {
+        uint globalVertIdx = g_MeshletVertIdx[m.vertOffset + gtid];
+        float3 pos = LoadTerrainPos(globalVertIdx);
+
+        ShadowV2P o;
+        o.pos = mul(float4(pos, 1), viewProj);
         o_verts[gtid] = o;
     }
 

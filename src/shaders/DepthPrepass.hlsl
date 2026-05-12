@@ -33,10 +33,8 @@ void tree_vs(
 }
 
 void terrain_vs(
-    in float3  i_pos    : POSITION,
-    in float3  i_normal : NORMAL,
-    in float2  i_uv     : UV,
-    out float4 o_pos    : SV_Position
+    in float3  i_pos : POSITION,
+    out float4 o_pos : SV_Position
 )
 {
     o_pos = mul(float4(i_pos, 1), viewProj);

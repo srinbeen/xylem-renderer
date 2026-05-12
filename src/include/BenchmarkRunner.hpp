@@ -30,6 +30,13 @@ namespace Xylem {
 class CameraPath
 {
 public:
+    struct Waypoint
+    {
+        float       time     = 0.f;       // seconds; monotonic-increasing across the list
+        dm::float3  position = dm::float3(0.f, 0.f, 0.f);
+        dm::float3  lookDir  = dm::float3(0.f, 0.f, 1.f);  // unit vector; default = canonical +Z
+    };
+
     struct Sample
     {
         dm::float3 position;
@@ -52,6 +59,22 @@ public:
     // Non-const because Sequence::Evaluate is non-const.
     std::optional<Sample> Evaluate(float simTimeSeconds);
 
+    // ---- Editing ----
+    // Each mutator rebuilds m_Sequence from m_Waypoints, refreshes m_DurationSeconds,
+    // and updates m_Loaded (true iff size() >= 2 and Sequence build succeeded).
+    // SetTime intentionally does NOT enforce monotonicity — the user typing into the
+    // first row could otherwise lock themselves out. Monotonicity is validated by
+    // SaveAs and by BenchmarkRunner before a run begins.
+    void Append(const Waypoint& wp);
+    void Erase(size_t idx);
+    void SetTime(size_t idx, float t);
+
+    // Writes a JSON file matching the schema Load parses.
+    // Returns true on success; on failure GetLastError() carries the reason.
+    bool SaveAs(const std::filesystem::path& path);
+
+    const std::vector<Waypoint>& GetWaypoints() const { return m_Waypoints; }
+
 private:
     bool                                       m_Loaded          = false;
     std::string                                m_Name;
@@ -60,6 +83,10 @@ private:
     float                                      m_SimulationDtMs  = 16.6667f;
     uint32_t                                   m_WarmupFrames    = 30;
     donut::engine::animation::Sequence         m_Sequence;
+    std::vector<Waypoint>                      m_Waypoints;
+
+    // Rebuilds m_Sequence from m_Waypoints + refreshes m_DurationSeconds and m_Loaded.
+    void _RebuildSequence();
 };
 
 // ---------------------------------------------------------------------------
@@ -160,6 +187,8 @@ private:
     void _UpdateProgressLabel();
     void _WritePipelineCsv(const PipelineRun& run);
     void _WriteRunSummary();
+    void _ServiceWaypointEdits();
+    void _PublishWaypointSnapshot();
 };
 
 } // namespace Xylem

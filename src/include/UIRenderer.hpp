@@ -81,6 +81,7 @@ private:
 
     // Scene file path text field
     std::string m_ScenePath;
+    std::string m_BenchmarkSaveAsPath;  // backing storage for the Save-As InputText
 
 public:
     UIRenderer(app::DeviceManager* dm, SceneRegistry* registry, UIData& ui, ViewHandler* vh)

@@ -161,6 +161,38 @@ struct UIData {
     std::string benchmarkProgressLabel;                // runner writes (e.g. "Pipeline 1/3 ...")
     std::string benchmarkLastStatus;                   // runner writes on completion
     bool        benchmarkLastStatusIsError   = false;
+
+    // --- Benchmark waypoint editor ---
+    // UIRenderer writes the *Requested fields; BenchmarkRunner clears them in
+    // PreAnimate when idle, after applying the edit. Index sentinels are -1.
+    bool        benchmarkCaptureWaypointRequested = false;
+    int         benchmarkDeleteWaypointIndex      = -1;
+    int         benchmarkPreviewWaypointIndex     = -1;
+    bool        benchmarkSaveAsRequested          = false;
+    std::string benchmarkSaveAsPath;
+
+    // Inline per-row time edits. UIRenderer mutates entries in-place via
+    // ImGui::InputFloat; runner diffs against CameraPath::GetWaypoints()[i].time
+    // each idle frame and pushes any change through CameraPath::SetTime.
+    // Runner resizes/refills this vector on snapshot-size changes (capture /
+    // delete / load / save-as).
+    std::vector<float> benchmarkWaypointTimesEdited;
+
+    // Read-only snapshot of the current waypoint list. Runner rewrites every
+    // PreAnimate when idle. UI iterates this for per-row display.
+    struct WaypointSnapshot { float t; float px, py, pz; float dx, dy, dz; };
+    std::vector<WaypointSnapshot> benchmarkWaypoints;
+
+    // Runner-published filename of the currently loaded path (drives the
+    // "Path: ..." indicator in the UI). Updated on Init, on Reload, and on
+    // a successful Save-As (because Save-As updates m_PathFile).
+    std::string benchmarkPathFileName;
+
+    // --- Pipeline selection for the next benchmark run ---
+    // UIRenderer mutates via checkboxes; runner reads at _BeginSession to
+    // filter the pipelines vector. Index order matches the Pipeline enum
+    // (Traditional=0, Compute=1, MeshShader=2).
+    bool benchmarkEnabledPipelines[3] = { true, true, true };
 };
 
 } // namespace Xylem

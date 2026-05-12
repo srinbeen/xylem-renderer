@@ -289,13 +289,36 @@ void UIRenderer::_buildBenchmarkSection() {
     if (!ImGui::CollapsingHeader("Benchmark", ImGuiTreeNodeFlags_DefaultOpen))
         return;
 
-    ImGui::TextDisabled("Path: scene/benchmark_path.json");
+    // Path indicator (runner publishes the filename to UIData).
+    const char* pathStr = m_ui.benchmarkPathFileName.empty()
+        ? "(no path loaded)"
+        : m_ui.benchmarkPathFileName.c_str();
+    ImGui::TextDisabled("Path: %s", pathStr);
     ImGui::SameLine();
+    ImGui::BeginDisabled(m_ui.benchmarkInProgress);
     if (ImGui::SmallButton("Reload")) {
         m_ui.benchmarkPathReloadRequested = true;
     }
+    ImGui::EndDisabled();
 
     ImGui::TextWrapped("Vsync will be disabled during the run and restored after.");
+
+    // Pipelines: three checkboxes, disabled mid-run.
+    ImGui::BeginDisabled(m_ui.benchmarkInProgress);
+    ImGui::TextUnformatted("Pipelines:");
+    ImGui::SameLine();
+    ImGui::Checkbox("Traditional", &m_ui.benchmarkEnabledPipelines[0]);
+    ImGui::SameLine();
+    ImGui::Checkbox("Compute",     &m_ui.benchmarkEnabledPipelines[1]);
+    ImGui::SameLine();
+    ImGui::Checkbox("MeshShader",  &m_ui.benchmarkEnabledPipelines[2]);
+    ImGui::EndDisabled();
+
+    const bool anyPipelineEnabled =
+        m_ui.benchmarkEnabledPipelines[0] ||
+        m_ui.benchmarkEnabledPipelines[1] ||
+        m_ui.benchmarkEnabledPipelines[2];
+    const bool pathRunnable = m_ui.benchmarkWaypoints.size() >= 2;
 
     if (m_ui.benchmarkInProgress) {
         if (ImGui::Button("Cancel##bench")) {
@@ -305,8 +328,18 @@ void UIRenderer::_buildBenchmarkSection() {
             ImGui::TextUnformatted(m_ui.benchmarkProgressLabel.c_str());
         }
     } else {
+        const bool canRun = anyPipelineEnabled && pathRunnable;
+        ImGui::BeginDisabled(!canRun);
         if (ImGui::Button("Run Benchmark")) {
             m_ui.benchmarkRunRequested = true;
+        }
+        ImGui::EndDisabled();
+        if (!canRun && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            if (!anyPipelineEnabled) {
+                ImGui::SetTooltip("Select at least one pipeline.");
+            } else {
+                ImGui::SetTooltip("Path needs at least 2 waypoints.");
+            }
         }
     }
 
@@ -315,6 +348,53 @@ void UIRenderer::_buildBenchmarkSection() {
             ? ImVec4(1.0f, 0.4f, 0.4f, 1.0f)   // red
             : ImVec4(0.4f, 1.0f, 0.4f, 1.0f);  // green
         ImGui::TextColored(col, "Status: %s", m_ui.benchmarkLastStatus.c_str());
+    }
+
+    // Collapsing child for waypoint editing. Default-closed to keep the
+    // benchmark section compact when the user isn't editing.
+    if (ImGui::TreeNode("Waypoints")) {
+        ImGui::BeginDisabled(m_ui.benchmarkInProgress);
+
+        if (ImGui::Button("Capture Current Camera")) {
+            m_ui.benchmarkCaptureWaypointRequested = true;
+        }
+
+        // Iterate the snapshot the runner publishes. The time-edit floats live
+        // in a parallel vector so ImGui has stable storage; runner diffs them
+        // against authoritative state in PreAnimate.
+        const size_t n = m_ui.benchmarkWaypoints.size();
+        if (n != m_ui.benchmarkWaypointTimesEdited.size()) {
+            // Runner hasn't published yet (or just resized). Skip rows this frame.
+        } else {
+            for (size_t i = 0; i < n; ++i) {
+                ImGui::PushID(static_cast<int>(i));
+                ImGui::Text("#%zu", i);
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(80.f);
+                ImGui::InputFloat("t (s)", &m_ui.benchmarkWaypointTimesEdited[i],
+                                  0.f, 0.f, "%.2f");
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Preview")) {
+                    m_ui.benchmarkPreviewWaypointIndex = static_cast<int>(i);
+                }
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Delete")) {
+                    m_ui.benchmarkDeleteWaypointIndex = static_cast<int>(i);
+                }
+                ImGui::PopID();
+            }
+        }
+
+        ImGui::Separator();
+        ImGui::InputText("Save As", &m_BenchmarkSaveAsPath);
+        ImGui::SameLine();
+        if (ImGui::Button("Save")) {
+            m_ui.benchmarkSaveAsPath      = m_BenchmarkSaveAsPath;
+            m_ui.benchmarkSaveAsRequested = true;
+        }
+
+        ImGui::EndDisabled();
+        ImGui::TreePop();
     }
 }
 

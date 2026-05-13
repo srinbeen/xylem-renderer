@@ -34,19 +34,26 @@ enum SkyKeyframeIdx : uint32_t {
 struct SunSky {
     float                                       azimuthDeg                       = 0.f;
 
-    // Sun angular speed (deg/sec) when above the horizon (θ ∈ [0°, 180°]).
-    float                                       angularVelocityDegPerSec         = 6.f;
+    // Angular speed (deg/sec) of the ACTIVE source (sun or moon) when it is
+    // above the horizon (θ ∈ [0°, 180°]). Both day and night phases use this
+    // speed when their respective source is in the visible-arc portion.
+    float                                       angularVelocityDegPerSec              = 6.f;
 
-    // Sun angular speed (deg/sec) when below the horizon (θ ∈ [180°, 360°]).
-    // Typically faster than the day speed — the underground sweep contributes
-    // no directional light, so we can race through it without losing visible
-    // detail. With night > day, the cycle "lingers" during daylight and
-    // sprints through night.
-    float                                       nightAngularVelocityDegPerSec    = 24.f;
+    // Angular speed (deg/sec) of the active source when it is BELOW the
+    // horizon (the predawn / postsunset / pre-moonrise / post-moonset
+    // sub-segments). Typically faster than the above-horizon speed — the
+    // source is invisible and sunColor is faded to 0 anyway, so we can race
+    // through it.
+    float                                       belowHorizonAngularVelocityDegPerSec  = 24.f;
 
-    float                                       stateHoldSeconds                 = 2.f;
-    bool                                        paused                           = true;
-    float                                       phase                            = 0.f;
+    // Duration (sec) of the sky-only fade at each phase boundary
+    // (Dusk→Moonlight at end of day; Moonlight→Dawn at end of night). The
+    // active source's world position is fixed at θ = 180° + dawnDuskBelow
+    // HorizonDeg during this fade; only the sky colors lerp.
+    float                                       phaseFadeSeconds                      = 2.f;
+
+    bool                                        paused                                = true;
+    float                                       phase                                 = 0.f;
 
     // Where the Twilight anchors live, expressed as degrees below horizon.
     // The sun pauses BRIEFLY at these positions to register the post-sunset /
@@ -164,12 +171,15 @@ inline std::array<SkyKeyframe, SK_Count> DefaultKeyframes() {
 // of the night phase use SK_Moonlight, so the lerps between them are
 // no-ops). Only the DawnFade segment introduces a color change.
 //
-// Each phase ends with a sky-only "fade during pause" segment (Δθ = 0):
-// position stays at 180°+bH, sky lerps to the NEXT phase's starting
-// keyframe over `stateHoldSeconds`. Boundary anchors match across the
-// teleport (DuskFade→MoonStart both SK_Moonlight; DawnFade→Dawn both
-// SK_Dawn), so the world-position teleport is sky-color-continuous in
-// both directions.
+// Each phase ends with a sky-only fade segment (Δθ = 0): position stays at
+// 180°+bH, sky lerps to the NEXT phase's starting keyframe over
+// `phaseFadeSeconds`. Boundary anchors match across the teleport
+// (DuskFade→MoonStart both SK_Moonlight; DawnFade→Dawn both SK_Dawn), so
+// the world-position teleport is sky-color-continuous in both directions.
+//
+// There are no per-anchor holds; the active source walks continuously
+// through the three position anchors of each phase, then pauses only for
+// the sky-only fade at the end.
 
 inline constexpr float kShadowEpsilonSq = 1e-4f;
 
@@ -211,25 +221,25 @@ inline PhaseDescriptor GetNightPhase(const SunSky& /*s*/, float bH) {
     return d;
 }
 
-// Per-segment angular velocity: day speed when the source is on the
-// above-horizon arc θ ∈ [0°, 180°]; night speed when underground. Segments
-// that straddle a horizon crossing (e.g. `-bH → 90°` crosses θ=0°) are
-// split at the crossing so each sub-segment runs at the right speed.
+// Per-segment angular velocity: above-horizon speed when the source is on the
+// visible arc θ ∈ [0°, 180°]; below-horizon speed when underground. Segments
+// that straddle a horizon crossing (e.g. `-bH → 90°` crosses θ=0°) are split
+// at the crossing so each sub-segment runs at the right speed.
 //
-// Special case: if Δθ = 0 (same position), this is a sky-only "fade
-// during pause" segment — return `stateHoldSeconds` as its duration.
+// Special case: if Δθ = 0 (same position), this is a sky-only fade — return
+// `phaseFadeSeconds` as its duration.
 inline float TransitionSecondsForSegment(float thetaA, float thetaB, const SunSky& s) {
     if (thetaA == thetaB) {
-        return donut::math::max(s.stateHoldSeconds, 0.f);
+        return donut::math::max(s.phaseFadeSeconds, 0.f);
     }
 
-    const float dayOmega   = donut::math::max(s.angularVelocityDegPerSec,      0.01f);
-    const float nightOmega = donut::math::max(s.nightAngularVelocityDegPerSec, 0.01f);
+    const float aboveOmega = donut::math::max(s.angularVelocityDegPerSec,             0.01f);
+    const float belowOmega = donut::math::max(s.belowHorizonAngularVelocityDegPerSec, 0.01f);
 
     auto omegaFor = [&](float a, float b) {
         // Above horizon iff both endpoints (treated inclusively) lie in [0°, 180°].
         const bool above = (a >= 0.f && a <= 180.f) && (b >= 0.f && b <= 180.f);
-        return above ? dayOmega : nightOmega;
+        return above ? aboveOmega : belowOmega;
     };
 
     // Assumes thetaA < thetaB. Possible horizon crossings: θ=0° and θ=180°.
@@ -247,8 +257,9 @@ inline float TransitionSecondsForSegment(float thetaA, float thetaB, const SunSk
     return total;
 }
 
-inline float PhaseSecondsOf(const PhaseDescriptor& p, float H, const SunSky& s) {
-    float total = float(p.numAnchors) * H;
+// No anchor holds — phase time is the sum of its transition durations.
+inline float PhaseSecondsOf(const PhaseDescriptor& p, const SunSky& s) {
+    float total = 0.f;
     for (int i = 0; i < p.numAnchors - 1; ++i) {
         total += TransitionSecondsForSegment(p.anchorThetaDeg[i], p.anchorThetaDeg[i + 1], s);
     }
@@ -256,21 +267,20 @@ inline float PhaseSecondsOf(const PhaseDescriptor& p, float H, const SunSky& s) 
 }
 
 inline float TotalCycleSeconds(const SunSky& s) {
-    const float H  = donut::math::max(s.stateHoldSeconds, 0.f);
     const float bH = donut::math::max(s.dawnDuskBelowHorizonDeg, 0.f);
-    return PhaseSecondsOf(GetDayPhase(s, bH), H, s)
-         + PhaseSecondsOf(GetNightPhase(s, bH), H, s);
+    return PhaseSecondsOf(GetDayPhase(s, bH), s)
+         + PhaseSecondsOf(GetNightPhase(s, bH), s);
 }
 
-// Phase at the start of the Noon hold (sun at zenith) for legacy-scene seeding.
+// Phase at which the active source reaches Noon (anchor 1 of day phase) —
+// useful as a seed value when a scene omits an explicit `phase`.
 inline float NoonArrivalPhase(const SunSky& s) {
     const float cycle = TotalCycleSeconds(s);
     if (cycle <= 0.f) return 0.f;
-    const float H  = donut::math::max(s.stateHoldSeconds, 0.f);
     const float bH = donut::math::max(s.dawnDuskBelowHorizonDeg, 0.f);
     const PhaseDescriptor day = GetDayPhase(s, bH);
-    // Noon is anchor 1 in day phase. Time to reach: 1 hold (Dawn) + 1 transition (Dawn→Noon).
-    const float t = H + TransitionSecondsForSegment(day.anchorThetaDeg[0], day.anchorThetaDeg[1], s);
+    // Noon is anchor 1; time to reach = 1 transition (Dawn → Noon).
+    const float t = TransitionSecondsForSegment(day.anchorThetaDeg[0], day.anchorThetaDeg[1], s);
     return t / cycle;
 }
 
@@ -325,12 +335,11 @@ inline SunSkyState ResolveSunSky(const SunSky& s)
 {
     SunSkyState out{};
 
-    const float H  = donut::math::max(s.stateHoldSeconds, 0.f);
     const float bH = donut::math::max(s.dawnDuskBelowHorizonDeg, 0.f);
     const PhaseDescriptor day   = GetDayPhase(s, bH);
     const PhaseDescriptor night = GetNightPhase(s, bH);
-    const float daySec   = PhaseSecondsOf(day,   H, s);
-    const float nightSec = PhaseSecondsOf(night, H, s);
+    const float daySec   = PhaseSecondsOf(day,   s);
+    const float nightSec = PhaseSecondsOf(night, s);
     const float cycle    = daySec + nightSec;
 
     auto fillSkyParamsAndShadow = [&](float3 sourcePos) {
@@ -360,35 +369,25 @@ inline SunSkyState ResolveSunSky(const SunSky& s)
     const float            tInPhase     = t - (isNightPhase ? daySec : 0.f);
     const PhaseDescriptor& p            = isNightPhase ? night : day;
 
-    SkyKeyframe kfFrom  = s.keyframes[p.anchorKfIdx[0]];
-    SkyKeyframe kfTo    = kfFrom;
-    float       thetaDeg = p.anchorThetaDeg[0];
-    float       blendU  = 0.f;
+    // No anchor holds — walk straight through the transitions. If tInPhase
+    // falls past the last transition (numerical edge), pin to the final anchor.
+    SkyKeyframe kfFrom   = s.keyframes[p.anchorKfIdx[p.numAnchors - 1]];
+    SkyKeyframe kfTo     = kfFrom;
+    float       thetaDeg = p.anchorThetaDeg[p.numAnchors - 1];
+    float       blendU   = 0.f;
 
     float cursor = 0.f;
-    for (int i = 0; i < p.numAnchors; ++i) {
-        const float holdEnd = cursor + H;
-        if (tInPhase < holdEnd) {
+    for (int i = 0; i < p.numAnchors - 1; ++i) {
+        const float T = TransitionSecondsForSegment(p.anchorThetaDeg[i], p.anchorThetaDeg[i + 1], s);
+        const float transEnd = cursor + T;
+        if (tInPhase < transEnd) {
             kfFrom = s.keyframes[p.anchorKfIdx[i]];
-            kfTo   = kfFrom;
-            thetaDeg = p.anchorThetaDeg[i];
-            blendU = 0.f;
+            kfTo   = s.keyframes[p.anchorKfIdx[i + 1]];
+            blendU = (T > 0.f) ? (tInPhase - cursor) / T : 0.f;
+            thetaDeg = p.anchorThetaDeg[i] + (p.anchorThetaDeg[i + 1] - p.anchorThetaDeg[i]) * blendU;
             break;
         }
-        cursor = holdEnd;
-
-        if (i < p.numAnchors - 1) {
-            const float T = TransitionSecondsForSegment(p.anchorThetaDeg[i], p.anchorThetaDeg[i + 1], s);
-            const float transEnd = cursor + T;
-            if (tInPhase < transEnd) {
-                kfFrom = s.keyframes[p.anchorKfIdx[i]];
-                kfTo   = s.keyframes[p.anchorKfIdx[i + 1]];
-                blendU = (T > 0.f) ? (tInPhase - cursor) / T : 0.f;
-                thetaDeg = p.anchorThetaDeg[i] + (p.anchorThetaDeg[i + 1] - p.anchorThetaDeg[i]) * blendU;
-                break;
-            }
-            cursor = transEnd;
-        }
+        cursor = transEnd;
     }
 
     out.sunColor  = kfFrom.sunColor * (1.f - blendU) + kfTo.sunColor * blendU;

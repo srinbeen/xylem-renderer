@@ -458,11 +458,11 @@ void UIRenderer::_buildSunSkySection() {
     ImGui::Checkbox("Paused", &s.paused);
     ImGui::SliderFloat("Phase", &s.phase, 0.0f, 1.0f, "%.4f");
     ImGui::SliderFloat("Azimuth (deg)", &s.azimuthDeg, 0.0f, 360.0f, "%.1f");
-    ImGui::DragFloat("Day angular velocity (deg/s)",   &s.angularVelocityDegPerSec,      0.1f, 0.01f, 360.0f, "%.2f");
-    ImGui::DragFloat("Night angular velocity (deg/s)", &s.nightAngularVelocityDegPerSec, 0.5f, 0.01f, 360.0f, "%.2f");
-    ImGui::DragFloat("State hold (s)",                 &s.stateHoldSeconds,              0.1f, 0.0f,  300.0f, "%.2f");
-    ImGui::DragFloat("Dawn/Dusk below horizon (deg)",  &s.dawnDuskBelowHorizonDeg,       0.5f, 0.0f,  45.0f,  "%.1f");
-    ImGui::DragFloat("Horizon fade band (deg)",        &s.horizonFadeAngleDeg,           0.5f, 0.1f,  30.0f,  "%.1f");
+    ImGui::DragFloat("Above-horizon angular velocity (deg/s)", &s.angularVelocityDegPerSec,             0.1f, 0.01f, 360.0f, "%.2f");
+    ImGui::DragFloat("Below-horizon angular velocity (deg/s)", &s.belowHorizonAngularVelocityDegPerSec, 0.5f, 0.01f, 360.0f, "%.2f");
+    ImGui::DragFloat("Phase fade (s)",                         &s.phaseFadeSeconds,                     0.1f, 0.0f,  60.0f,  "%.2f");
+    ImGui::DragFloat("Dawn/Dusk below horizon (deg)",          &s.dawnDuskBelowHorizonDeg,              0.5f, 0.0f,  45.0f,  "%.1f");
+    ImGui::DragFloat("Horizon fade band (deg)",                &s.horizonFadeAngleDeg,                  0.5f, 0.1f,  30.0f,  "%.1f");
 
     // Derived read-out
     const float cycle = Xylem::Scene::TotalCycleSeconds(s);

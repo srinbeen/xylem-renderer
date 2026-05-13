@@ -97,14 +97,14 @@ bool SceneLoader::Load(const std::filesystem::path& path, SceneRegistry& registr
 
         if (root.isMember("sun")) {
             const auto& sunNode = root["sun"];
-            sunNode["azimuthDeg"]                    >> s.azimuthDeg;
-            sunNode["angularVelocityDegPerSec"]      >> s.angularVelocityDegPerSec;
-            sunNode["nightAngularVelocityDegPerSec"] >> s.nightAngularVelocityDegPerSec;
-            sunNode["stateHoldSeconds"]              >> s.stateHoldSeconds;
-            sunNode["dawnDuskBelowHorizonDeg"]       >> s.dawnDuskBelowHorizonDeg;
-            sunNode["horizonFadeAngleDeg"]           >> s.horizonFadeAngleDeg;
-            sunNode["paused"]                        >> s.paused;
-            sunNode["phase"]                         >> s.phase;
+            sunNode["azimuthDeg"]                            >> s.azimuthDeg;
+            sunNode["angularVelocityDegPerSec"]              >> s.angularVelocityDegPerSec;
+            sunNode["belowHorizonAngularVelocityDegPerSec"]  >> s.belowHorizonAngularVelocityDegPerSec;
+            sunNode["phaseFadeSeconds"]                      >> s.phaseFadeSeconds;
+            sunNode["dawnDuskBelowHorizonDeg"]               >> s.dawnDuskBelowHorizonDeg;
+            sunNode["horizonFadeAngleDeg"]                   >> s.horizonFadeAngleDeg;
+            sunNode["paused"]                                >> s.paused;
+            sunNode["phase"]                                 >> s.phase;
 
             const auto& kfs = sunNode["keyframes"];
             ParseKeyframe(kfs["dawn"],      s.keyframes[Xylem::Scene::SK_Dawn]);
@@ -418,14 +418,14 @@ bool SceneLoader::Save(const std::filesystem::path& path, const SceneRegistry& r
     {
         const auto& s = registry.getSunSky();
         Json::Value sunNode(Json::objectValue);
-        sunNode["azimuthDeg"]                    = s.azimuthDeg;
-        sunNode["angularVelocityDegPerSec"]      = s.angularVelocityDegPerSec;
-        sunNode["nightAngularVelocityDegPerSec"] = s.nightAngularVelocityDegPerSec;
-        sunNode["stateHoldSeconds"]              = s.stateHoldSeconds;
-        sunNode["dawnDuskBelowHorizonDeg"]       = s.dawnDuskBelowHorizonDeg;
-        sunNode["horizonFadeAngleDeg"]           = s.horizonFadeAngleDeg;
-        sunNode["paused"]                        = s.paused;
-        sunNode["phase"]                         = s.phase;
+        sunNode["azimuthDeg"]                            = s.azimuthDeg;
+        sunNode["angularVelocityDegPerSec"]              = s.angularVelocityDegPerSec;
+        sunNode["belowHorizonAngularVelocityDegPerSec"]  = s.belowHorizonAngularVelocityDegPerSec;
+        sunNode["phaseFadeSeconds"]                      = s.phaseFadeSeconds;
+        sunNode["dawnDuskBelowHorizonDeg"]               = s.dawnDuskBelowHorizonDeg;
+        sunNode["horizonFadeAngleDeg"]                   = s.horizonFadeAngleDeg;
+        sunNode["paused"]                                = s.paused;
+        sunNode["phase"]                                 = s.phase;
 
         Json::Value kfs(Json::objectValue);
         kfs["dawn"]      = SerializeKeyframe(s.keyframes[Xylem::Scene::SK_Dawn]);

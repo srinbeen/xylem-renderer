@@ -64,6 +64,7 @@ void UIRenderer::buildUI() {
     _buildSceneFileSection();
     _buildRuntimeSettingsSection();
     _buildBenchmarkSection();
+    _buildSunSkySection();
 
     // =====================================================================
     // PERFORMANCE METRICS
@@ -444,6 +445,65 @@ void UIRenderer::_buildBenchmarkSection() {
         ImGui::EndDisabled();
         ImGui::TreePop();
     }
+}
+
+
+void UIRenderer::_buildSunSkySection() {
+    if (!ImGui::CollapsingHeader("Sky & Day/Night"))
+        return;
+
+    auto& s = m_Registry->getSunSkyMutable();
+
+    // Top-level controls
+    ImGui::Checkbox("Paused", &s.paused);
+    ImGui::SliderFloat("Phase", &s.phase, 0.0f, 1.0f, "%.4f");
+    ImGui::SliderFloat("Azimuth (deg)", &s.azimuthDeg, 0.0f, 360.0f, "%.1f");
+    ImGui::DragFloat("Day angular velocity (deg/s)",   &s.angularVelocityDegPerSec,      0.1f, 0.01f, 360.0f, "%.2f");
+    ImGui::DragFloat("Night angular velocity (deg/s)", &s.nightAngularVelocityDegPerSec, 0.5f, 0.01f, 360.0f, "%.2f");
+    ImGui::DragFloat("State hold (s)",                 &s.stateHoldSeconds,              0.1f, 0.0f,  300.0f, "%.2f");
+    ImGui::DragFloat("Dawn/Dusk below horizon (deg)",  &s.dawnDuskBelowHorizonDeg,       0.5f, 0.0f,  45.0f,  "%.1f");
+    ImGui::DragFloat("Horizon fade band (deg)",        &s.horizonFadeAngleDeg,           0.5f, 0.1f,  30.0f,  "%.1f");
+
+    // Derived read-out
+    const float cycle = Xylem::Scene::TotalCycleSeconds(s);
+    ImGui::Text("Cycle: %.1f s", cycle);
+
+    // Keyframes
+    const char* kfNames[5] = { "Dawn", "Noon", "Dusk", "Dark", "Moonlight" };
+    if (ImGui::TreeNode("Keyframes")) {
+        for (uint32_t i = 0; i < Xylem::Scene::SK_Count; ++i) {
+            ImGui::PushID(static_cast<int>(i));
+            if (ImGui::TreeNode(kfNames[i])) {
+                auto& kf = s.keyframes[i];
+                ImGui::ColorEdit3("sunColor (RGB)", &kf.sunColor.x,
+                                  ImGuiColorEditFlags_HDR | ImGuiColorEditFlags_Float);
+
+                ImGui::Separator();
+                ImGui::Text("Sky shader parameters");
+                ImGui::DragFloat("angularSizeOfLight", &kf.sky.angularSizeOfLight, 0.001f, 0.0f, 1.0f, "%.4f");
+                ImGui::ColorEdit3("lightColor",  &kf.sky.lightColor.x,  ImGuiColorEditFlags_HDR | ImGuiColorEditFlags_Float);
+                ImGui::DragFloat("glowSize",     &kf.sky.glowSize, 0.001f, 0.0f, 3.14f, "%.4f");
+                ImGui::ColorEdit3("skyColor",    &kf.sky.skyColor.x,    ImGuiColorEditFlags_HDR | ImGuiColorEditFlags_Float);
+                ImGui::DragFloat("glowIntensity",&kf.sky.glowIntensity, 0.01f, 0.0f, 10.0f, "%.3f");
+                ImGui::ColorEdit3("horizonColor",&kf.sky.horizonColor.x,ImGuiColorEditFlags_HDR | ImGuiColorEditFlags_Float);
+                ImGui::DragFloat("horizonSize",  &kf.sky.horizonSize, 0.001f, 0.0f, 3.14f, "%.4f");
+                ImGui::ColorEdit3("groundColor", &kf.sky.groundColor.x, ImGuiColorEditFlags_HDR | ImGuiColorEditFlags_Float);
+                ImGui::DragFloat("glowSharpness",&kf.sky.glowSharpness, 0.1f, 0.0f, 64.0f, "%.2f");
+                ImGui::ColorEdit3("directionUp", &kf.sky.directionUp.x, ImGuiColorEditFlags_Float);
+
+                ImGui::TreePop();
+            }
+            ImGui::PopID();
+        }
+        ImGui::TreePop();
+    }
+
+    // Read-only state diagnostic
+    const auto& st = m_Registry->getSunSkyState();
+    ImGui::Separator();
+    ImGui::Text("lightDir: (%.2f, %.2f, %.2f)",  st.lightDir.x, st.lightDir.y, st.lightDir.z);
+    ImGui::Text("sunColor: (%.2f, %.2f, %.2f)",  st.sunColor.x, st.sunColor.y, st.sunColor.z);
+    ImGui::Text("shadowsEnabled: %s",            st.shadowsEnabled ? "yes" : "no");
 }
 
 

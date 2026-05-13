@@ -12,6 +12,8 @@ cbuffer FrameCB : register(XY_REG_B_COMPUTE_TERRAIN_CB_FRAME)
     float4x4 lightViewProj[XYLEM_NUM_CASCADES];
     float3   sunLightDir;
     float    _pad0;
+    float3   sunColor;
+    float    _pad0b;
     float4   cascadeSplits;
 };
 
@@ -109,7 +111,8 @@ void terrain_ps(
     float  diffuse     = max(dot(worldN, lightDir), 0);
     uint   cascadeIdx  = SelectShadowCascade(i_viewZ, cascadeSplits);
     float  notInShadow = SampleShadowCascade(i_worldPos, cascadeIdx);
-    float  lighting    = 0.15 + 0.85 * diffuse * notInShadow;
+    float3 lighting    = float3(0.15, 0.15, 0.15)
+                       + 0.85 * sunColor * diffuse * notInShadow;
 
     o_color = float4(lighting * albedoSum, 1);
 }

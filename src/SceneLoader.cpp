@@ -11,6 +11,52 @@ using namespace Xylem;
 using namespace Xylem::Scene;
 using namespace Xylem::ProcGen;
 
+namespace {
+
+void ParseSky(const Json::Value& node, ProceduralSkyShaderParameters& out) {
+    if (!node) return;
+    node["angularSizeOfLight"] >> out.angularSizeOfLight;
+    node["lightColor"]         >> out.lightColor;
+    node["glowSize"]           >> out.glowSize;
+    node["skyColor"]           >> out.skyColor;
+    node["glowIntensity"]      >> out.glowIntensity;
+    node["horizonColor"]       >> out.horizonColor;
+    node["horizonSize"]        >> out.horizonSize;
+    node["groundColor"]        >> out.groundColor;
+    node["glowSharpness"]      >> out.glowSharpness;
+    node["directionUp"]        >> out.directionUp;
+}
+
+Json::Value SerializeSky(const ProceduralSkyShaderParameters& p) {
+    Json::Value n(Json::objectValue);
+    n["angularSizeOfLight"] = p.angularSizeOfLight;
+    Json::Value lc(Json::arrayValue); lc.append(p.lightColor.x); lc.append(p.lightColor.y); lc.append(p.lightColor.z); n["lightColor"] = lc;
+    n["glowSize"]           = p.glowSize;
+    Json::Value sc(Json::arrayValue); sc.append(p.skyColor.x); sc.append(p.skyColor.y); sc.append(p.skyColor.z); n["skyColor"] = sc;
+    n["glowIntensity"]      = p.glowIntensity;
+    Json::Value hc(Json::arrayValue); hc.append(p.horizonColor.x); hc.append(p.horizonColor.y); hc.append(p.horizonColor.z); n["horizonColor"] = hc;
+    n["horizonSize"]        = p.horizonSize;
+    Json::Value gc(Json::arrayValue); gc.append(p.groundColor.x); gc.append(p.groundColor.y); gc.append(p.groundColor.z); n["groundColor"] = gc;
+    n["glowSharpness"]      = p.glowSharpness;
+    Json::Value du(Json::arrayValue); du.append(p.directionUp.x); du.append(p.directionUp.y); du.append(p.directionUp.z); n["directionUp"] = du;
+    return n;
+}
+
+void ParseKeyframe(const Json::Value& node, Xylem::Scene::SkyKeyframe& kf) {
+    if (!node) return;
+    node["sunColor"] >> kf.sunColor;
+    ParseSky(node["sky"], kf.sky);
+}
+
+Json::Value SerializeKeyframe(const Xylem::Scene::SkyKeyframe& kf) {
+    Json::Value n(Json::objectValue);
+    Json::Value sc(Json::arrayValue); sc.append(kf.sunColor.x); sc.append(kf.sunColor.y); sc.append(kf.sunColor.z); n["sunColor"] = sc;
+    n["sky"] = SerializeSky(kf.sky);
+    return n;
+}
+
+} // namespace
+
 // static
 bool SceneLoader::Load(const std::filesystem::path& path, SceneRegistry& registry) {
     const Json::Value root = ParseFile(path);
@@ -44,14 +90,32 @@ bool SceneLoader::Load(const std::filesystem::path& path, SceneRegistry& registr
     // Sun
     // -------------------------------------------------------------------------
     {
-        dm::float3 sunDir = dm::float3(0.f, -1.f, 0.f);
+        Xylem::Scene::SunSky s;
+        s.keyframes = Xylem::Scene::DefaultKeyframes();
+        s.phase     = Xylem::Scene::NoonArrivalPhase(s);
+        s.paused    = true;
+
         if (root.isMember("sun")) {
             const auto& sunNode = root["sun"];
-            sunNode["direction"] >> sunDir;
-        }
-        registry.setSunDirection(sunDir);
-    }
+            sunNode["azimuthDeg"]                    >> s.azimuthDeg;
+            sunNode["angularVelocityDegPerSec"]      >> s.angularVelocityDegPerSec;
+            sunNode["nightAngularVelocityDegPerSec"] >> s.nightAngularVelocityDegPerSec;
+            sunNode["stateHoldSeconds"]              >> s.stateHoldSeconds;
+            sunNode["dawnDuskBelowHorizonDeg"]       >> s.dawnDuskBelowHorizonDeg;
+            sunNode["horizonFadeAngleDeg"]           >> s.horizonFadeAngleDeg;
+            sunNode["paused"]                        >> s.paused;
+            sunNode["phase"]                         >> s.phase;
 
+            const auto& kfs = sunNode["keyframes"];
+            ParseKeyframe(kfs["dawn"],      s.keyframes[Xylem::Scene::SK_Dawn]);
+            ParseKeyframe(kfs["noon"],      s.keyframes[Xylem::Scene::SK_Noon]);
+            ParseKeyframe(kfs["dusk"],      s.keyframes[Xylem::Scene::SK_Dusk]);
+            ParseKeyframe(kfs["dark"],      s.keyframes[Xylem::Scene::SK_Dark]);
+            ParseKeyframe(kfs["moonlight"], s.keyframes[Xylem::Scene::SK_Moonlight]);
+        }
+
+        registry.setSunSky(s);
+    }
 
     // -------------------------------------------------------------------------
     // Camera
@@ -352,11 +416,25 @@ bool SceneLoader::Save(const std::filesystem::path& path, const SceneRegistry& r
     // Sun
     // -------------------------------------------------------------------------
     {
+        const auto& s = registry.getSunSky();
         Json::Value sunNode(Json::objectValue);
-        Json::Value dirArr(Json::arrayValue);
-        const dm::float3 sun = registry.getSunDirection();
-        dirArr.append(sun.x); dirArr.append(sun.y); dirArr.append(sun.z);
-        sunNode["direction"] = dirArr;
+        sunNode["azimuthDeg"]                    = s.azimuthDeg;
+        sunNode["angularVelocityDegPerSec"]      = s.angularVelocityDegPerSec;
+        sunNode["nightAngularVelocityDegPerSec"] = s.nightAngularVelocityDegPerSec;
+        sunNode["stateHoldSeconds"]              = s.stateHoldSeconds;
+        sunNode["dawnDuskBelowHorizonDeg"]       = s.dawnDuskBelowHorizonDeg;
+        sunNode["horizonFadeAngleDeg"]           = s.horizonFadeAngleDeg;
+        sunNode["paused"]                        = s.paused;
+        sunNode["phase"]                         = s.phase;
+
+        Json::Value kfs(Json::objectValue);
+        kfs["dawn"]      = SerializeKeyframe(s.keyframes[Xylem::Scene::SK_Dawn]);
+        kfs["noon"]      = SerializeKeyframe(s.keyframes[Xylem::Scene::SK_Noon]);
+        kfs["dusk"]      = SerializeKeyframe(s.keyframes[Xylem::Scene::SK_Dusk]);
+        kfs["dark"]      = SerializeKeyframe(s.keyframes[Xylem::Scene::SK_Dark]);
+        kfs["moonlight"] = SerializeKeyframe(s.keyframes[Xylem::Scene::SK_Moonlight]);
+        sunNode["keyframes"] = kfs;
+
         root["sun"] = sunNode;
     }
 

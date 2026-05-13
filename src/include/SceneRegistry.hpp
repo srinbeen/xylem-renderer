@@ -14,6 +14,7 @@
 
 #include "Procgen.hpp"
 #include "Scene.hpp"
+#include "Scene/SunSky.hpp"
 #include "SpaceColonizer.hpp"
 #include "Terrain.hpp"
 
@@ -98,7 +99,9 @@ public:
     const std::vector<uint32_t>&                                    getLodSegments()  const { return m_LodSegments; }
     const std::vector<float>&                                       getLodDistances() const { return m_LodDistances; }
     const std::vector<std::string>&                                 getBarkTextureSets() const { return m_BarkTextureSets; }
-    dm::float3                                                      getSunDirection() const { return m_SunDirection; }
+    const Scene::SunSky&      getSunSky()        const { return m_SunSky; }
+    Scene::SunSky&            getSunSkyMutable()       { return m_SunSky; }
+    const Scene::SunSkyState& getSunSkyState()   const { return m_SunSkyState; }
     const CameraInit&                                               getCameraInit() const { return m_CameraInit; }
 
     // Union of all region cullBoxes plus the terrain bbox. Refreshed lazily
@@ -175,7 +178,10 @@ public:
     // Direct setters for scene loading
     // -------------------------------------------------------------------
     void setLodConfig(std::vector<uint32_t> segments, std::vector<float> distances);
-    void setSunDirection(dm::float3 dir);
+    void setSunSky(const Scene::SunSky& s);
+    void advanceSunSky(float deltaSeconds);   // updates phase + rebuilds m_SunSkyState
+
+    SceneRegistry();
     void setCameraInit(const CameraInit& cameraInit);
     void setTerrain(std::unique_ptr<Scene::Terrain> terrain);
     void setTreeGenerator(std::unique_ptr<ProcGen::TreeGenerator> gen);
@@ -194,7 +200,8 @@ private:
     std::vector<uint32_t>                                    m_LodSegments;
     std::vector<float>                                       m_LodDistances;
     std::vector<std::string>                                 m_BarkTextureSets;
-    dm::float3                                               m_SunDirection = dm::float3(0.f, -1.f, 0.f);
+    Scene::SunSky      m_SunSky;
+    Scene::SunSkyState m_SunSkyState;
     CameraInit                                               m_CameraInit;
 
     dm::box3                                                 m_SceneBounds = dm::box3::empty();

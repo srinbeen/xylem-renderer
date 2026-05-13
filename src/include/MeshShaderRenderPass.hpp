@@ -469,6 +469,7 @@ private:
     void _RenderTerrainPass(nvrhi::IFramebuffer* framebuffer);
     void _RenderImpostorPass(nvrhi::IFramebuffer* framebuffer);
     void _RebuildImpostorBindingSets();
+    void _ClearShadowMaps();
     void _RenderShadowImpostorPass(uint32_t cascade);
     void _RebuildShadowImpostorBindingSets();
 };

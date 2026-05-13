@@ -153,6 +153,8 @@ void RenderOrchestrator::Animate(float seconds)
         m_ViewHandler.camera.Animate(seconds);
     }
 
+    m_Registry.advanceSunSky(seconds);
+
     // Drive the dirty cycle here so SharedGPUAssets re-bakes the impostor atlas
     // *after* CPU mesh data is regenerated and *before* the active pass rebuilds
     // its impostor binding sets that reference the atlas.

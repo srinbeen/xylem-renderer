@@ -48,6 +48,8 @@ cbuffer CB : register(XY_REG_B_MESH_CULL_CB_FRAME)
     float4x4 lightViewProj[XYLEM_NUM_CASCADES];
     float3   sunLightDir;
     float    _pad0;
+    float3   sunColor;
+    float    _pad0b;
     float4   cascadeSplits;
 
     frustum  viewFrustum;

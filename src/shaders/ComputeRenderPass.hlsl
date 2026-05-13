@@ -12,6 +12,8 @@ cbuffer CB : register(XY_REG_B_COMPUTE_SCENE_CB_FRAME)
     float4x4 lightViewProj[XYLEM_NUM_CASCADES];
     float3   sunLightDir;
     float    _pad0;
+    float3   sunColor;
+    float    _pad0b;
     float4   cascadeSplits;
 };
 
@@ -147,7 +149,8 @@ void main_ps(
         float3 N = normalize(i_normal);
         float diffuse = max(dot(N, lightDir), 0.0);
 
-        float lighting = XYLEM_TREE_AMBIENT + (1.0 - XYLEM_TREE_AMBIENT) * diffuse * notInShadow;
+        float3 lighting = float3(XYLEM_TREE_AMBIENT, XYLEM_TREE_AMBIENT, XYLEM_TREE_AMBIENT)
+                        + (1.0 - XYLEM_TREE_AMBIENT) * sunColor * diffuse * notInShadow;
         o_color = float4(lighting * leafColor, 1);
         return;
     }
@@ -163,6 +166,7 @@ void main_ps(
 
     float diffuse = max(dot(worldNormal, lightDir), 0);
 
-    float lighting = XYLEM_TREE_AMBIENT + (1.0 - XYLEM_TREE_AMBIENT) * diffuse * notInShadow;
+    float3 lighting = float3(XYLEM_TREE_AMBIENT, XYLEM_TREE_AMBIENT, XYLEM_TREE_AMBIENT)
+                    + (1.0 - XYLEM_TREE_AMBIENT) * sunColor * diffuse * notInShadow;
     o_color = float4(lighting * t_Diffuse.Sample(s_Sampler, i_uv).rgb, 1);
 }

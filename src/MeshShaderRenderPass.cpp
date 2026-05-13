@@ -1704,7 +1704,7 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
 
     // ----- 1. Fill CullConstantBufferEntry (CPU cascades seed; SDSM may overwrite) -----
     Render::CullConstantBufferEntry cb = {};
-    frame::FillCommonFrameConstants(cb, m_ViewHandler, m_Registry.getSunDirection());
+    frame::FillCommonFrameConstants(cb, m_ViewHandler, m_Registry.getSunSkyState());
 
     for (uint32_t c = 0; c < Render::c_NumCascades; c++) {
         const dm::box3& cBbox = m_ViewHandler.cascades[c].shadowCasterBboxLS;
@@ -1919,6 +1919,7 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
                              m_StageTimers[static_cast<size_t>(frame::FrameStage::Shadow)],
                              m_StageNextIdx[static_cast<size_t>(frame::FrameStage::Shadow)]);
 
+        if (m_Registry.getSunSkyState().shadowsEnabled) {
         // Clear all cascades.
         for (uint32_t c = 0; c < Render::c_NumCascades; c++) {
             nvrhi::utils::ClearDepthStencilAttachment(m_CommandList, m_StageResources.shadow.framebuffers[c], 1.f, 0);
@@ -2032,6 +2033,9 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
             }
 
             m_CommandList->endMarker(); // C<c>
+        }
+        } else {
+            _ClearShadowMaps();
         }
         frame::EndGpuStage(m_CommandList,
                            m_StageTimers[static_cast<size_t>(frame::FrameStage::Shadow)],
@@ -3170,21 +3174,12 @@ void MeshShaderRenderPass::_RenderSkyPass(nvrhi::IFramebuffer* framebuffer) {
     dm::float4x4 clipToTranslatedWorld =
         m_ViewHandler.view.GetInverseProjectionMatrix(true) * dm::affineToHomogeneous(viewToWorld);
 
+    const Scene::SunSkyState& state = m_Registry.getSunSkyState();
+
     SkyConstants skyConstants{};
     skyConstants.matClipToTranslatedWorld = clipToTranslatedWorld;
-
-    auto& p = skyConstants.params;
-    p.directionToLight   = dm::normalize(-m_Registry.getSunDirection());
-    p.angularSizeOfLight = dm::radians(1.0f);
-    p.lightColor         = dm::float3(100.f, 98.f, 90.f);
-    p.glowSize           = dm::radians(5.f);
-    p.skyColor           = dm::float3(0.017f, 0.037f, 0.065f);
-    p.glowIntensity      = 0.1f;
-    p.horizonColor       = dm::float3(0.050f, 0.070f, 0.092f);
-    p.horizonSize        = dm::radians(30.f);
-    p.groundColor        = dm::float3(0.062f, 0.059f, 0.055f);
-    p.glowSharpness      = 4.f;
-    p.directionUp        = dm::float3(0.f, 1.f, 0.f);
+    skyConstants.params                   = state.skyParams;
+    skyConstants.params.directionToLight  = dm::normalize(-state.lightDir);
 
     m_CommandList->writeBuffer(m_StageResources.sky.constantBuffer, &skyConstants, sizeof(skyConstants));
 
@@ -3202,6 +3197,15 @@ void MeshShaderRenderPass::_RenderSkyPass(nvrhi::IFramebuffer* framebuffer) {
 // ===========================================================================
 
 void MeshShaderRenderPass::_RenderShadowPass() {}
+
+void MeshShaderRenderPass::_ClearShadowMaps() {
+    for (uint32_t c = 0; c < Render::c_NumCascades; ++c) {
+        nvrhi::utils::ClearDepthStencilAttachment(
+            m_CommandList,
+            m_StageResources.shadow.framebuffers[c],
+            1.0f, 0);
+    }
+}
 
 void MeshShaderRenderPass::_RenderTrunkPass(nvrhi::IFramebuffer* framebuffer) {
     if (!m_DispatchMeshSignature || m_StageResources.sceneDraw.bindingSets.empty())

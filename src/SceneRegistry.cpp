@@ -831,8 +831,27 @@ void SceneRegistry::setLodConfig(std::vector<uint32_t> segments, std::vector<flo
     m_LodDistances = std::move(distances);
 }
 
-void SceneRegistry::setSunDirection(dm::float3 dir) {
-    m_SunDirection = dm::normalize(dir);
+SceneRegistry::SceneRegistry() {
+    m_SunSky.keyframes = Scene::DefaultKeyframes();
+    m_SunSky.phase     = Scene::NoonArrivalPhase(m_SunSky);
+    m_SunSky.paused    = false;
+    m_SunSkyState      = Scene::ResolveSunSky(m_SunSky);
+}
+
+void SceneRegistry::setSunSky(const Scene::SunSky& s) {
+    m_SunSky      = s;
+    m_SunSkyState = Scene::ResolveSunSky(m_SunSky);
+}
+
+void SceneRegistry::advanceSunSky(float deltaSeconds) {
+    if (!m_SunSky.paused && deltaSeconds > 0.f) {
+        const float cycle = Scene::TotalCycleSeconds(m_SunSky);
+        if (cycle > 0.f) {
+            const float p = m_SunSky.phase + deltaSeconds / cycle;
+            m_SunSky.phase = p - std::floor(p);  // wrap to [0, 1)
+        }
+    }
+    m_SunSkyState = Scene::ResolveSunSky(m_SunSky);
 }
 
 void SceneRegistry::setCameraInit(const CameraInit& cameraInit) {
@@ -875,7 +894,11 @@ void SceneRegistry::clear() {
     m_BarkTextureSets.clear();
     m_LodSegments.clear();
     m_LodDistances.clear();
-    m_SunDirection = dm::float3(0.f, -1.f, 0.f);
+    m_SunSky                = {};
+    m_SunSky.keyframes      = Scene::DefaultKeyframes();
+    m_SunSky.phase          = Scene::NoonArrivalPhase(m_SunSky);
+    m_SunSky.paused         = true;
+    m_SunSkyState           = Scene::ResolveSunSky(m_SunSky);
     m_CameraInit  = CameraInit{};
     m_NextAssetId = 0;
     m_AssetIdToIndex.clear();

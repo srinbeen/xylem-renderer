@@ -854,13 +854,6 @@
       "name": "West_OakMature_+1_+1"
     }
   ],
-  "sun": {
-    "direction": [
-      -0.324443,
-      -0.811107,
-      0.486664
-    ]
-  },
   "terrain": {
     "amplitude": 65.0,
     "frequency": 0.02,

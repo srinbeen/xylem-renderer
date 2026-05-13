@@ -64,13 +64,14 @@ inline float ComputeShadowDistance(const dm::box3& sceneBbox,
 template<typename TConstantBuffer>
 inline void FillCommonFrameConstants(TConstantBuffer& constants,
                                      const ViewHandler& viewHandler,
-                                     const dm::float3& sunDirection)
+                                     const Scene::SunSkyState& sunSky)
 {
-    constants.viewProj = viewHandler.view.GetViewProjectionMatrix();
-    constants.viewMatrix = dm::affineToHomogeneous(viewHandler.view.GetViewMatrix());
+    constants.viewProj      = viewHandler.view.GetViewProjectionMatrix();
+    constants.viewMatrix    = dm::affineToHomogeneous(viewHandler.view.GetViewMatrix());
     for (uint32_t c = 0; c < Render::c_NumCascades; c++)
         constants.lightViewProj[c] = viewHandler.cascades[c].lightViewProj;
-    constants.sunLightDir = sunDirection;
+    constants.sunLightDir   = sunSky.lightDir;
+    constants.sunColor      = sunSky.sunColor;
     constants.cascadeSplits = viewHandler.cascadeSplitDistances;
 }
 
@@ -90,7 +91,7 @@ inline void ComputeCascades(ViewHandler& viewHandler,
 
     viewHandler.computeCascades(
         sceneBounds,
-        registry.getSunDirection(),
+        registry.getSunSkyState().lightDir,
         nearPlane,
         maxShadowDist,
         aspectRatio,

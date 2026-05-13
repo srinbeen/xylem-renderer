@@ -12,8 +12,10 @@ cbuffer CB : register(XY_REG_B_TRADITIONAL_LEAF_CB_FRAME)
     float4x4 lightViewProj[XYLEM_NUM_CASCADES];
     float3   sunLightDir;
     float    _pad0;
+    float3   sunColor;
+    float    _pad0b;
     float4   cascadeSplits;
-    float4   _pad1[6];
+    float4   _pad1[5];
 };
 
 cbuffer LeafPush : register(XY_REG_B_TRADITIONAL_LEAF_PUSH_C_SLOT)
@@ -110,6 +112,7 @@ void leaf_ps(in V2P i, out float4 o_color : SV_Target0)
     // Single-sided diffuse to match the trunk/impostor shading model.
     float diffuse = max(dot(normalize(i.normal), lightDir), 0.0);
     float ambient = 0.20;
-    float lighting = ambient + (1.0 - ambient) * diffuse * notInShadow;
+    float3 lighting = float3(ambient, ambient, ambient)
+                    + (1.0 - ambient) * sunColor * diffuse * notInShadow;
     o_color = float4(lighting * i.color, 1.0);
 }

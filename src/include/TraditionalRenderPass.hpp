@@ -272,6 +272,7 @@ private:
 
     void _RenderSkyPass(nvrhi::IFramebuffer* framebuffer);
     void _RenderShadowPass();
+    void _ClearShadowMaps();
     void _RenderShadowImpostorPass(uint32_t cascade);
     void _PrepareSceneFrame(nvrhi::IFramebuffer* framebuffer);
     void _RenderTrunkPass(nvrhi::IFramebuffer* framebuffer);

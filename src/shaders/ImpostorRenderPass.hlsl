@@ -12,6 +12,8 @@ cbuffer CB : register(XY_REG_B_COMPUTE_IMPOSTOR_CB_FRAME)
     float4x4 lightViewProj[XYLEM_NUM_CASCADES];
     float3   sunLightDir;
     float    _pad0;
+    float3   sunColor;
+    float    _pad0b;
     float4   cascadeSplits;
 
     frustum  viewFrustum;
@@ -400,7 +402,8 @@ void impostor_ps(
     uint cascadeIdx = SelectShadowCascade(viewZ, cascadeSplits);
 
     float notInShadow = SampleShadowCascade(depthWorldPos, cascadeIdx);
-    float lighting = XYLEM_TREE_AMBIENT + (1.0 - XYLEM_TREE_AMBIENT) * diffuse * notInShadow;
+    float3 lighting = float3(XYLEM_TREE_AMBIENT, XYLEM_TREE_AMBIENT, XYLEM_TREE_AMBIENT)
+                    + (1.0 - XYLEM_TREE_AMBIENT) * sunColor * diffuse * notInShadow;
 
     // Keep depth writes stable by using the card depth. Writing the baked
     // per-pixel depth exposes atlas-resolution quantization as visible bands.

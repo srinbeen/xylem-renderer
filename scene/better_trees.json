@@ -430,15 +430,6 @@
       "name" : "West_OakMature"
     }
   ],
-  "sun" : 
-  {
-    "direction" : 
-    [
-      -0.324443,
-      -0.811107,
-      0.486664
-    ]
-  },
   "terrain" :
   {
     "amplitude" : 65.0,

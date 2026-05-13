@@ -627,7 +627,7 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     }
 
     Render::CullConstantBufferEntry constants{};
-    frame::FillCommonFrameConstants(constants, m_ViewHandler, m_Registry.getSunDirection());
+    frame::FillCommonFrameConstants(constants, m_ViewHandler, m_Registry.getSunSkyState());
 
     constants.viewFrustum  = m_ViewHandler.view.GetViewFrustum();
     constants.worldToLight = dm::affineToHomogeneous(m_ViewHandler.worldToLight);
@@ -665,7 +665,11 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     frame::BeginGpuStage(m_CommandList, GetDevice(),
                          m_StageTimers[static_cast<size_t>(frame::FrameStage::Shadow)],
                          m_StageNextIdx[static_cast<size_t>(frame::FrameStage::Shadow)]);
-    _RenderShadowPass();
+    if (m_Registry.getSunSkyState().shadowsEnabled) {
+        _RenderShadowPass();
+    } else {
+        _ClearShadowMaps();
+    }
     frame::EndGpuStage(m_CommandList,
                        m_StageTimers[static_cast<size_t>(frame::FrameStage::Shadow)],
                        m_StageNextIdx[static_cast<size_t>(frame::FrameStage::Shadow)]);
@@ -856,21 +860,12 @@ void TraditionalRenderPass::_RenderSkyPass(nvrhi::IFramebuffer* framebuffer) {
     dm::float4x4 clipToTranslatedWorld =
         m_ViewHandler.view.GetInverseProjectionMatrix(true) * dm::affineToHomogeneous(viewToWorld);
 
+    const Scene::SunSkyState& state = m_Registry.getSunSkyState();
+
     SkyConstants skyConstants{};
     skyConstants.matClipToTranslatedWorld = clipToTranslatedWorld;
-
-    auto& p         = skyConstants.params;
-    p.directionToLight  = dm::normalize(-m_Registry.getSunDirection());
-    p.angularSizeOfLight = dm::radians(1.0f);
-    p.lightColor        = dm::float3(100.f, 98.f, 90.f);
-    p.glowSize          = dm::radians(5.f);
-    p.skyColor          = dm::float3(0.017f, 0.037f, 0.065f);
-    p.glowIntensity     = 0.1f;
-    p.horizonColor      = dm::float3(0.050f, 0.070f, 0.092f);
-    p.horizonSize       = dm::radians(30.f);
-    p.groundColor       = dm::float3(0.062f, 0.059f, 0.055f);
-    p.glowSharpness     = 4.f;
-    p.directionUp       = dm::float3(0.f, 1.f, 0.f);
+    skyConstants.params                   = state.skyParams;
+    skyConstants.params.directionToLight  = dm::normalize(-state.lightDir);
 
     m_CommandList->writeBuffer(m_StageResources.skyStage.constantBuffer, &skyConstants, sizeof(skyConstants));
 
@@ -881,6 +876,15 @@ void TraditionalRenderPass::_RenderSkyPass(nvrhi::IFramebuffer* framebuffer) {
     skyState.bindings    = { m_StageResources.skyStage.bindingSet };
     m_CommandList->setGraphicsState(skyState);
     m_CommandList->draw(nvrhi::DrawArguments().setVertexCount(4));
+}
+
+void TraditionalRenderPass::_ClearShadowMaps() {
+    for (uint32_t c = 0; c < Render::c_NumCascades; ++c) {
+        nvrhi::utils::ClearDepthStencilAttachment(
+            m_CommandList,
+            m_StageResources.shadowStage.framebuffers[c],
+            1.0f, 0);
+    }
 }
 
 void TraditionalRenderPass::_RenderShadowPass() {

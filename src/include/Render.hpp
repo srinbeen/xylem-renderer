@@ -38,8 +38,10 @@ struct ConstantBufferEntry {
     dm::float4x4 lightViewProj[c_NumCascades];
     dm::float3   sunLightDir;
     float        _pad0;
+    dm::float3   sunColor;
+    float        _pad0b;
     dm::float4   cascadeSplits;
-    dm::float4   _pad1[6];
+    dm::float4   _pad1[5];          // shrunk by 1 float4 to keep total at 512 B
 };
 
 static constexpr size_t c_ConstantBufferSize = (sizeof(ConstantBufferEntry) + (nvrhi::c_ConstantBufferOffsetSizeAlignment - 1)) & ~(nvrhi::c_ConstantBufferOffsetSizeAlignment - 1);
@@ -109,6 +111,8 @@ struct CullConstantBufferEntry {
     dm::float4x4 lightViewProj[c_NumCascades];
     dm::float3   sunLightDir;
     float        _pad0;
+    dm::float3   sunColor;
+    float        _pad0b;
     dm::float4   cascadeSplits;
 
     // Cull fields (read by CullCS)

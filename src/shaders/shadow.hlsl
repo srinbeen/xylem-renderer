@@ -10,8 +10,10 @@ cbuffer CB : register(XY_REG_B_TRADITIONAL_SHADOW_CB_FRAME)
     float4x4 lightViewProj[XYLEM_NUM_CASCADES];
     float3   sunLightDir;
     float    _pad0;
+    float3   sunColor;
+    float    _pad0b;
     float4   cascadeSplits;
-    float    _pad1[24];
+    float    _pad1[20];
 };
 
 struct CascadeIdx { uint idx; };

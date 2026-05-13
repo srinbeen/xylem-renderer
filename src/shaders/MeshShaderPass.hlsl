@@ -12,6 +12,8 @@ cbuffer CB : register(XY_REG_B_MESH_DRAW_CB_FRAME)
     float4x4 lightViewProj[XYLEM_NUM_CASCADES];
     float3   sunLightDir;
     float    _pad0;
+    float3   sunColor;
+    float    _pad0b;
     float4   cascadeSplits;
 
     // Padding fields mirror CullConstantBufferEntry so the shadow shader can
@@ -607,7 +609,8 @@ void main_ps(in V2P i_v, out float4 o_color : SV_Target0)
         float3 N = normalize(i_v.normal);
         float diffuse = max(dot(N, lightDir), 0.0);
 
-        float lighting = XYLEM_TREE_AMBIENT + (1.0 - XYLEM_TREE_AMBIENT) * diffuse * notInShadow;
+        float3 lighting = float3(XYLEM_TREE_AMBIENT, XYLEM_TREE_AMBIENT, XYLEM_TREE_AMBIENT)
+                        + (1.0 - XYLEM_TREE_AMBIENT) * sunColor * diffuse * notInShadow;
         o_color = float4(lighting * leafColor, 1.0);
         return;
     }
@@ -623,7 +626,8 @@ void main_ps(in V2P i_v, out float4 o_color : SV_Target0)
 
     float diffuse = max(dot(worldNormal, lightDir), 0.0);
 
-    float lighting = XYLEM_TREE_AMBIENT + (1.0 - XYLEM_TREE_AMBIENT) * diffuse * notInShadow;
+    float3 lighting = float3(XYLEM_TREE_AMBIENT, XYLEM_TREE_AMBIENT, XYLEM_TREE_AMBIENT)
+                    + (1.0 - XYLEM_TREE_AMBIENT) * sunColor * diffuse * notInShadow;
     float3 albedo  = t_Diffuse.Sample(s_Sampler, i_v.uv).rgb;
     o_color = float4(lighting * albedo, 1.0);
 }

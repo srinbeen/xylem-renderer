@@ -104,6 +104,7 @@ private:
     void _buildSceneFileSection();
     void _buildRuntimeSettingsSection();
     void _buildBenchmarkSection();
+    void _buildSunSkySection();
     void _buildLSystemsSection();
     void _buildAssetsSection();
     void _buildRegionsSection();

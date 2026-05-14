@@ -75,7 +75,9 @@ struct RegionDef {
         : name{n}, density{d}, bounds{b}, cullBox{dm::box3::empty()}
     {
         float area = (b.m_maxs.x - b.m_mins.x) * (b.m_maxs.y - b.m_mins.y);
-        instanceCount = std::max(1u, static_cast<uint32_t>(std::round(d * area)));
+        instanceCount = (d > 0.f)
+            ? std::max(1u, static_cast<uint32_t>(std::round(d * area)))
+            : 0u;
     }
 };
 

@@ -1794,6 +1794,11 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_UI.leafShadowMeshletsRendered    = 0;
     m_UI.totalTerrainMeshletCount      = 0;
     m_UI.visibleTerrainMeshletCount    = 0;
+    if (const auto* terrain = m_Registry.getTerrain()) {
+        m_UI.totalTerrainVertexCount = static_cast<uint32_t>(terrain->getVertices().size());
+    } else {
+        m_UI.totalTerrainVertexCount = 0;
+    }
 
     // SDSM debug readback: read the oldest pending ring slot (k_QueuedFrames old).
     // SDSM only runs when hizActive, so slots may be empty.

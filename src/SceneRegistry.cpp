@@ -449,7 +449,9 @@ void SceneRegistry::modifyRegion(size_t idx, float density, const dm::box2& boun
     r.density = density;
     r.bounds  = bounds;
     float area = (bounds.m_maxs.x - bounds.m_mins.x) * (bounds.m_maxs.y - bounds.m_mins.y);
-    r.instanceCount = std::max(1u, static_cast<uint32_t>(std::round(density * area)));
+    r.instanceCount = (density > 0.f)
+        ? std::max(1u, static_cast<uint32_t>(std::round(density * area)))
+        : 0u;
     r.dirty = true;
 }
 

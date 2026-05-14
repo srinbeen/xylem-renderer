@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from .loader import Series, load_nsys_csv
-from .style import PIPELINE_COLORS, LINESTYLE_CYCLE, save_fig
+from .style import PIPELINE_COLORS, LINESTYLE_CYCLE, save_fig, legend_below
 
 
 def _nsys_series(series_list: list[Series]) -> list[Series]:
@@ -90,7 +90,7 @@ def plot_dram_bandwidth(series_list: list[Series], out_dir: Path, *,
     ax.set_xticklabels(labels, rotation=20, ha="right")
     ax.set_ylabel("DRAM bandwidth (GB/s)")
     ax.set_title("Average DRAM read + write bandwidth")
-    ax.legend(loc="best")
+    legend_below(ax, anchor_y=-0.28)
     written = save_fig(fig, out_dir, "dram_bandwidth", fmt=fmt)
     plt.close(fig)
     return written
@@ -133,7 +133,7 @@ def plot_cache_hit_rates(series_list: list[Series], out_dir: Path, *,
     ax.set_ylabel("Hit rate (%)")
     ax.set_ylim(0, 100)
     ax.set_title("Cache hit rates per pipeline")
-    ax.legend(loc="best")
+    legend_below(ax, anchor_y=-0.28)
     written = save_fig(fig, out_dir, "cache_hit_rates", fmt=fmt)
     plt.close(fig)
     return written
@@ -180,7 +180,7 @@ def plot_warp_occupancy(series_list: list[Series], out_dir: Path, *,
     ax.set_xticklabels(labels, rotation=20, ha="right")
     ax.set_ylabel("Throughput (%)")
     ax.set_title("Warp class occupancy per pipeline")
-    ax.legend(loc="upper right", fontsize=7)
+    legend_below(ax, anchor_y=-0.28)
     written = save_fig(fig, out_dir, "warp_occupancy", fmt=fmt)
     plt.close(fig)
     return written
@@ -262,7 +262,7 @@ def plot_pix_stages(series_list: list[Series], out_dir: Path, *,
     ax.set_xticklabels(active, rotation=30, ha="right")
     ax.set_ylabel("Total GPU time inside pipeline window (ms)")
     ax.set_title("Per-PIX-marker GPU time per pipeline")
-    ax.legend(loc="best")
+    legend_below(ax, anchor_y=-0.32)
     written = save_fig(fig, out_dir, "pix_stages", fmt=fmt)
     plt.close(fig)
     return written

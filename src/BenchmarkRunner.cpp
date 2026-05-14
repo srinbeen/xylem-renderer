@@ -355,7 +355,23 @@ void BenchmarkRunner::PostRender()
             // currentIdx still points at the just-finished pipeline at this
             // point; _StartNextPipeline advances it.
             XYLEM_NVTX_POP();  // paired with the per-pipeline push in _BeginSession/_StartNextPipeline
-            _WritePipelineCsv(sess.pipelines[sess.currentIdx]);
+            // Snapshot scene-content totals from UIData while the just-finished
+            // pipeline is still the active pass. Trunk/terrain meshlet counts
+            // are P2-only — _WriteRunSummary takes the max across runs to pick
+            // up whichever pipeline populated them.
+            PipelineRun& finishedRun = sess.pipelines[sess.currentIdx];
+            // totalMeshletCount / totalLeafMeshletCount reflect mega-buffer
+            // storage (asset x LOD), which is non-zero even when no region
+            // instances the asset. Zero them for the scene-content snapshot
+            // so e.g. an empty-terrain scene doesn't claim trunk meshlets
+            // from unreferenced L-system asset definitions.
+            finishedRun.sceneStats.trunkInstances  = m_UI.totalInstanceCount;
+            finishedRun.sceneStats.trunkMeshlets   = m_UI.totalInstanceCount     > 0 ? m_UI.totalMeshletCount     : 0;
+            finishedRun.sceneStats.leafInstances   = m_UI.totalLeafInstanceCount;
+            finishedRun.sceneStats.leafMeshlets    = m_UI.totalLeafInstanceCount > 0 ? m_UI.totalLeafMeshletCount : 0;
+            finishedRun.sceneStats.terrainVerts    = m_UI.totalTerrainVertexCount;
+            finishedRun.sceneStats.terrainMeshlets = m_UI.totalTerrainMeshletCount;
+            _WritePipelineCsv(finishedRun);
             _StartNextPipeline();
             break;
         }
@@ -411,10 +427,10 @@ void BenchmarkRunner::_BeginSession()
 
     Session sess;
     sess.timestampStr = MakeTimestampString();
-    // Anchor on g_BinDirectory (workspace/bin/) so output lands in the same
-    // place regardless of the launcher's cwd. Mirrors Init's path-resolution
-    // convention.
-    sess.outputFolder = Xylem::g_BinDirectory / "benchmarks" / sess.timestampStr;
+    // Anchor on g_ProjectDirectory (workspace root) so output lands in the
+    // same place regardless of the launcher's cwd. Kept out of bin/ so
+    // benchmark artifacts are not coupled to the build output directory.
+    sess.outputFolder = Xylem::g_ProjectDirectory / "benchmarks" / sess.timestampStr;
 
     std::error_code ec;
     std::filesystem::create_directories(sess.outputFolder, ec);
@@ -645,6 +661,29 @@ void BenchmarkRunner::_WriteRunSummary()
 
     if (const char* renderer = m_DeviceManager->GetRendererString()) {
         root["gpuName"] = renderer;
+    }
+
+    // Scene-content totals. Snapshotted per pipeline in FlushPipelineCsv;
+    // trunkMeshlets / terrainMeshlets are P2-only, so take the max across
+    // runs to surface the populated value when P2 is part of the session.
+    {
+        SceneStatsSnapshot agg{};
+        for (const auto& r : sess.pipelines) {
+            agg.trunkInstances   = std::max(agg.trunkInstances,   r.sceneStats.trunkInstances);
+            agg.trunkMeshlets    = std::max(agg.trunkMeshlets,    r.sceneStats.trunkMeshlets);
+            agg.leafInstances    = std::max(agg.leafInstances,    r.sceneStats.leafInstances);
+            agg.leafMeshlets     = std::max(agg.leafMeshlets,     r.sceneStats.leafMeshlets);
+            agg.terrainVerts     = std::max(agg.terrainVerts,     r.sceneStats.terrainVerts);
+            agg.terrainMeshlets  = std::max(agg.terrainMeshlets,  r.sceneStats.terrainMeshlets);
+        }
+        Json::Value stats;
+        stats["trunkInstances"]  = agg.trunkInstances;
+        stats["trunkMeshlets"]   = agg.trunkMeshlets;
+        stats["leafInstances"]   = agg.leafInstances;
+        stats["leafMeshlets"]    = agg.leafMeshlets;
+        stats["terrainVerts"]    = agg.terrainVerts;
+        stats["terrainMeshlets"] = agg.terrainMeshlets;
+        root["sceneStats"] = stats;
     }
 
     Json::Value pipes(Json::arrayValue);

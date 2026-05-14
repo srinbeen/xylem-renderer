@@ -197,6 +197,20 @@ private:
         dm::float3 camDir{};
     };
 
+    // Scene-content totals. Snapshotted from UIData when each pipeline's
+    // recording window closes (in _WritePipelineCsv). P0/P1 zero out
+    // trunkMeshlets / terrainMeshlets every frame (no meshlet concept), so the
+    // run summary takes the max across all PipelineRun snapshots — that picks
+    // up P2's values if P2 ran in the session, and surfaces 0 otherwise.
+    struct SceneStatsSnapshot {
+        uint32_t trunkInstances   = 0;
+        uint32_t trunkMeshlets    = 0; // P2-only
+        uint32_t leafInstances    = 0;
+        uint32_t leafMeshlets     = 0;
+        uint32_t terrainVerts     = 0;
+        uint32_t terrainMeshlets  = 0; // P2-only
+    };
+
     // Per-pipeline run state, reset on each StartPipeline transition.
     struct PipelineRun {
         Pipeline                pipeline            = Pipeline::Traditional;
@@ -206,6 +220,7 @@ private:
         float                   simTimeSeconds      = 0.f;
         std::vector<MetricsRow> rows;
         bool                    completed           = false;
+        SceneStatsSnapshot      sceneStats{};
     };
 
     // Session-scoped state, lives for the whole back-to-back run.

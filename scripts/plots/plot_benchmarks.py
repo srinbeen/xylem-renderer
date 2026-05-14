@@ -11,32 +11,36 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE.parent.parent) not in sys.path:
     sys.path.insert(0, str(_HERE.parent.parent))
 
-from scripts.plots import per_frame, style, nsys
+from scripts.plots import per_frame, style, nsys, scene_stats
 from scripts.plots.loader import discover
 
 
 PLOT_REGISTRY = {
-    "fps":        (per_frame.plot_fps_over_time, "per_frame"),
-    "cdf":        (per_frame.plot_frame_time_cdf, "per_frame"),
-    "hist":       (per_frame.plot_frame_time_hist, "per_frame"),
-    "bar":        (per_frame.plot_cpu_gpu_bar, "per_frame"),
-    "stage_area": (per_frame.plot_stage_stacked_area, "per_frame"),
-    "stage_bar":  (per_frame.plot_stage_grouped_bar, "per_frame"),
-    "path3d":     (per_frame.plot_camera_path_3d, "per_frame"),
-    "path2d":     (per_frame.plot_camera_path_2d, "per_frame"),
+    "fps":         (per_frame.plot_fps_over_time, "per_frame"),
+    "cdf":         (per_frame.plot_frame_time_cdf, "per_frame"),
+    "hist":        (per_frame.plot_frame_time_hist, "per_frame"),
+    "bar":         (per_frame.plot_cpu_gpu_bar, "per_frame"),
+    "stage_area":  (per_frame.plot_stage_stacked_area, "per_frame"),
+    "stage_bar":   (per_frame.plot_stage_grouped_bar, "per_frame"),
+    "frame_stats": (per_frame.plot_frame_stats_table, "per_frame"),
+    "stage_stats": (per_frame.plot_stage_stats_table, "per_frame"),
+    "path3d":      (per_frame.plot_camera_path_3d, "per_frame"),
+    "path2d":      (per_frame.plot_camera_path_2d, "per_frame"),
     "sm":     (nsys.plot_sm_throughput,   "nsys"),
     "dram":   (nsys.plot_dram_bandwidth,  "nsys"),
     "cache":  (nsys.plot_cache_hit_rates, "nsys"),
     "warps":  (nsys.plot_warp_occupancy,  "nsys"),
     "zcull":  (nsys.plot_zcull_rejection, "nsys"),
     "pix":    (nsys.plot_pix_stages,      "nsys"),
+    "scene_counts": (scene_stats.plot_scene_counts,        "scene"),
+    "scene_yield":  (scene_stats.plot_scene_meshlet_yield, "scene"),
 }
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_dirs", nargs="+", type=Path,
-                        help="One or more bin/benchmarks/<timestamp>/ directories")
+                        help="One or more benchmarks/<timestamp>/ directories")
     parser.add_argument("--out", type=Path, required=True,
                         help="Output directory for plots")
     parser.add_argument("--labels", nargs="+", default=None,

@@ -2573,6 +2573,7 @@ bool MeshShaderRenderPass::_InitTerrainPass(nvrhi::ICommandList* initCL) {
 
     _RebuildTerrainBindingSet();
     m_UI.totalTerrainMeshletCount = T.meshletCount;
+    m_UI.totalTerrainVertexCount  = static_cast<uint32_t>(verts.size());
     return true;
 }
 

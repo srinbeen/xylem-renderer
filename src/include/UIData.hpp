@@ -82,6 +82,7 @@ struct UIData {
     // Mesh-shader pipeline stats
     float    meshletMegaBufferMB  = 0.0f;
     uint32_t totalMeshletCount    = 0;
+    uint32_t totalTerrainVertexCount    = 0;
     uint32_t totalTerrainMeshletCount   = 0;
     uint32_t visibleTerrainMeshletCount = 0;
 

@@ -826,6 +826,11 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_UI.leafShadowMeshletsRendered    = 0;
     m_UI.totalTerrainMeshletCount      = 0;
     m_UI.visibleTerrainMeshletCount    = 0;
+    if (const auto* terrain = m_Registry.getTerrain()) {
+        m_UI.totalTerrainVertexCount = static_cast<uint32_t>(terrain->getVertices().size());
+    } else {
+        m_UI.totalTerrainVertexCount = 0;
+    }
 
     m_VisibleInstanceReferences.clear();
     m_VisibleImpostorReferences.clear();

@@ -321,6 +321,20 @@ bool SceneLoader::Load(const std::filesystem::path& path, SceneRegistry& registr
 
         size_t regionIdx = registry.getRegions().size();
         registry.addRegion(key, density, bounds, regionAssetIds);
+
+        if (rNode.isMember("placement") && rNode["placement"].asString() == "grid") {
+            float rowSpacing  = 10.f;
+            float colSpacing  = 10.f;
+            float jitter      = 0.f;
+            float rowAngleDeg = 0.f;
+            if (rNode.isMember("rowSpacing")) rNode["rowSpacing"] >> rowSpacing;
+            if (rNode.isMember("colSpacing")) rNode["colSpacing"] >> colSpacing;
+            if (rNode.isMember("jitter"))     rNode["jitter"]     >> jitter;
+            if (rNode.isMember("rowAngle"))   rNode["rowAngle"]   >> rowAngleDeg;
+            const float rowAngleRad = rowAngleDeg * dm::PI_f / 180.f;
+            registry.setRegionGridPlacement(regionIdx, rowSpacing, colSpacing, jitter, rowAngleRad);
+        }
+
         if (!regionAssetIds.empty())
             pendingRegions.push_back({ regionIdx, regionAssetIds });
     }
@@ -645,6 +659,14 @@ bool SceneLoader::Save(const std::filesystem::path& path, const SceneRegistry& r
                     assetsRef.append(a->name);
             }
             r["assets"] = assetsRef;
+
+            if (region.placement == RegionDef::PlacementMode::Grid) {
+                r["placement"]  = "grid";
+                r["rowSpacing"] = region.rowSpacing;
+                r["colSpacing"] = region.colSpacing;
+                r["jitter"]     = region.jitter;
+                r["rowAngle"]   = region.rowAngle * 180.f / dm::PI_f;
+            }
 
             regionsArr.append(r);
         }

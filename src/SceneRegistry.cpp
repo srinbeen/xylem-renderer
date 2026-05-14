@@ -461,6 +461,21 @@ void SceneRegistry::modifyRegionAssets(size_t idx, const std::vector<size_t>& as
     m_Regions[idx].dirty    = true;
 }
 
+void SceneRegistry::setRegionGridPlacement(size_t idx,
+                                           float rowSpacing,
+                                           float colSpacing,
+                                           float jitter,
+                                           float rowAngleRadians) {
+    if (idx >= m_Regions.size()) return;
+    auto& r       = m_Regions[idx];
+    r.placement   = RegionDef::PlacementMode::Grid;
+    r.rowSpacing  = rowSpacing;
+    r.colSpacing  = colSpacing;
+    r.jitter      = jitter;
+    r.rowAngle    = rowAngleRadians;
+    r.dirty       = true;
+}
+
 void SceneRegistry::setRegionAssetVisible(size_t regionIdx, size_t assetId, bool visible) {
     if (regionIdx >= m_Regions.size()) return;
     m_Regions[regionIdx].assetVisible[assetId] = visible;
@@ -612,8 +627,10 @@ void SceneRegistry::_rebuildRegion(RegionDef& region) {
 
     if (region.assetIds.empty() || m_Assets.empty()) return;
 
-    const uint32_t seedPos = g_MasterSeed ^ 0xBEEFDEAD ^ static_cast<uint32_t>(&region - m_Regions.data());
-    const uint32_t seedRot = g_MasterSeed ^ 0xFEEDBEEF ^ static_cast<uint32_t>(&region - m_Regions.data());
+    const uint32_t regionSlot = static_cast<uint32_t>(&region - m_Regions.data());
+    const uint32_t seedPos    = g_MasterSeed ^ 0xBEEFDEAD ^ regionSlot;
+    const uint32_t seedRot    = g_MasterSeed ^ 0xFEEDBEEF ^ regionSlot;
+    const uint32_t seedAsset  = g_MasterSeed ^ 0xA55E7CAFu ^ regionSlot;
 
     const dm::float2 range = region.bounds.diagonal();
 
@@ -627,36 +644,105 @@ void SceneRegistry::_rebuildRegion(RegionDef& region) {
         maxRadius = dm::max(maxRadius, r);
     }
 
-    // Phase A: rejection-sampled placement against a Voronoi (Worley F1)
-    // density field. One feature point per cell of size kCellSize world units;
-    // density peaks at the feature point and falls off to 0 at kClusterRadius.
-    // Produces discrete tree islands with real clearings between them.
-    // Phases B/C still run on top, so trunks are guaranteed not to overlap.
-    constexpr float kCellSize       = 50.f;  // world units between cluster centers
-    constexpr float kClusterRadius  = 0.55f; // fraction of cell occupied (0..1, ~sqrt(2)/2 max)
-    constexpr float kDensityPower   = 1.5f;  // higher = harder cluster edges
-
     std::vector<TreePlacement> placements;
-    placements.reserve(region.instanceCount);
 
-    const uint32_t maxAttempts = region.instanceCount * 32u;
-    uint32_t       attempts    = 0;
+    if (region.placement == RegionDef::PlacementMode::Grid) {
+        // Grid placement: deterministic row/col layout with optional jitter and
+        // rotation. Skips Worley rejection (Phase A) and Poisson relaxation
+        // (Phases B/C) — relaxation would actively destroy the grid.
 
-    while (placements.size() < region.instanceCount && attempts < maxAttempts) {
-        float u = hashToFloat(attempts * 3u + 0u, seedPos);
-        float v = hashToFloat(attempts * 3u + 1u, seedPos);
-        float r = hashToFloat(attempts * 3u + 2u, seedPos);
+        const float colS = std::max(region.colSpacing, 1e-3f);
+        const float rowS = std::max(region.rowSpacing, 1e-3f);
 
-        float posX = region.bounds.m_mins.x + u * range.x;
-        float posZ = region.bounds.m_mins.y + v * range.y;
+        const uint32_t nx = std::max(1u, static_cast<uint32_t>(std::floor(range.x / colS)));
+        const uint32_t nz = std::max(1u, static_cast<uint32_t>(std::floor(range.y / rowS)));
+        region.instanceCount = nx * nz;
+        placements.reserve(region.instanceCount);
 
-        float w = Noise::worleyF1_2D(posX / kCellSize, posZ / kCellSize, seedPos);
-        // Map distance-to-nearest-feature -> density (close = dense, far = empty).
-        float t       = std::clamp(1.f - (w / kClusterRadius), 0.f, 1.f);
-        float density = std::pow(t, kDensityPower);
+        const dm::float2 center = region.bounds.center();
+        const float cosA = std::cos(region.rowAngle);
+        const float sinA = std::sin(region.rowAngle);
+        const size_t assetN = region.assetIds.size();
 
-        if (r < density) {
+        for (uint32_t iz = 0; iz < nz; ++iz) {
+            for (uint32_t ix = 0; ix < nx; ++ix) {
+                const uint32_t i = iz * nx + ix;
+
+                // Local (centered) grid coordinates.
+                const float lx = (static_cast<float>(ix) - (nx - 1) * 0.5f) * colS;
+                const float lz = (static_cast<float>(iz) - (nz - 1) * 0.5f) * rowS;
+
+                // Rotate about region center, then translate.
+                float wx = center.x + (lx * cosA - lz * sinA);
+                float wz = center.y + (lx * sinA + lz * cosA);
+
+                // Uniform ±jitter box.
+                if (region.jitter > 0.f) {
+                    const float jx = (hashToFloat(i * 2u + 0u, seedPos) - 0.5f) * 2.f * region.jitter;
+                    const float jz = (hashToFloat(i * 2u + 1u, seedPos) - 0.5f) * 2.f * region.jitter;
+                    wx += jx;
+                    wz += jz;
+                }
+
+                const float rotY = hashToFloat(i, seedRot) * dm::PI_f;
+
+                // Uniform random asset pick. round(u * (N-1)) with u ∈ [0,1] lands in [0, N-1].
+                const float  u   = hashToFloat(i, seedAsset);
+                const size_t pick = static_cast<size_t>(std::round(u * float(assetN - 1)));
+                const size_t aid  = region.assetIds[pick];
+
+                const auto*  asset  = findAsset(aid);
+                const float  radius = (asset && !asset->lods.empty()) ? maxRadius : 1.f;
+
+                placements.push_back({ {wx, wz}, radius, aid, rotY });
+            }
+        }
+    } else {
+        // Phase A: rejection-sampled placement against a Voronoi (Worley F1)
+        // density field. One feature point per cell of size kCellSize world units;
+        // density peaks at the feature point and falls off to 0 at kClusterRadius.
+        // Produces discrete tree islands with real clearings between them.
+        // Phases B/C still run on top, so trunks are guaranteed not to overlap.
+        constexpr float kCellSize       = 50.f;  // world units between cluster centers
+        constexpr float kClusterRadius  = 0.55f; // fraction of cell occupied (0..1, ~sqrt(2)/2 max)
+        constexpr float kDensityPower   = 1.5f;  // higher = harder cluster edges
+
+        placements.reserve(region.instanceCount);
+
+        const uint32_t maxAttempts = region.instanceCount * 32u;
+        uint32_t       attempts    = 0;
+
+        while (placements.size() < region.instanceCount && attempts < maxAttempts) {
+            float u = hashToFloat(attempts * 3u + 0u, seedPos);
+            float v = hashToFloat(attempts * 3u + 1u, seedPos);
+            float r = hashToFloat(attempts * 3u + 2u, seedPos);
+
+            float posX = region.bounds.m_mins.x + u * range.x;
+            float posZ = region.bounds.m_mins.y + v * range.y;
+
+            float w = Noise::worleyF1_2D(posX / kCellSize, posZ / kCellSize, seedPos);
+            // Map distance-to-nearest-feature -> density (close = dense, far = empty).
+            float t       = std::clamp(1.f - (w / kClusterRadius), 0.f, 1.f);
+            float density = std::pow(t, kDensityPower);
+
+            if (r < density) {
+                uint32_t    i       = static_cast<uint32_t>(placements.size());
+                float       rotY    = hashToFloat(i, seedRot) * dm::PI_f;
+                size_t      assetId = region.assetIds[i % region.assetIds.size()];
+                const auto* asset   = findAsset(assetId);
+                float       radius  = asset && !asset->lods.empty() ? maxRadius : 1.f;
+
+                placements.push_back({ {posX, posZ}, radius, assetId, rotY });
+            }
+            attempts++;
+        }
+
+        // Fallback: if rejection thinned us out, top up uniformly. Downstream phases
+        // assume placements.size() == region.instanceCount.
+        while (placements.size() < region.instanceCount) {
             uint32_t    i       = static_cast<uint32_t>(placements.size());
+            float       posX    = region.bounds.m_mins.x + hashToFloat(i * 2u,     seedPos) * range.x;
+            float       posZ    = region.bounds.m_mins.y + hashToFloat(i * 2u + 1, seedPos) * range.y;
             float       rotY    = hashToFloat(i, seedRot) * dm::PI_f;
             size_t      assetId = region.assetIds[i % region.assetIds.size()];
             const auto* asset   = findAsset(assetId);
@@ -664,106 +750,91 @@ void SceneRegistry::_rebuildRegion(RegionDef& region) {
 
             placements.push_back({ {posX, posZ}, radius, assetId, rotY });
         }
-        attempts++;
-    }
 
-    // Fallback: if rejection thinned us out, top up uniformly. Downstream phases
-    // assume placements.size() == region.instanceCount.
-    while (placements.size() < region.instanceCount) {
-        uint32_t    i       = static_cast<uint32_t>(placements.size());
-        float       posX    = region.bounds.m_mins.x + hashToFloat(i * 2u,     seedPos) * range.x;
-        float       posZ    = region.bounds.m_mins.y + hashToFloat(i * 2u + 1, seedPos) * range.y;
-        float       rotY    = hashToFloat(i, seedRot) * dm::PI_f;
-        size_t      assetId = region.assetIds[i % region.assetIds.size()];
-        const auto* asset   = findAsset(assetId);
-        float       radius  = asset && !asset->lods.empty() ? maxRadius : 1.f;
+        // Phase B: spatial grid.
+        float cellSize = maxRadius * 2.f;
+        if (cellSize < 0.001f) cellSize = 1.f;
 
-        placements.push_back({ {posX, posZ}, radius, assetId, rotY });
-    }
+        uint32_t gridW = static_cast<uint32_t>(std::ceil(range.x / cellSize));
+        uint32_t gridH = static_cast<uint32_t>(std::ceil(range.y / cellSize));
+        if (gridW == 0) gridW = 1;
+        if (gridH == 0) gridH = 1;
 
-    // Phase B: spatial grid.
-    float cellSize = maxRadius * 2.f;
-    if (cellSize < 0.001f) cellSize = 1.f;
+        SpatialGrid grid{{gridW, gridH}, cellSize, region.bounds.m_mins};
 
-    uint32_t gridW = static_cast<uint32_t>(std::ceil(range.x / cellSize));
-    uint32_t gridH = static_cast<uint32_t>(std::ceil(range.y / cellSize));
-    if (gridW == 0) gridW = 1;
-    if (gridH == 0) gridH = 1;
+        // Phase C: Poisson relaxation.
+        std::vector<dm::float2> displacements(region.instanceCount);
 
-    SpatialGrid grid{{gridW, gridH}, cellSize, region.bounds.m_mins};
+        for (uint32_t iter = 0; iter < kRelaxIterations; iter++) {
+            grid.clear();
+            for (uint32_t i = 0; i < region.instanceCount; i++)
+                grid.insert(i, placements[i].pos);
 
-    // Phase C: Poisson relaxation.
-    std::vector<dm::float2> displacements(region.instanceCount);
+            for (auto& d : displacements) d = { 0.f, 0.f };
 
-    for (uint32_t iter = 0; iter < kRelaxIterations; iter++) {
-        grid.clear();
-        for (uint32_t i = 0; i < region.instanceCount; i++)
-            grid.insert(i, placements[i].pos);
+            for (uint32_t cz = 0; cz < gridH; cz++) {
+                for (uint32_t cx = 0; cx < gridW; cx++) {
+                    const auto& cell = grid.m_Cells[grid.flatten({cx, cz})];
 
-        for (auto& d : displacements) d = { 0.f, 0.f };
+                    for (int dz = -1; dz <= 1; dz++) {
+                        for (int dx = -1; dx <= 1; dx++) {
+                            int nx = static_cast<int>(cx) + dx;
+                            int nz = static_cast<int>(cz) + dz;
+                            if (nx < 0 || nz < 0 ||
+                                nx >= static_cast<int>(gridW) ||
+                                nz >= static_cast<int>(gridH))
+                                continue;
 
-        for (uint32_t cz = 0; cz < gridH; cz++) {
-            for (uint32_t cx = 0; cx < gridW; cx++) {
-                const auto& cell = grid.m_Cells[grid.flatten({cx, cz})];
+                            const auto& neighbor = grid.m_Cells[grid.flatten(dm::uint2(nx, nz))];
 
-                for (int dz = -1; dz <= 1; dz++) {
-                    for (int dx = -1; dx <= 1; dx++) {
-                        int nx = static_cast<int>(cx) + dx;
-                        int nz = static_cast<int>(cz) + dz;
-                        if (nx < 0 || nz < 0 ||
-                            nx >= static_cast<int>(gridW) ||
-                            nz >= static_cast<int>(gridH))
-                            continue;
+                            for (uint32_t a = 0; a < cell.size(); a++) {
+                                uint32_t tI = cell[a];
+                                for (uint32_t b = 0; b < neighbor.size(); b++) {
+                                    uint32_t tJ = neighbor[b];
+                                    if (tJ <= tI) continue;
 
-                        const auto& neighbor = grid.m_Cells[grid.flatten(dm::uint2(nx, nz))];
+                                    float deltaX = placements[tJ].pos.x - placements[tI].pos.x;
+                                    float deltaZ = placements[tJ].pos.y - placements[tI].pos.y;
+                                    float distSq = deltaX * deltaX + deltaZ * deltaZ;
+                                    float minDist = placements[tI].radius + placements[tJ].radius;
 
-                        for (uint32_t a = 0; a < cell.size(); a++) {
-                            uint32_t tI = cell[a];
-                            for (uint32_t b = 0; b < neighbor.size(); b++) {
-                                uint32_t tJ = neighbor[b];
-                                if (tJ <= tI) continue;
+                                    if (distSq >= minDist * minDist) continue;
 
-                                float deltaX = placements[tJ].pos.x - placements[tI].pos.x;
-                                float deltaZ = placements[tJ].pos.y - placements[tI].pos.y;
-                                float distSq = deltaX * deltaX + deltaZ * deltaZ;
-                                float minDist = placements[tI].radius + placements[tJ].radius;
+                                    float dist    = std::sqrt(distSq);
+                                    float overlap = minDist - dist;
 
-                                if (distSq >= minDist * minDist) continue;
+                                    float dirX, dirZ;
+                                    if (dist < 1e-5f) {
+                                        float angle = hashToFloat(tI ^ tJ, 0xBAADF00Du) * 2.f * dm::PI_f;
+                                        dirX = std::cos(angle);
+                                        dirZ = std::sin(angle);
+                                    } else {
+                                        dirX = deltaX / dist;
+                                        dirZ = deltaZ / dist;
+                                    }
 
-                                float dist    = std::sqrt(distSq);
-                                float overlap = minDist - dist;
+                                    float push = overlap * 0.4f;
 
-                                float dirX, dirZ;
-                                if (dist < 1e-5f) {
-                                    float angle = hashToFloat(tI ^ tJ, 0xBAADF00Du) * 2.f * dm::PI_f;
-                                    dirX = std::cos(angle);
-                                    dirZ = std::sin(angle);
-                                } else {
-                                    dirX = deltaX / dist;
-                                    dirZ = deltaZ / dist;
+                                    displacements[tI].x -= dirX * push;
+                                    displacements[tI].y -= dirZ * push;
+
+                                    displacements[tJ].x += dirX * push;
+                                    displacements[tJ].y += dirZ * push;
                                 }
-
-                                float push = overlap * 0.4f;
-
-                                displacements[tI].x -= dirX * push;
-                                displacements[tI].y -= dirZ * push;
-
-                                displacements[tJ].x += dirX * push;
-                                displacements[tJ].y += dirZ * push;
                             }
                         }
                     }
                 }
             }
-        }
 
-        for (uint32_t i = 0; i < region.instanceCount; i++) {
-            placements[i].pos = dm::float2(
-                std::clamp(placements[i].pos.x + displacements[i].x,
-                           region.bounds.m_mins.x, region.bounds.m_maxs.x),
-                std::clamp(placements[i].pos.y + displacements[i].y,
-                           region.bounds.m_mins.y, region.bounds.m_maxs.y)
-            );
+            for (uint32_t i = 0; i < region.instanceCount; i++) {
+                placements[i].pos = dm::float2(
+                    std::clamp(placements[i].pos.x + displacements[i].x,
+                               region.bounds.m_mins.x, region.bounds.m_maxs.x),
+                    std::clamp(placements[i].pos.y + displacements[i].y,
+                               region.bounds.m_mins.y, region.bounds.m_maxs.y)
+                );
+            }
         }
     }
 

@@ -59,6 +59,11 @@ struct InstanceData {
 
 // CPU-only region definition.
 struct RegionDef {
+    // Scatter = existing Worley + Poisson-relaxed placement.
+    // Grid    = deterministic row/col layout; instanceCount derived from spacing × bounds,
+    //           with optional jitter and rotation. `density` is ignored in Grid mode.
+    enum class PlacementMode { Scatter, Grid };
+
     std::string               name;
     float                     density;
     uint32_t                  instanceCount;
@@ -67,6 +72,13 @@ struct RegionDef {
     std::vector<InstanceData> instances;
     dm::box3                  cullBox;
     bool                      dirty = true;
+
+    PlacementMode             placement   = PlacementMode::Scatter;
+    float                     rowSpacing  = 10.f;
+    float                     colSpacing  = 10.f;
+    float                     jitter      = 0.f;
+    float                     rowAngle    = 0.f;   // radians (loader converts from degrees)
+
     // Per-asset render-time visibility within this region (absent = visible).
     std::unordered_map<size_t, bool> assetVisible;
 
@@ -154,6 +166,13 @@ public:
                    const std::vector<size_t>& assetIds);
     void modifyRegion(size_t idx, float density, const dm::box2& bounds);
     void modifyRegionAssets(size_t idx, const std::vector<size_t>& assetIds);
+    // Switch a region into grid placement mode. rowAngleRadians is applied as a rotation
+    // of the grid pattern about the region center in the XZ plane. Marks the region dirty.
+    void setRegionGridPlacement(size_t idx,
+                                float rowSpacing,
+                                float colSpacing,
+                                float jitter,
+                                float rowAngleRadians);
     void setRegionAssetVisible(size_t regionIdx, size_t assetId, bool visible);
     void removeRegion(size_t idx);
 

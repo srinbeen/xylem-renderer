@@ -498,10 +498,12 @@ def plot_camera_path_3d(series_list: list[Series], out_dir: Path, *,
         fig = plt.figure(figsize=(6.0, 5.0))
         ax = fig.add_subplot(111, projection="3d")
 
+        # Y-up convention: pass (X, Z, Y) so matplotlib's vertical axis is
+        # the renderer's Y. World ground plane = matplotlib XY (=our XZ).
         # Polyline coloured by metric: render as small per-segment line collection
         # so the colour varies smoothly along the path. Shared `norm` across
         # all series means the same colour means the same value in every plot.
-        pts = np.column_stack([x, y, z])
+        pts = np.column_stack([x, z, y])
         segs = np.stack([pts[:-1], pts[1:]], axis=1)
         from mpl_toolkits.mplot3d.art3d import Line3DCollection
         lc = Line3DCollection(segs, cmap="viridis", norm=norm, linewidth=1.4)
@@ -510,25 +512,31 @@ def plot_camera_path_3d(series_list: list[Series], out_dir: Path, *,
         fig.colorbar(lc, ax=ax, label=f"{color_by} (shared scale)",
                      shrink=0.7, pad=0.1)
 
-        # Direction arrows subsampled - bigger than the polyline so they read.
+        # Direction arrows subsampled, small + semi-transparent so the
+        # colour-coded polyline remains the dominant signal. Arrow length is
+        # scaled to the smallest axis extent so wide-but-flat scenes (like the
+        # orchard, where X >> Y) don't get arrows that overflow the Y axis.
         idx = np.arange(0, len(df), max(1, arrow_stride))
+        x_range = max(x.max() - x.min(), 1.0)
+        y_range = max(y.max() - y.min(), 1.0)
+        z_range = max(z.max() - z.min(), 1.0)
+        arrow_len = min(x_range, y_range, z_range) * 0.05
         ax.quiver(
-            x[idx], y[idx], z[idx],
+            x[idx], z[idx], y[idx],
             df["camDirX"].to_numpy()[idx],
-            df["camDirY"].to_numpy()[idx],
             df["camDirZ"].to_numpy()[idx],
-            length=max((x.max() - x.min()), 1.0) * 0.07,
-            color="black", linewidth=1.1, alpha=0.85,
-            arrow_length_ratio=0.4,
+            df["camDirY"].to_numpy()[idx],
+            length=arrow_len,
+            color="black", linewidth=0.6, alpha=0.5,
         )
 
         # Pad limits so the colorbar doesn't clip the data.
         ax.set_xlim(x.min(), x.max())
-        ax.set_ylim(y.min(), y.max())
-        ax.set_zlim(z.min(), z.max())
+        ax.set_ylim(z.min(), z.max())
+        ax.set_zlim(y.min(), y.max())
         ax.set_xlabel("X")
-        ax.set_ylabel("Y")
-        ax.set_zlabel("Z")
+        ax.set_ylabel("Z")
+        ax.set_zlabel("Y")
         ax.set_title(f"Camera path coloured by {color_by} - {s.label}")
         written.extend(save_fig(
             fig, out_dir,
@@ -576,7 +584,7 @@ def plot_camera_path_2d(series_list: list[Series], out_dir: Path, *,
             x[idx], z[idx], dx / mag, dz / mag,
             scale_units="xy", scale=1.0 / arrow_len,
             color="black", width=0.004, headwidth=4.0, headlength=4.5,
-            alpha=0.85,
+            alpha=0.5,
         )
         ax.set_xlim(x.min() - margin, x.max() + margin)
         ax.set_ylim(z.min() - margin, z.max() + margin)

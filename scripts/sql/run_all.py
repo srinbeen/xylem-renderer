@@ -307,41 +307,6 @@ QUERIES: list[tuple[str, str]] = [
         """,
     ),
     (
-        "11_per_pipeline_zcull",
-        # Hi-Z hardware effectiveness: samples rejected by ZCULL vs total
-        # input samples. rejectionPct = rejected / input * 100.
-        # Higher = the rasterizer is killing more fragments before shading.
-        """
-        WITH win(name, t0, t1) AS (
-          SELECT text, start, end FROM NVTX_EVENTS WHERE text LIKE 'Pipeline:%'
-        ),
-        samples AS (
-          SELECT w.name AS pipeline, t.metricName, g.value
-          FROM GPU_METRICS g
-          JOIN TARGET_INFO_GPU_METRICS t ON t.metricId = g.metricId
-          JOIN win w ON g.timestamp BETWEEN w.t0 AND w.t1
-          WHERE t.metricName IN (
-            'ZCULL Input Samples [Sum]',
-            'ZCULL Rejected Samples [Sum]',
-            'ZCULL Input Samples [Throughput %]',
-            'ZCULL Rejected Samples [Throughput %]'
-          )
-        )
-        SELECT pipeline,
-               SUM(CASE WHEN metricName='ZCULL Input Samples [Sum]'    THEN value ELSE 0 END) AS inputSamples,
-               SUM(CASE WHEN metricName='ZCULL Rejected Samples [Sum]' THEN value ELSE 0 END) AS rejectedSamples,
-               ROUND(100.0 *
-                     SUM(CASE WHEN metricName='ZCULL Rejected Samples [Sum]' THEN value ELSE 0 END) /
-                     NULLIF(SUM(CASE WHEN metricName='ZCULL Input Samples [Sum]' THEN value ELSE 0 END), 0),
-                     2)                                                                       AS rejectionPct,
-               ROUND(AVG(CASE WHEN metricName='ZCULL Input Samples [Throughput %]'    THEN value END), 2) AS avgInputPct,
-               ROUND(AVG(CASE WHEN metricName='ZCULL Rejected Samples [Throughput %]' THEN value END), 2) AS avgRejectedPct
-        FROM samples
-        GROUP BY pipeline
-        ORDER BY pipeline;
-        """,
-    ),
-    (
         "12_per_pipeline_warp_occupancy",
         # Warp-class occupancy per pipeline. VTG / Pixel / Compute = warps in
         # flight by shader class; Unallocated = SM has room but nothing to
@@ -486,58 +451,6 @@ QUERIES: list[tuple[str, str]] = [
         JOIN StringIds s ON s.id = d.nameId
         GROUP BY d.nameId
         ORDER BY totalMs DESC;
-        """,
-    ),
-    (
-        "18_wddm_dma_per_engine",
-        # DMA packet activity per WDDM engine (3D, Copy, Video, etc).
-        # NOTE: durations may come back as 0 on consumer Windows ETW; counts
-        # are still reliable. Use GPU_METRICS copy-engine % counters for time.
-        """
-        SELECT et.label                              AS engine,
-               COUNT(*)                              AS packets,
-               ROUND(SUM(d.end - d.start) / 1e6, 2)  AS totalActiveMs,
-               ROUND(AVG(d.end - d.start) / 1e3, 2)  AS avgUs,
-               ROUND(MAX(d.end - d.start) / 1e3, 2)  AS maxUs
-        FROM WDDM_DMA_PACKET_START_EVENTS d
-        JOIN ENUM_WDDM_ENGINE_TYPE et ON et.id = d.engineType
-        GROUP BY d.engineType
-        ORDER BY totalActiveMs DESC;
-        """,
-    ),
-    (
-        "19_wddm_paging_evictions",
-        # Allocation evictions (VRAM pressure indicator) + paging queue ops
-        # by VidMm op type (MakeResident, Evict, Reclaim, Discard, etc).
-        """
-        SELECT 'EvictAllocation' AS source,
-               NULL              AS opType,
-               COUNT(*)          AS events
-        FROM WDDM_EVICT_ALLOCATION_EVENTS
-        UNION ALL
-        SELECT 'PagingQueue'     AS source,
-               op.label          AS opType,
-               COUNT(*)          AS events
-        FROM WDDM_PAGING_QUEUE_PACKET_START_EVENTS pq
-        JOIN ENUM_WDDM_VIDMM_OP_TYPE op ON op.id = pq.vidMmOpType
-        GROUP BY pq.vidMmOpType
-        ORDER BY 1, 3 DESC;
-        """,
-    ),
-    (
-        "20_memory_transfers",
-        # Raw ETW memory transfer events: count, total bytes, avg/max size
-        # per direction. Complements the GPU PCIe RX/TX counters.
-        """
-        SELECT tt.label                                AS transferType,
-               COUNT(*)                                AS transfers,
-               ROUND(SUM(size) / 1048576.0, 2)         AS totalMB,
-               ROUND(AVG(size) / 1024.0, 2)            AS avgKB,
-               ROUND(MAX(size) / 1024.0, 2)            AS maxKB
-        FROM MEMORY_TRANSFER_EVENTS m
-        JOIN ENUM_ETW_MEMORY_TRANSFER_TYPE tt ON tt.id = m.memoryTransferType
-        GROUP BY m.memoryTransferType
-        ORDER BY totalMB DESC;
         """,
     ),
     (

@@ -78,19 +78,33 @@ def plot_dram_bandwidth(series_list: list[Series], out_dir: Path, *,
         reads.append(r)
         writes.append(w)
 
+    # Uniform colors across pipelines: Read vs Write is the only encoded
+    # distinction. Pipeline identity is carried by the x-axis label.
+    read_color  = "#4C72B0"   # blue (matches cpu_gpu_bar palette)
+    write_color = "#7FB3D5"   # lighter blue
     fig, ax = plt.subplots()
     xs = np.arange(len(labels))
-    colors = _series_colors(series_list)
-    ax.bar(xs, reads, color=colors, edgecolor="black", linewidth=0.4,
-           label="Read", alpha=0.55, hatch="//")
-    ax.bar(xs, writes, bottom=reads, color=colors, edgecolor="black",
-           linewidth=0.4, label="Write")
-    _annotate_bars(ax, xs, [r + w for r, w in zip(reads, writes)])
+    width = 0.38
+    reads_arr = np.array(reads)
+    writes_arr = np.array(writes)
+    ax.bar(xs - width / 2, reads_arr, width=width, color=read_color,
+           edgecolor="black", linewidth=0.4, label="Read")
+    ax.bar(xs + width / 2, writes_arr, width=width, color=write_color,
+           edgecolor="black", linewidth=0.4, label="Write")
+
+    for x, v in zip(xs - width / 2, reads_arr):
+        if np.isfinite(v) and v > 0:
+            ax.text(x, v, f"{v:.1f}", ha="center", va="bottom", fontsize=7)
+    for x, v in zip(xs + width / 2, writes_arr):
+        if np.isfinite(v) and v > 0:
+            ax.text(x, v, f"{v:.1f}", ha="center", va="bottom", fontsize=7)
+
     ax.set_xticks(xs)
     ax.set_xticklabels(labels, rotation=20, ha="right")
     ax.set_ylabel("DRAM bandwidth (GB/s)")
     ax.set_title("Average DRAM read + write bandwidth")
-    legend_below(ax, anchor_y=-0.28)
+    ax.grid(True, axis="y", alpha=0.25)
+    legend_below(ax, anchor_y=-0.30)
     written = save_fig(fig, out_dir, "dram_bandwidth", fmt=fmt)
     plt.close(fig)
     return written
@@ -186,44 +200,12 @@ def plot_warp_occupancy(series_list: list[Series], out_dir: Path, *,
     return written
 
 
-def plot_zcull_rejection(series_list: list[Series], out_dir: Path, *,
-                         fmt: str = "pdf+png") -> list[Path]:
-    series_list = _nsys_series(series_list)
-    if not series_list:
-        return []
-    values: list[float] = []
-    labels = [s.label for s in series_list]
-    for s in series_list:
-        df = load_nsys_csv(s, "11_per_pipeline_zcull.csv")
-        if df is None or df.empty:
-            values.append(float("nan"))
-        else:
-            v = df["rejectionPct"].iloc[0]
-            values.append(float(v) if v is not None else float("nan"))
-
-    fig, ax = plt.subplots()
-    xs = np.arange(len(labels))
-    ax.bar(xs, values, color=_series_colors(series_list),
-           edgecolor="black", linewidth=0.4)
-    _annotate_bars(ax, xs, values, fmt="{:.1f}%")
-    ax.set_xticks(xs)
-    ax.set_xticklabels(labels, rotation=20, ha="right")
-    ax.set_ylabel("ZCULL rejection (%)")
-    ax.set_title("Hardware ZCULL sample rejection rate")
-    ax.set_ylim(0, 100)
-    written = save_fig(fig, out_dir, "zcull_rejection", fmt=fmt)
-    plt.close(fig)
-    return written
-
-
-# PIX markers we actually want to surface in the report. These are the
-# *leaf-level* markers (no double-counting via parent markers). 'Cull' and
-# 'Main' are parents in the renderer's tree; we list their children instead.
-PIX_REPORTED = (
-    "DepthPrepass", "BuildMipChain", "SDSM",
-    "RegionDispatch", "MainDispatch", "ShadowDispatch",
-    "Trunk", "Leaves", "Terrain", "Impostors", "Sky",
-)
+# Geometry types we surface; each is timed twice in the renderer with
+# Main_* (color pass) and Shadow_* (cascade pass) PIX markers. The other
+# PIX markers (DepthPrepass, HiZ, SDSM, *Dispatch, Sky) are intentionally
+# omitted here -- they overlap with plot_stage_grouped_bar at the
+# parent-stage level (depthPrepassMs / hizMs / sdsmMs / cullMs / skyMs).
+GEOMETRY_KINDS = ("Trunk", "Leaves", "Terrain", "Impostors")
 
 
 def plot_pix_stages(series_list: list[Series], out_dir: Path, *,
@@ -231,38 +213,58 @@ def plot_pix_stages(series_list: list[Series], out_dir: Path, *,
     series_list = _nsys_series(series_list)
     if not series_list:
         return []
-    labels = [s.label for s in series_list]
-    # For each PIX stage, collect totalMs per series. Missing stage -> 0.
-    per_stage: dict[str, list[float]] = {st: [] for st in PIX_REPORTED}
+    # Per kind, per series, totalMs for Main_* and Shadow_* markers.
+    main_ms: dict[str, list[float]] = {k: [] for k in GEOMETRY_KINDS}
+    shadow_ms: dict[str, list[float]] = {k: [] for k in GEOMETRY_KINDS}
     for s in series_list:
         df = load_nsys_csv(s, "15_per_pipeline_pix_stages.csv")
-        for st in PIX_REPORTED:
-            v = 0.0
-            if df is not None:
-                m = df[df["stage"] == st]
-                if not m.empty:
-                    v = float(m["totalMs"].iloc[0])
-            per_stage[st].append(v)
-    # Drop stages that are zero across every series so the x-axis stays tight.
-    active = [st for st in PIX_REPORTED if any(v > 0 for v in per_stage[st])]
+        for kind in GEOMETRY_KINDS:
+            def lookup(marker: str) -> float:
+                if df is None:
+                    return 0.0
+                m = df[df["stage"] == marker]
+                return float(m["totalMs"].iloc[0]) if not m.empty else 0.0
+            main_ms[kind].append(lookup(f"Main_{kind}"))
+            shadow_ms[kind].append(lookup(f"Shadow_{kind}"))
+    # Drop kinds that are zero across every series.
+    active = [k for k in GEOMETRY_KINDS
+              if any(main_ms[k][i] + shadow_ms[k][i] > 0 for i in range(len(series_list)))]
     if not active:
         return []
     n_series = len(series_list)
     width = 0.8 / n_series
     xs = np.arange(len(active))
 
-    fig, ax = plt.subplots(figsize=(7.0, 3.6))
+    # Fixed two-tone palette per pipeline: deep = main pass, light = shadow pass.
+    pipeline_main_color = {
+        "Traditional": "#4C72B0", "Compute": "#55A467", "MeshShader": "#DD8452",
+    }
+    pipeline_shadow_color = {
+        "Traditional": "#A2B9D5", "Compute": "#A9D2B2", "MeshShader": "#EEC0A4",
+    }
+
+    fig, ax = plt.subplots(figsize=(7.5, 4.0))
     for i, s in enumerate(series_list):
         offset = (i - (n_series - 1) / 2.0) * width
-        heights = [per_stage[st][i] for st in active]
-        ax.bar(xs + offset, heights, width=width,
-               color=PIPELINE_COLORS.get(s.pipeline, "#444444"),
-               edgecolor="black", linewidth=0.3, label=s.label)
+        m_heights = np.array([main_ms[k][i] for k in active])
+        s_heights = np.array([shadow_ms[k][i] for k in active])
+        c_main = pipeline_main_color.get(s.pipeline, "#444444")
+        c_shadow = pipeline_shadow_color.get(s.pipeline, "#999999")
+        ax.bar(xs + offset, m_heights, width=width, color=c_main,
+               edgecolor="black", linewidth=0.3,
+               label=f"{s.label} (main)")
+        ax.bar(xs + offset, s_heights, width=width, bottom=m_heights, color=c_shadow,
+               edgecolor="black", linewidth=0.3,
+               label=f"{s.label} (shadow)")
+        for x, total in zip(xs + offset, m_heights + s_heights):
+            if total > 0:
+                ax.text(x, total, f"{total:.0f}", ha="center", va="bottom", fontsize=6)
     ax.set_xticks(xs)
-    ax.set_xticklabels(active, rotation=30, ha="right")
+    ax.set_xticklabels(active)
     ax.set_ylabel("Total GPU time inside pipeline window (ms)")
-    ax.set_title("Per-PIX-marker GPU time per pipeline")
-    legend_below(ax, anchor_y=-0.32)
+    ax.set_title("Per-geometry GPU time: main pass vs shadow pass")
+    ax.grid(True, axis="y", alpha=0.25)
+    legend_below(ax, anchor_y=-0.35, ncol=n_series)
     written = save_fig(fig, out_dir, "pix_stages", fmt=fmt)
     plt.close(fig)
     return written

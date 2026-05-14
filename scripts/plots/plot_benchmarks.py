@@ -30,7 +30,6 @@ PLOT_REGISTRY = {
     "dram":   (nsys.plot_dram_bandwidth,  "nsys"),
     "cache":  (nsys.plot_cache_hit_rates, "nsys"),
     "warps":  (nsys.plot_warp_occupancy,  "nsys"),
-    "zcull":  (nsys.plot_zcull_rejection, "nsys"),
     "pix":    (nsys.plot_pix_stages,      "nsys"),
     "scene_counts": (scene_stats.plot_scene_counts,        "scene"),
     "scene_yield":  (scene_stats.plot_scene_meshlet_yield, "scene"),

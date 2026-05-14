@@ -1618,19 +1618,19 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     frame::BeginGpuStage(m_CommandList, GetDevice(),
                          m_StageTimers[static_cast<size_t>(frame::FrameStage::Scene)],
                          m_StageNextIdx[static_cast<size_t>(frame::FrameStage::Scene)]);
-    m_CommandList->beginMarker("Trunk");
+    m_CommandList->beginMarker("Main_Trunk");
     _RenderTrunkPass(framebuffer);
     m_CommandList->endMarker();
 
-    m_CommandList->beginMarker("Leaves");
+    m_CommandList->beginMarker("Main_Leaves");
     _RenderLeavesPass(framebuffer);
     m_CommandList->endMarker();
 
-    m_CommandList->beginMarker("Terrain");
+    m_CommandList->beginMarker("Main_Terrain");
     _RenderTerrainPass(framebuffer);
     m_CommandList->endMarker();
 
-    m_CommandList->beginMarker("Impostors");
+    m_CommandList->beginMarker("Main_Impostors");
     _RenderImpostorPass(framebuffer);
     m_CommandList->endMarker();
     frame::EndGpuStage(m_CommandList,
@@ -1972,7 +1972,7 @@ void ComputeRenderPass::_RenderShadowPass() {
         // Trunk: one indirect draw per asset, reading its per-(asset x cascade)
         // window in shadowVisBuf via shadowSlotOffsets[ai * NUM_CASCADES + cascade].
         // Slots with no GPU-culled instances have instanceCount=0 → no-op draws.
-        m_CommandList->beginMarker("Trunk");
+        m_CommandList->beginMarker("Shadow_Trunk");
         nvrhi::GraphicsState shadowState;
         shadowState.pipeline    = m_StageResources.shadow.treePipeline;
         shadowState.framebuffer = m_StageResources.shadow.framebuffers[cascade];
@@ -2002,7 +2002,7 @@ void ComputeRenderPass::_RenderShadowPass() {
         // Leaves: indirect draw per asset using shadow vis buffer + leafShadowSlots,
         // mirroring the per-(asset x cascade) slot layout populated by CullShadow.
         if (m_StageResources.sceneLeaves.shadowPipeline && m_StageResources.sceneLeaves.shadowBindingSet) {
-            m_CommandList->beginMarker("Leaves");
+            m_CommandList->beginMarker("Shadow_Leaves");
             nvrhi::GraphicsState leafShadowState;
             leafShadowState.pipeline       = m_StageResources.sceneLeaves.shadowPipeline;
             leafShadowState.framebuffer    = m_StageResources.shadow.framebuffers[cascade];
@@ -2029,7 +2029,7 @@ void ComputeRenderPass::_RenderShadowPass() {
         // matrix actually used to project; render unconditionally and rely on
         // ortho clip to discard fragments outside each cascade's NDC.
         if (m_StageResources.sceneTerrain.indexCount > 0 && terrainPtr) {
-            m_CommandList->beginMarker("Terrain");
+            m_CommandList->beginMarker("Shadow_Terrain");
             nvrhi::GraphicsState terrShadow;
             terrShadow.pipeline    = m_StageResources.shadow.terrainPipeline;
             terrShadow.framebuffer = m_StageResources.shadow.framebuffers[cascade];
@@ -2049,7 +2049,7 @@ void ComputeRenderPass::_RenderShadowPass() {
         }
 
         if (m_UI.showShadowImpostors) {
-            m_CommandList->beginMarker("Impostors");
+            m_CommandList->beginMarker("Shadow_Impostors");
             _RenderShadowImpostorPass(cascade);
             m_CommandList->endMarker(); // Impostors
         }

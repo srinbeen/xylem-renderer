@@ -1936,7 +1936,7 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
             m_CommandList->beginMarker(cascadeMarker.c_str());
 
             // Trunk
-            m_CommandList->beginMarker("Trunk");
+            m_CommandList->beginMarker("Shadow_Trunk");
             nvrhi::MeshletState ms;
             ms.pipeline       = m_StageResources.shadow.pipeline;
             ms.framebuffer    = m_StageResources.shadow.framebuffers[c];
@@ -1972,7 +1972,7 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
             auto& L = m_StageResources.sceneLeaves;
             if (L.shadowPipeline && L.shadowSignature && L.shadowBindingSet
                 && m_StageResources.cull.shadowLeafDispatchArgsBuffer) {
-                m_CommandList->beginMarker("Leaves");
+                m_CommandList->beginMarker("Shadow_Leaves");
                 nvrhi::MeshletState leafMS;
                 leafMS.pipeline       = L.shadowPipeline;
                 leafMS.framebuffer    = m_StageResources.shadow.framebuffers[c];
@@ -2009,7 +2009,7 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
             if (m_StageResources.shadow.terrainPipeline
                 && m_StageResources.shadow.terrainBindingSet
                 && m_StageResources.sceneTerrain.meshletCount > 0) {
-                m_CommandList->beginMarker("Terrain");
+                m_CommandList->beginMarker("Shadow_Terrain");
                 nvrhi::MeshletState terrShadow;
                 terrShadow.pipeline    = m_StageResources.shadow.terrainPipeline;
                 terrShadow.framebuffer = m_StageResources.shadow.framebuffers[c];
@@ -2027,7 +2027,7 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
             }
 
             if (m_UI.showShadowImpostors) {
-                m_CommandList->beginMarker("Impostors");
+                m_CommandList->beginMarker("Shadow_Impostors");
                 _RenderShadowImpostorPass(c);
                 m_CommandList->endMarker(); // Impostors
             }
@@ -2075,19 +2075,19 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     frame::BeginGpuStage(m_CommandList, GetDevice(),
                          m_StageTimers[static_cast<size_t>(frame::FrameStage::Scene)],
                          m_StageNextIdx[static_cast<size_t>(frame::FrameStage::Scene)]);
-    m_CommandList->beginMarker("Trunk");
+    m_CommandList->beginMarker("Main_Trunk");
     _RenderTrunkPass(framebuffer);
     m_CommandList->endMarker();
 
-    m_CommandList->beginMarker("Leaves");
+    m_CommandList->beginMarker("Main_Leaves");
     _RenderLeavesPass(framebuffer);
     m_CommandList->endMarker();
 
-    m_CommandList->beginMarker("Terrain");
+    m_CommandList->beginMarker("Main_Terrain");
     _RenderTerrainPass(framebuffer);
     m_CommandList->endMarker();
 
-    m_CommandList->beginMarker("Impostors");
+    m_CommandList->beginMarker("Main_Impostors");
     _RenderImpostorPass(framebuffer);
     m_CommandList->endMarker();
     frame::EndGpuStage(m_CommandList,

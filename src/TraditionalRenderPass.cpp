@@ -701,19 +701,19 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
                          m_StageTimers[static_cast<size_t>(frame::FrameStage::Scene)],
                          m_StageNextIdx[static_cast<size_t>(frame::FrameStage::Scene)]);
 
-    m_CommandList->beginMarker("Trunk");
+    m_CommandList->beginMarker("Main_Trunk");
     _RenderTrunkPass(framebuffer);
     m_CommandList->endMarker();
 
-    m_CommandList->beginMarker("Leaves");
+    m_CommandList->beginMarker("Main_Leaves");
     _RenderLeavesPass(framebuffer);
     m_CommandList->endMarker();
 
-    m_CommandList->beginMarker("Terrain");
+    m_CommandList->beginMarker("Main_Terrain");
     _RenderTerrainPass(framebuffer);
     m_CommandList->endMarker();
 
-    m_CommandList->beginMarker("Impostors");
+    m_CommandList->beginMarker("Main_Impostors");
     _RenderImpostorPass(framebuffer);
     m_CommandList->endMarker();
 
@@ -1154,7 +1154,7 @@ void TraditionalRenderPass::_RenderShadowPass() {
         m_CommandList->beginMarker(cascadeMarker.c_str());
 
         // Trunk
-        m_CommandList->beginMarker("Trunk");
+        m_CommandList->beginMarker("Shadow_Trunk");
         nvrhi::GraphicsState shadowState;
         shadowState.pipeline    = m_StageResources.shadowStage.treePipeline;
         shadowState.framebuffer = m_StageResources.shadowStage.framebuffers[cascade];
@@ -1174,7 +1174,7 @@ void TraditionalRenderPass::_RenderShadowPass() {
 
         // Leaves
         if (m_StageResources.leafStage.shadowPipeline && m_StageResources.leafStage.shadowBindingSet) {
-            m_CommandList->beginMarker("Leaves");
+            m_CommandList->beginMarker("Shadow_Leaves");
             nvrhi::GraphicsState leafShadowState;
             leafShadowState.pipeline = m_StageResources.leafStage.shadowPipeline;
             leafShadowState.framebuffer = m_StageResources.shadowStage.framebuffers[cascade];
@@ -1208,7 +1208,7 @@ void TraditionalRenderPass::_RenderShadowPass() {
         // Terrain
         if (m_StageResources.sceneTerrainStage.indexCount > 0 && terrainPtr
             && (terrainPtr->getBbox() * worldToLight).intersects(m_ViewHandler.shadowCasterBboxLS)) {
-            m_CommandList->beginMarker("Terrain");
+            m_CommandList->beginMarker("Shadow_Terrain");
             nvrhi::GraphicsState terrShadow;
             terrShadow.pipeline    = m_StageResources.shadowStage.terrainPipeline;
             terrShadow.framebuffer = m_StageResources.shadowStage.framebuffers[cascade];
@@ -1224,7 +1224,7 @@ void TraditionalRenderPass::_RenderShadowPass() {
         }
 
         // Impostors
-        m_CommandList->beginMarker("Impostors");
+        m_CommandList->beginMarker("Shadow_Impostors");
         _RenderShadowImpostorPass(cascade);
         m_CommandList->endMarker(); // Impostors
 

@@ -144,6 +144,7 @@ void RenderOrchestrator::_switchPipelineIfNeeded()
 
 void RenderOrchestrator::Animate(float seconds)
 {
+    const bool resetSunPhase = m_Benchmark.IsFirstRecordingFrame();
     const bool benchmarkOwnsCamera = m_Benchmark.PreAnimate(seconds);
 
     _loadSceneIfRequested();
@@ -153,7 +154,10 @@ void RenderOrchestrator::Animate(float seconds)
         m_ViewHandler.camera.Animate(seconds);
     }
 
-    m_Registry.advanceSunSky(seconds);
+    if (resetSunPhase) {
+        m_Registry.getSunSkyMutable().phase = 0.f;
+    }
+    m_Registry.advanceSunSky(m_Benchmark.GetSimulationTickSeconds(seconds));
 
     // Drive the dirty cycle here so SharedGPUAssets re-bakes the impostor atlas
     // *after* CPU mesh data is regenerated and *before* the active pass rebuilds

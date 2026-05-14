@@ -294,6 +294,12 @@ bool BenchmarkRunner::PreAnimate(float /*seconds*/)
     }
 }
 
+float BenchmarkRunner::GetSimulationTickSeconds(float wallSeconds) const
+{
+    if (m_State == State::Idle) return wallSeconds;
+    return m_File.GetSimulationDtMs() / 1000.f;
+}
+
 void BenchmarkRunner::PostRender()
 {
     if (m_State == State::Idle || !m_Session) return;

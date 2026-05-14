@@ -166,6 +166,23 @@ public:
     // (orchestrator should suppress its own camera.Animate call).
     bool PreAnimate(float seconds);
 
+    // Returns the dt (seconds) that simulation-time clocks like the sun cycle
+    // should advance by this frame. While a benchmark is active, returns the
+    // path file's simulationDtMs converted to seconds so recorded rows are
+    // reproducible across pipelines and runs. Otherwise returns wallSeconds.
+    float GetSimulationTickSeconds(float wallSeconds) const;
+
+    // True on the first Recording frame of a pipeline run (before its row is
+    // appended). The orchestrator uses it to reset simulation-time clocks
+    // (sun phase) so every pipeline's recording starts from an identical
+    // state and warmup-frame ticks don't leak into the recorded window.
+    bool IsFirstRecordingFrame() const {
+        return m_State == State::Recording
+            && m_Session.has_value()
+            && m_Session->currentIdx < m_Session->pipelines.size()
+            && m_Session->pipelines[m_Session->currentIdx].recordedFrameCount == 0;
+    }
+
     // Called from RenderOrchestrator::Render after the active pass renders
     // and before the UI pass renders.
     void PostRender();

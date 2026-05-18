@@ -504,10 +504,67 @@ def run_query(conn: sqlite3.Connection, name: str, sql: str, out_dir: Path) -> i
     return n
 
 
+def _fetch_wrapper_bounds(conn: sqlite3.Connection, index_1based: int
+                          ) -> tuple[int, int]:
+    """Return (startNs, endNs) of the index-1based-th `XylemBenchmark` NVTX
+    range. Used by --window-index to scope every per-pipeline CTE to a single
+    benchmark run when one .sqlite contains several back-to-back invocations.
+    """
+    rows = conn.execute(
+        "SELECT start, end FROM NVTX_EVENTS "
+        "WHERE text = 'XylemBenchmark' ORDER BY start"
+    ).fetchall()
+    if not rows:
+        raise RuntimeError(
+            "No 'XylemBenchmark' NVTX windows in DB -- cannot apply "
+            "--window-index. Capture must include the outer benchmark marker.")
+    if index_1based < 1 or index_1based > len(rows):
+        raise RuntimeError(
+            f"--window-index {index_1based} out of range; DB has "
+            f"{len(rows)} XylemBenchmark window(s).")
+    return rows[index_1based - 1]
+
+
+def _scope_to_wrapper(sql: str, ws: int, we: int) -> str:
+    """Inject wrapper-window bounds into every per-pipeline CTE in `sql`.
+
+    Per-pipeline queries use one of two recurring patterns that select the
+    `Pipeline:*` NVTX events:
+      WHERE text LIKE 'Pipeline:%'           (CTE form, ~10x)
+      ON w.text LIKE 'Pipeline:%'            (LEFT JOIN form, query 16)
+    plus query 03's diagnostic dump that also pulls in the XylemBenchmark
+    wrapper rows. The substitutions below add `AND start/end BETWEEN ws..we`
+    so only windows nested in the chosen wrapper survive.
+    """
+    # Query 03's diagnostic dump: keep the wrapper row itself + only the
+    # Pipeline:* rows that sit inside it.
+    sql = sql.replace(
+        "WHERE text LIKE 'Pipeline:%' OR text = 'XylemBenchmark'",
+        f"WHERE (text LIKE 'Pipeline:%' AND start >= {ws} AND end <= {we}) "
+        f"OR (text = 'XylemBenchmark' AND start = {ws})",
+    )
+    # Standard CTE form -- 10+ occurrences.
+    sql = sql.replace(
+        "WHERE text LIKE 'Pipeline:%'",
+        f"WHERE text LIKE 'Pipeline:%' AND start >= {ws} AND end <= {we}",
+    )
+    # Query 16's LEFT JOIN form.
+    sql = sql.replace(
+        "ON w.text LIKE 'Pipeline:%'",
+        f"ON w.text LIKE 'Pipeline:%' AND w.start >= {ws} AND w.end <= {we}",
+    )
+    return sql
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--db", required=True, help="Path to NSight Systems .sqlite report")
     p.add_argument("--out", required=True, help="Output directory for CSVs (created if missing)")
+    p.add_argument("--window-index", type=int, default=None,
+                   help="Optional 1-based index of the XylemBenchmark wrapper "
+                        "to scope every per-pipeline aggregate to. Useful "
+                        "when a single capture spans multiple benchmark "
+                        "invocations (e.g. Hi-Z vs no-Hi-Z back-to-back).")
     args = p.parse_args()
 
     db_path = Path(args.db)
@@ -520,10 +577,20 @@ def main() -> int:
     uri = f"file:{db_path.as_posix()}?mode=ro"
     conn = sqlite3.connect(uri, uri=True)
     try:
+        wrapper_bounds: tuple[int, int] | None = None
+        if args.window_index is not None:
+            wrapper_bounds = _fetch_wrapper_bounds(conn, args.window_index)
+            ws, we = wrapper_bounds
+            print(f"--window-index {args.window_index}: scoping to "
+                  f"XylemBenchmark window [{ws} .. {we}] ns "
+                  f"(duration {(we - ws) / 1e9:.2f}s)")
+
         for name, sql in QUERIES:
+            scoped_sql = (_scope_to_wrapper(sql, *wrapper_bounds)
+                          if wrapper_bounds is not None else sql)
             t0 = time.perf_counter()
             print(f"[{name}] ...", end="", flush=True)
-            n = run_query(conn, name, sql, out_dir)
+            n = run_query(conn, name, scoped_sql, out_dir)
             dt_ms = int((time.perf_counter() - t0) * 1000)
             print(f" {n} rows ({dt_ms} ms) -> {out_dir / (name + '.csv')}")
     finally:

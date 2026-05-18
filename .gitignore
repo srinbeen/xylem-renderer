@@ -1,5 +1,6 @@
 .vscode/
 .claude/
+.venv/
 bin/
 build/
 media/
@@ -7,3 +8,8 @@ examples/
 RenderDoc/
 CLAUDE.md
 todo.txt
+docs/
+scripts/plots/__pycache__
+plots/
+benchmarks/
+scene/legacy/

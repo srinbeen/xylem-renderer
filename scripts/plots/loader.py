@@ -58,6 +58,28 @@ def _load_frames(csv_path: Path) -> pd.DataFrame:
         df.loc[df["gpuMs"] < 0, "gpuMs"] = float("nan")
     # Add derived `fps` column for convenience (NaN where gpuMs is NaN).
     df["fps"] = 1000.0 / df["gpuMs"]
+    # Add derived `visibleFrac` = (mainVisibleTrunk + mainVisibleImpostors)
+    # / totalInstanceCount when the post-schema cull columns are present.
+    # NaN where totalInstanceCount is 0; absent on old (pre-schema) CSVs so
+    # callers should guard on its existence.
+    if all(c in df.columns for c in
+           ("mainVisibleTrunk", "mainVisibleImpostors", "totalInstanceCount")):
+        total = df["totalInstanceCount"].astype(float)
+        df["visibleFrac"] = (
+            (df["mainVisibleTrunk"] + df["mainVisibleImpostors"]) / total
+        ).where(total > 0)
+    # Add derived `shadowFrac` = (shadowCascadeDraws + shadowVisibleImpostors)
+    # / totalInstanceCount. This is the cascade-fanned *total* trunk shadow
+    # workload, so it can exceed 1.0 when a trunk lands in multiple cascades —
+    # i.e. it captures cascade overdraw, the actual cost driver. For an
+    # overdraw-free "what fraction of the scene casts any shadow" measure,
+    # use shadowVisibleTrunk / totalInstanceCount directly.
+    if all(c in df.columns for c in
+           ("shadowCascadeDraws", "shadowVisibleImpostors", "totalInstanceCount")):
+        total = df["totalInstanceCount"].astype(float)
+        df["shadowFrac"] = (
+            (df["shadowCascadeDraws"] + df["shadowVisibleImpostors"]) / total
+        ).where(total > 0)
     return df
 
 

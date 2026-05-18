@@ -11,28 +11,32 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE.parent.parent) not in sys.path:
     sys.path.insert(0, str(_HERE.parent.parent))
 
-from scripts.plots import per_frame, style, nsys, scene_stats
+from scripts.plots import per_frame, nsys
 from scripts.plots.loader import discover
 
 
 PLOT_REGISTRY = {
-    "fps":         (per_frame.plot_fps_over_time, "per_frame"),
-    "cdf":         (per_frame.plot_frame_time_cdf, "per_frame"),
-    "hist":        (per_frame.plot_frame_time_hist, "per_frame"),
-    "bar":         (per_frame.plot_cpu_gpu_bar, "per_frame"),
-    "stage_area":  (per_frame.plot_stage_stacked_area, "per_frame"),
-    "stage_bar":   (per_frame.plot_stage_grouped_bar, "per_frame"),
-    "frame_stats": (per_frame.plot_frame_stats_table, "per_frame"),
-    "stage_stats": (per_frame.plot_stage_stats_table, "per_frame"),
-    "path3d":      (per_frame.plot_camera_path_3d, "per_frame"),
-    "path2d":      (per_frame.plot_camera_path_2d, "per_frame"),
+    "fps_tex":         (per_frame.plot_fps_over_time_tex,           "per_frame"),
+    "cdf_tex":         (per_frame.plot_frame_time_cdf_tex,          "per_frame"),
+    "bar_tex":         (per_frame.plot_cpu_gpu_bar_tex,             "per_frame"),
+    "stage_area_tex":  (per_frame.plot_stage_stacked_area_tex,      "per_frame"),
+    "stage_bar_tex":   (per_frame.plot_stage_grouped_bar_tex,       "per_frame"),
+    "frame_stats":     (per_frame.plot_frame_stats_table,           "per_frame"),
+    "stage_stats":     (per_frame.plot_stage_stats_table,           "per_frame"),
+    "path3d_tex":      (per_frame.plot_camera_path_3d_tex,          "per_frame"),
+    "instance_visibility_tex":     (per_frame.plot_instance_visibility_tex,     "per_frame"),
+    "instance_lod_frac":           (per_frame.plot_instance_lod_fraction_tex,   "per_frame"),
+    "correlation_terrain_tex":     (per_frame.plot_terrain_shadow_meshlet_scatter_tex, "per_frame"),
+    "meshlet_visibility_tex":      (per_frame.plot_meshlet_visibility_tex,      "per_frame"),
+    "instance_visibility_fps_tex": (per_frame.plot_instance_visibility_fps_tex, "per_frame"),
+    "meshlet_visibility_fps_tex":  (per_frame.plot_meshlet_visibility_fps_tex,  "per_frame"),
+    "sun_tex":                     (per_frame.plot_sun_elevation_tex,           "per_frame"),
+    "vis_stats":                   (per_frame.plot_vis_stats_table,             "per_frame"),
     "sm":     (nsys.plot_sm_throughput,   "nsys"),
     "dram":   (nsys.plot_dram_bandwidth,  "nsys"),
     "cache":  (nsys.plot_cache_hit_rates, "nsys"),
     "warps":  (nsys.plot_warp_occupancy,  "nsys"),
     "pix":    (nsys.plot_pix_stages,      "nsys"),
-    "scene_counts": (scene_stats.plot_scene_counts,        "scene"),
-    "scene_yield":  (scene_stats.plot_scene_meshlet_yield, "scene"),
 }
 
 
@@ -51,18 +55,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--plots", default=None,
                         help="Comma-separated plot keys to emit (default: all). "
                              f"Valid keys: {','.join(PLOT_REGISTRY.keys())}")
-    parser.add_argument("--format", default="pdf+png",
-                        choices=("pdf", "png", "pdf+png"),
-                        help="Output format (default: pdf+png)")
-    parser.add_argument("--dpi", type=int, default=200,
-                        help="Raster DPI for PNGs (default: 200)")
     parser.add_argument("--path-color-by", default="fps",
                         help="Column or derived metric used to color the camera path")
     parser.add_argument("--path-arrow-stride", type=int, default=30,
                         help="Subsample stride for direction arrows on the camera path")
     args = parser.parse_args(argv)
-
-    style.apply()
 
     series_list = discover(args.run_dirs, include_partial=args.include_partial)
     if not series_list:
@@ -113,8 +110,6 @@ def main(argv: list[str] | None = None) -> int:
         ],
         "plots": {},
         "options": {
-            "format": args.format,
-            "dpi": args.dpi,
             "pipelines": args.pipelines,
             "include_partial": args.include_partial,
             "path_color_by": args.path_color_by,
@@ -125,8 +120,8 @@ def main(argv: list[str] | None = None) -> int:
     for name in plot_keys:
         fn, subdir = PLOT_REGISTRY[name]
         target = args.out / subdir
-        kwargs = {"fmt": args.format}
-        if name in ("path3d", "path2d"):
+        kwargs: dict = {}
+        if name == "path3d_tex":
             kwargs["color_by"] = args.path_color_by
             kwargs["arrow_stride"] = args.path_arrow_stride
         written = fn(series_list, target, **kwargs)

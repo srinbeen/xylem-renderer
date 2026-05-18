@@ -455,6 +455,7 @@ bool MeshShaderRenderPass::_InitShadowPass() {
         nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Terrain::kSRV_MeshletDescs),
         nvrhi::BindingLayoutItem::StructuredBuffer_SRV(mesh_reg::Terrain::kSRV_MeshletVertIdx),
         nvrhi::BindingLayoutItem::RawBuffer_SRV(mesh_reg::Terrain::kSRV_MeshletPrimIdx),
+        nvrhi::BindingLayoutItem::RawBuffer_UAV(mesh_reg::Terrain::kUAV_ShadowVisibleCounter),
     };
     m_StageResources.shadow.terrainBindingLayout = GetDevice()->createBindingLayout(terrBLD);
     if (!m_StageResources.shadow.terrainBindingLayout) return false;
@@ -634,6 +635,26 @@ void MeshShaderRenderPass::_UploadMeshletMegabuffers(nvrhi::ICommandList* cl) {
         numAssetLods * sizeof(Render::MeshOffsets);
     m_UI.meshletMegaBufferMB = static_cast<float>(totalBytes) / (1024.f * 1024.f);
     m_UI.totalMeshletCount   = totalMeshlets;
+
+    // Per-instance-fanned LOD 0 trunk meshlet count — max possible per-frame
+    // dispatched workload. Used as denominator for "fraction of trunk
+    // meshlets rendered" plots so trunk is on the same scale as leaf/terrain.
+    const auto& assets     = m_Registry.getAssets();
+    const uint32_t numLods = static_cast<uint32_t>(m_Registry.getLodSegments().size());
+    uint32_t trunkInstanceMeshlets = 0;
+    if (numLods > 0) {
+        for (const auto& region : m_Registry.getRegions()) {
+            for (const auto& inst : region.instances) {
+                const size_t ai = m_Registry.assetIndexById(inst.assetId);
+                if (ai == SIZE_MAX) continue;
+                const size_t lod0Slot = ai * numLods + 0;
+                if (lod0Slot < m_MeshletMegabuffers.meshOffsets.size())
+                    trunkInstanceMeshlets +=
+                        m_MeshletMegabuffers.meshOffsets[lod0Slot].meshletCount;
+            }
+        }
+    }
+    m_UI.totalTrunkInstanceMeshletCount = trunkInstanceMeshlets;
 }
 
 // ===========================================================================
@@ -1142,9 +1163,9 @@ void MeshShaderRenderPass::_UploadCullBuffers(nvrhi::ICommandList* cl) {
     m_ReadbackImpostorEntries       = numAssets;
     m_ReadbackShadowImpostorEntries = numAssets * XYLEM_NUM_CASCADES;
     // Layout: [mainCounts][shadowCounts][impostorCounts][shadowImpostorCounts][shadowUnique]
-    //         [mainLeafSurvivors][shadowLeafSurvivors][terrainSurvivors][meshletStats × 8]
+    //         [mainLeafSurvivors][shadowLeafSurvivors][terrainSurvivors][shadowTerrainSurvivors][meshletStats × 8]
     const uint64_t readbackSize =
-        (m_ReadbackMainEntries + m_ReadbackShadowEntries + m_ReadbackImpostorEntries + m_ReadbackShadowImpostorEntries + 4 + 8) * sizeof(uint32_t);
+        (m_ReadbackMainEntries + m_ReadbackShadowEntries + m_ReadbackImpostorEntries + m_ReadbackShadowImpostorEntries + 5 + 8) * sizeof(uint32_t);
     for (uint32_t i = 0; i < k_QueuedFrames; i++) {
         m_ReadbackBuffers[i] = device->createBuffer(nvrhi::BufferDesc()
             .setByteSize(readbackSize)
@@ -1693,6 +1714,19 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         k_ShadowRes,
         m_UI.pssmLambda);
 
+    // Publish CPU-fitted cascade splits / texel size to UIData so the benchmark
+    // CSV and on-screen UI have valid values even when Hi-Z is off (SDSM doesn't
+    // run, so the later readback won't overwrite these). When Hi-Z is on, the
+    // SDSM readback later in this Render() overwrites both fields with the
+    // GPU-fitted values.
+    for (uint32_t c = 0; c < Render::c_NumCascades; ++c) {
+        const dm::box3& cBbox = m_ViewHandler.cascades[c].shadowCasterBboxLS;
+        m_UI.cascadeTexelSize[c] = cBbox.isempty()
+            ? 0.f
+            : cBbox.diagonal().x / float(k_ShadowRes);
+        m_UI.sdsmCascadeSplits[c] = m_ViewHandler.cascadeSplitDistances[c];
+    }
+
     bool hizActive = m_UI.hizEnabled;
 
     m_CommandList->open();
@@ -1874,11 +1908,18 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         m_CommandList->dispatch((m_TotalCapacity + 255) / 256, 1, 1);
         m_CommandList->endMarker();
 
-        m_CommandList->beginMarker("ShadowDispatch");
-        cs.pipeline = m_StageResources.cull.shadowPipeline;
-        m_CommandList->setComputeState(cs);
-        m_CommandList->dispatch((m_TotalCapacity + 255) / 256, 1, 1);
-        m_CommandList->endMarker();
+        // Skip the per-instance shadow cull entirely when shadows are off
+        // (sun below horizon). The shadow draw is already gated below; the
+        // shadow count/unique/impostor-count buffers were cleared at the top
+        // of this frame, so the readback naturally reports 0 in lockstep
+        // with the AS-side meshlet counters.
+        if (m_Registry.getSunSkyState().shadowsEnabled) {
+            m_CommandList->beginMarker("ShadowDispatch");
+            cs.pipeline = m_StageResources.cull.shadowPipeline;
+            m_CommandList->setComputeState(cs);
+            m_CommandList->dispatch((m_TotalCapacity + 255) / 256, 1, 1);
+            m_CommandList->endMarker();
+        }
     }
     frame::EndGpuStage(m_CommandList,
                        m_StageTimers[static_cast<size_t>(frame::FrameStage::Cull)],
@@ -1918,6 +1959,14 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         frame::BeginGpuStage(m_CommandList, GetDevice(),
                              m_StageTimers[static_cast<size_t>(frame::FrameStage::Shadow)],
                              m_StageNextIdx[static_cast<size_t>(frame::FrameStage::Shadow)]);
+
+        // Reset the shadow terrain survivor counter every frame even when
+        // shadows are disabled — otherwise the UI/CSV stat would retain the
+        // last value from when shadows were on. shadow_terrain_as accumulates
+        // into it across all cascades.
+        if (m_StageResources.sceneTerrain.shadowVisibleCounterBuffer) {
+            m_CommandList->clearBufferUInt(m_StageResources.sceneTerrain.shadowVisibleCounterBuffer, 0);
+        }
 
         if (m_Registry.getSunSkyState().shadowsEnabled) {
         // Clear all cascades.
@@ -2105,7 +2154,8 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     // shadow + main color leaf draws so the AS-side atomics are committed. The
     // trunk readback copy at step 4 wrote into
     // [main][shadow][impostor][shadowImpostor][shadowUnique]; the leaf and
-    // terrain counters land at [mainLeafSurvivors][shadowLeafSurvivors][terrainSurvivors],
+    // terrain counters land at
+    // [mainLeafSurvivors][shadowLeafSurvivors][terrainSurvivors][shadowTerrainSurvivors],
     // followed by the 8-uint meshlet stats block.
     {
         const uint32_t ringSlot = m_ReadbackFrameIndex % k_QueuedFrames;
@@ -2123,7 +2173,12 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
                                       m_StageResources.sceneTerrain.visibleCounterBuffer, 0,
                                       sizeof(uint32_t));
         }
-        const uint64_t meshletStatsOffset = leafBaseOffset + 3 * sizeof(uint32_t);
+        if (m_StageResources.sceneTerrain.shadowVisibleCounterBuffer) {
+            m_CommandList->copyBuffer(m_ReadbackBuffers[ringSlot], leafBaseOffset + 3 * sizeof(uint32_t),
+                                      m_StageResources.sceneTerrain.shadowVisibleCounterBuffer, 0,
+                                      sizeof(uint32_t));
+        }
+        const uint64_t meshletStatsOffset = leafBaseOffset + 4 * sizeof(uint32_t);
         m_CommandList->copyBuffer(m_ReadbackBuffers[ringSlot], meshletStatsOffset,
                                   m_StageResources.cull.meshletStatsBuffer, 0,
                                   8 * sizeof(uint32_t));
@@ -2212,12 +2267,13 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
                 }
             }
 
-            uint32_t shadowUnique       = counts[shadowImpostorOffset + m_ReadbackShadowImpostorEntries];
-            uint32_t leafMainSurvivors  = counts[shadowImpostorOffset + m_ReadbackShadowImpostorEntries + 1];
-            uint32_t leafShadowSurvivors= counts[shadowImpostorOffset + m_ReadbackShadowImpostorEntries + 2];
-            uint32_t terrainSurvivors   = counts[shadowImpostorOffset + m_ReadbackShadowImpostorEntries + 3];
+            uint32_t shadowUnique         = counts[shadowImpostorOffset + m_ReadbackShadowImpostorEntries];
+            uint32_t leafMainSurvivors    = counts[shadowImpostorOffset + m_ReadbackShadowImpostorEntries + 1];
+            uint32_t leafShadowSurvivors  = counts[shadowImpostorOffset + m_ReadbackShadowImpostorEntries + 2];
+            uint32_t terrainSurvivors     = counts[shadowImpostorOffset + m_ReadbackShadowImpostorEntries + 3];
+            uint32_t shadowTerrainSurvivors = counts[shadowImpostorOffset + m_ReadbackShadowImpostorEntries + 4];
 
-            const uint32_t meshletStatsOffset = shadowImpostorOffset + m_ReadbackShadowImpostorEntries + 4;
+            const uint32_t meshletStatsOffset = shadowImpostorOffset + m_ReadbackShadowImpostorEntries + 5;
             uint32_t trunkMainConsidered   = counts[meshletStatsOffset + 0];
             uint32_t trunkMainSurvived     = counts[meshletStatsOffset + 1];
             uint32_t trunkShadowConsidered = counts[meshletStatsOffset + 2];
@@ -2247,7 +2303,8 @@ void MeshShaderRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
                 m_UI.shadowGeomDrawsPerCascade[c]      = perCascadeShadow[c];
                 m_UI.shadowBillboardDrawsPerCascade[c] = perCascadeShadowImpostor[c];
             }
-            m_UI.visibleTerrainMeshletCount = terrainSurvivors;
+            m_UI.visibleTerrainMeshletCount       = terrainSurvivors;
+            m_UI.shadowVisibleTerrainMeshletCount = shadowTerrainSurvivors;
 
             m_UI.trunkMainMeshletsDispatched   = trunkMainConsidered;
             m_UI.trunkMainMeshletsRendered     = trunkMainSurvived;
@@ -2560,8 +2617,10 @@ bool MeshShaderRenderPass::_InitTerrainPass(nvrhi::ICommandList* initCL) {
         initCL->setPermanentBufferState(T.meshletPrimIdxBuffer, nvrhi::ResourceStates::ShaderResource);
     }
 
-    // Per-frame survivor counter — single uint32 raw UAV. Cleared at frame start
-    // by clearBufferUInt; copied to readback ring after the AS dispatch.
+    // Per-frame survivor counters — single uint32 raw UAVs. Cleared at frame
+    // start by clearBufferUInt; copied to readback ring after the AS dispatch.
+    // Main counter accumulates eye-view AS survivors; shadow counter accumulates
+    // light-view AS survivors across ALL cascades.
     nvrhi::BufferDesc counterBD;
     counterBD.byteSize       = sizeof(uint32_t);
     counterBD.canHaveUAVs    = true;
@@ -2570,6 +2629,9 @@ bool MeshShaderRenderPass::_InitTerrainPass(nvrhi::ICommandList* initCL) {
     counterBD.initialState   = nvrhi::ResourceStates::UnorderedAccess;
     counterBD.keepInitialState = true;
     T.visibleCounterBuffer = GetDevice()->createBuffer(counterBD);
+
+    counterBD.debugName    = "MeshTerrainShadowVisibleCounter";
+    T.shadowVisibleCounterBuffer = GetDevice()->createBuffer(counterBD);
 
     _RebuildTerrainBindingSet();
     m_UI.totalTerrainMeshletCount = T.meshletCount;
@@ -2586,7 +2648,9 @@ void MeshShaderRenderPass::_RebuildTerrainBindingSet() {
     // Shadow terrain binding set only needs positions + meshlet buffers + frame
     // CB — build it as soon as those exist, ahead of the eye-view set's Hi-Z
     // gate. shadow_terrain_ms reads only position (normal/uv unused for depth).
-    if (m_StageResources.shadow.terrainBindingLayout) {
+    // shadow_terrain_as does an InterlockedAdd into shadowVisibleCounterBuffer
+    // to surface a per-frame survivor count to the UI.
+    if (m_StageResources.shadow.terrainBindingLayout && T.shadowVisibleCounterBuffer) {
         nvrhi::BindingSetDesc shadowBSD;
         shadowBSD.bindings = {
             nvrhi::BindingSetItem::PushConstants(mesh_reg::Terrain::kPushC_Cascade, sizeof(uint32_t)),
@@ -2596,6 +2660,7 @@ void MeshShaderRenderPass::_RebuildTerrainBindingSet() {
             nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Terrain::kSRV_MeshletDescs,   T.meshletDescBuffer),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(mesh_reg::Terrain::kSRV_MeshletVertIdx, T.meshletVertIdxBuffer),
             nvrhi::BindingSetItem::RawBuffer_SRV(mesh_reg::Terrain::kSRV_MeshletPrimIdx,  T.meshletPrimIdxBuffer),
+            nvrhi::BindingSetItem::RawBuffer_UAV(mesh_reg::Terrain::kUAV_ShadowVisibleCounter, T.shadowVisibleCounterBuffer),
         };
         m_StageResources.shadow.terrainBindingSet = GetDevice()->createBindingSet(
             shadowBSD, m_StageResources.shadow.terrainBindingLayout);

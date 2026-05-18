@@ -304,7 +304,8 @@ private:
         nvrhi::BufferHandle                    meshletDescBuffer;
         nvrhi::BufferHandle                    meshletVertIdxBuffer;
         nvrhi::BufferHandle                    meshletPrimIdxBuffer;  // raw byte buffer
-        nvrhi::BufferHandle                    visibleCounterBuffer;  // RW raw UAV, single uint
+        nvrhi::BufferHandle                    visibleCounterBuffer;        // RW raw UAV, single uint (main pass)
+        nvrhi::BufferHandle                    shadowVisibleCounterBuffer;  // RW raw UAV, single uint (sum across cascades)
         uint32_t                               meshletCount = 0;
         nvrhi::BindingLayoutHandle             bindingLayout;
         nvrhi::BindingSetHandle                bindingSet;

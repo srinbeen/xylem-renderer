@@ -255,6 +255,7 @@
     { "namespace": ["Mesh", "Terrain"], "name": "kSRV_Normals", "kind": "t", "slot": 14 },
     { "namespace": ["Mesh", "Terrain"], "name": "kSRV_UVs", "kind": "t", "slot": 15 },
     { "namespace": ["Mesh", "Terrain"], "name": "kUAV_VisibleCounter", "kind": "u", "slot": 0 },
+    { "namespace": ["Mesh", "Terrain"], "name": "kUAV_ShadowVisibleCounter", "kind": "u", "slot": 1 },
     { "namespace": ["Mesh", "Terrain"], "name": "kSampler_Shadow", "kind": "s", "slot": 0 },
     { "namespace": ["Mesh", "Terrain"], "name": "kSampler_Aniso", "kind": "s", "slot": 1 },
 

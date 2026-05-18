@@ -276,6 +276,7 @@ inline constexpr uint32_t kTex_RockNor = 6;
 inline constexpr uint32_t kTex_ShadowMap = 0;
 inline constexpr uint32_t kTex_SnowDiff = 7;
 inline constexpr uint32_t kTex_SnowNor = 8;
+inline constexpr uint32_t kUAV_ShadowVisibleCounter = 1;
 inline constexpr uint32_t kUAV_VisibleCounter = 0;
 } // namespace Terrain
 

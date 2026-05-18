@@ -96,7 +96,8 @@ Texture2D    t_RockNor    : register(XY_REG_T_MESH_TERRAIN_TEX_ROCK_NOR);
 Texture2D    t_SnowDiff   : register(XY_REG_T_MESH_TERRAIN_TEX_SNOW_DIFF);
 Texture2D    t_SnowNor    : register(XY_REG_T_MESH_TERRAIN_TEX_SNOW_NOR);
 
-RWByteAddressBuffer                  u_VisibleCounter : register(XY_REG_U_MESH_TERRAIN_UAV_VISIBLE_COUNTER);
+RWByteAddressBuffer                  u_VisibleCounter       : register(XY_REG_U_MESH_TERRAIN_UAV_VISIBLE_COUNTER);
+RWByteAddressBuffer                  u_ShadowVisibleCounter : register(XY_REG_U_MESH_TERRAIN_UAV_SHADOW_VISIBLE_COUNTER);
 
 SamplerComparisonState s_ShadowSampler : register(XY_REG_S_MESH_TERRAIN_SAMPLER_SHADOW);
 SamplerState           s_Aniso         : register(XY_REG_S_MESH_TERRAIN_SAMPLER_ANISO);
@@ -461,6 +462,9 @@ void shadow_terrain_as(uint3 gid : SV_GroupID, uint gtid : SV_GroupThreadID)
         }
     }
     GroupMemoryBarrierWithGroupSync();
+
+    if (gtid == 0 && s_shadowSurvivors > 0)
+        u_ShadowVisibleCounter.InterlockedAdd(0, s_shadowSurvivors);
 
     DispatchMesh(s_shadowSurvivors, 1, 1, s_shadowPayload);
 }

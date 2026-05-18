@@ -212,6 +212,82 @@ private:
         bool       gpuMsBound = false;  // false until late-binding fills gpuMs
         dm::float3 camPos{};
         dm::float3 camDir{};
+
+        // Sun state. Populated alongside cull counters in _AppendRowFromUI from
+        // UIData::sunElevationDeg (computed by the orchestrator each Animate).
+        float      sunElevationDeg = 0.f;
+
+        // Visibility / cull counters split by main vs shadow path. These are
+        // frame-aligned with gpuMs:
+        //   - P0 (Traditional) sets them in _AppendRowFromUI from the CPU
+        //     cull's synchronous m_UI writes.
+        //   - P1/P2 (Compute, MeshShader) initialise them in _AppendRowFromUI
+        //     too (with whatever m_UI currently holds — i.e. a value from
+        //     k_QueuedFrames-1 frames ago, stale), then _LateBindGpuTimes
+        //     overwrites them with the correctly-aged readback when this
+        //     row's matching gpuMs becomes available. Both come off the
+        //     same ring slot in the same Render() call so they share a
+        //     frame index.
+        //
+        // Main path (camera frustum + Hi-Z).
+        uint32_t   mainVisibleTrunk     = 0;  // Σ lodVisibleCounts[] (convenience aggregate)
+        uint32_t   mainVisibleLeaves    = 0;  // visibleLeafInstanceCount; see UIData note
+        uint32_t   mainVisibleImpostors = 0;  // impostorVisibleCount
+
+        // Per-LOD breakdown of mainVisibleTrunk. Index = LOD number (0 =
+        // highest detail). Indices beyond UIData::lodCountForUI are zero.
+        // Bind together for the per-LOD fraction stack plot.
+        uint32_t   mainVisibleByLod[UIData::kMaxLodsForUI] = {};
+
+        // Scene-wide registered trunk instance count (= UIData::totalInstanceCount).
+        // Denominator for fraction-visible plots. Recorded per-row so a region
+        // edit mid-recording (rare but possible via UI) still yields correct
+        // fractions on either side of the change.
+        uint32_t   totalInstanceCount = 0;
+
+        // Shadow path (per-cascade light frustums; no Hi-Z).
+        uint32_t   shadowVisibleTrunk     = 0;  // unique across cascades
+        uint32_t   shadowVisibleLeaves    = 0;  // shadowVisibleLeafInstanceCount; see UIData note
+        uint32_t   shadowVisibleImpostors = 0;  // total across (asset, cascade)
+        uint32_t   shadowCascadeDraws     = 0;  // Σ per-cascade visible (counts overdraw)
+
+        // Per-cascade geometry / impostor breakdown of the shadow path.
+        // Index = cascade [0..Render::c_NumCascades). Sum identity (sanity check):
+        //   shadowCascadeDraws     == Σ_c shadowGeomCascade[c]
+        //   shadowVisibleImpostors == Σ_c shadowImpostorCascade[c]
+        // Bind together for the per-cascade shadow fraction stack plot.
+        uint32_t   shadowGeomCascade[Render::c_NumCascades]     = {};
+        uint32_t   shadowImpostorCascade[Render::c_NumCascades] = {};
+
+        // P2-only AS-meshlet cull stats. dispatched - rendered = AS-culled count.
+        // Zero on P0 / P1 (no meshlet concept).
+        uint32_t   trunkMainMeshletsDispatched   = 0;
+        uint32_t   trunkMainMeshletsRendered     = 0;
+        uint32_t   trunkShadowMeshletsDispatched = 0;
+        uint32_t   trunkShadowMeshletsRendered   = 0;
+        uint32_t   leafMainMeshletsDispatched    = 0;
+        uint32_t   leafMainMeshletsRendered      = 0;
+        uint32_t   leafShadowMeshletsDispatched  = 0;
+        uint32_t   leafShadowMeshletsRendered    = 0;
+        // Terrain has no per-instance cull, so dispatched ≡ total terrain meshlets
+        // for that frame's scene (read from sceneStats.terrainMeshlets); only the
+        // post-AS-cull "rendered" count is recorded per row. Shadow rendered
+        // accumulates across all cascades.
+        uint32_t   terrainMainMeshletsRendered   = 0;
+        uint32_t   terrainShadowMeshletsRendered = 0;
+
+        // Per-cascade shadow-fit metrics. Snapshotted from UIData in
+        // _AppendRowFromUI only (NOT re-bound in _LateBindGpuTimes): every pass
+        // now writes CPU values right after ComputeCascades, and on hizActive
+        // P1/P2 the SDSM readback overwrites with GPU-fitted values later in
+        // the same Render(). So row N captures whatever the pass produced for
+        // frame N — CPU when Hi-Z is off, GPU (lagged k_QueuedFrames frames)
+        // when Hi-Z is on.
+        //   cascadeTexelSize : world-space size of one shadow texel per cascade.
+        //   sdsmCascadeSplits: per-cascade far-plane split distances (PSSM/SDSM
+        //                      blend on CPU; tightened by GPU SDSM when Hi-Z on).
+        float      cascadeTexelSize[Render::c_NumCascades]  = {};
+        float      sdsmCascadeSplits[Render::c_NumCascades] = {};
     };
 
     // Scene-content totals. Snapshotted from UIData when each pipeline's
@@ -226,6 +302,10 @@ private:
         uint32_t leafMeshlets     = 0;
         uint32_t terrainVerts     = 0;
         uint32_t terrainMeshlets  = 0; // P2-only
+        // Shadow path dispatches the full terrain meshlet set once per cascade,
+        // so the AS-considered total per frame is terrainMeshlets × c_NumCascades.
+        // Used as the denominator for shadow-terrain rendered/dispatched plots.
+        uint32_t terrainShadowMeshletsDispatched = 0; // P2-only
     };
 
     // Per-pipeline run state, reset on each StartPipeline transition.
@@ -260,6 +340,15 @@ private:
     void _OverrideCameraThisFrame();
     void _AppendRowFromUI();
     void _LateBindGpuTimes();
+    // Copy the m_UI counters that come from the active render pass's GPU
+    // readback ring (per-LOD instance counts, leaf survivor atomics,
+    // per-cascade shadow breakdowns, AS-meshlet stats). Called from both
+    // _AppendRowFromUI (initial fill — correct for P0, stale for P1/P2 but
+    // about to be overwritten) and _LateBindGpuTimes (overwrites P1/P2's
+    // stale values with the correctly-aged readback once gpuMs lands for
+    // the same ring slot). Not called for sun / totalInstanceCount /
+    // camera state, which are CPU-direct and never lagged.
+    void _SnapshotCullCountersFromUI(MetricsRow& r) const;
     void _UpdateProgressLabel();
     void _WritePipelineCsv(const PipelineRun& run);
     void _WriteRunSummary();

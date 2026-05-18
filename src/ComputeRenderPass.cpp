@@ -1408,6 +1408,19 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         k_ShadowRes,
         m_UI.pssmLambda);
 
+    // Publish CPU-fitted cascade splits / texel size to UIData so the benchmark
+    // CSV and on-screen UI have valid values even when Hi-Z is off (SDSM doesn't
+    // run, so the later readback won't overwrite these). When Hi-Z is on, the
+    // SDSM readback later in this Render() overwrites both fields with the
+    // GPU-fitted values.
+    for (uint32_t c = 0; c < Render::c_NumCascades; ++c) {
+        const dm::box3& cBbox = m_ViewHandler.cascades[c].shadowCasterBboxLS;
+        m_UI.cascadeTexelSize[c] = cBbox.isempty()
+            ? 0.f
+            : cBbox.diagonal().x / float(k_ShadowRes);
+        m_UI.sdsmCascadeSplits[c] = m_ViewHandler.cascadeSplitDistances[c];
+    }
+
     // --- Fill CullConstantBufferEntry ---
     Render::CullConstantBufferEntry constants{};
     frame::FillCommonFrameConstants(constants, m_ViewHandler, m_Registry.getSunSkyState());
@@ -1549,17 +1562,21 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     }
     m_CommandList->endMarker();
 
-    // Shadow cull
-    m_CommandList->beginMarker("ShadowDispatch");
-    {
-        nvrhi::ComputeState cs;
-        cs.pipeline = m_StageResources.cull.shadowPipeline;
-        cs.bindings = { m_StageResources.cull.bindingSet };
-        m_CommandList->setComputeState(cs);
-        m_CommandList->dispatch(
-            (m_TotalCapacity + 255) / 256, 1, 1);
+    // Shadow cull. Skipped when shadows are off (sun below horizon); the
+    // shadow draw below is gated the same way and the count/unique buffers
+    // were cleared at the top of this frame, so the readback reports 0.
+    if (m_Registry.getSunSkyState().shadowsEnabled) {
+        m_CommandList->beginMarker("ShadowDispatch");
+        {
+            nvrhi::ComputeState cs;
+            cs.pipeline = m_StageResources.cull.shadowPipeline;
+            cs.bindings = { m_StageResources.cull.bindingSet };
+            m_CommandList->setComputeState(cs);
+            m_CommandList->dispatch(
+                (m_TotalCapacity + 255) / 256, 1, 1);
+        }
+        m_CommandList->endMarker();
     }
-    m_CommandList->endMarker();
 
     frame::EndGpuStage(m_CommandList,
                        m_StageTimers[static_cast<size_t>(frame::FrameStage::Cull)],
@@ -1792,8 +1809,9 @@ void ComputeRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_UI.leafMainMeshletsRendered      = 0;
     m_UI.leafShadowMeshletsDispatched  = 0;
     m_UI.leafShadowMeshletsRendered    = 0;
-    m_UI.totalTerrainMeshletCount      = 0;
-    m_UI.visibleTerrainMeshletCount    = 0;
+    m_UI.totalTerrainMeshletCount         = 0;
+    m_UI.visibleTerrainMeshletCount       = 0;
+    m_UI.shadowVisibleTerrainMeshletCount = 0;
     if (const auto* terrain = m_Registry.getTerrain()) {
         m_UI.totalTerrainVertexCount = static_cast<uint32_t>(terrain->getVertices().size());
     } else {

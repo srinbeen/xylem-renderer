@@ -2,7 +2,11 @@
 #include "include/SceneLoader.hpp"
 #include "include/frame/FrameLifecycle.hpp"
 #include <donut/core/log.h>
+#include <donut/core/math/math.h>
 #include <imgui.h>
+
+#include <algorithm>
+#include <cmath>
 
 using namespace Xylem;
 
@@ -154,10 +158,22 @@ void RenderOrchestrator::Animate(float seconds)
         m_ViewHandler.camera.Animate(seconds);
     }
 
-    if (resetSunPhase) {
+    // When the sun is paused, the scene's authored phase is the intended
+    // orientation — keep it. When unpaused, reset so every pipeline's
+    // recording starts from an identical phase.
+    if (resetSunPhase && !m_Registry.getSunSky().paused) {
         m_Registry.getSunSkyMutable().phase = 0.f;
     }
     m_Registry.advanceSunSky(m_Benchmark.GetSimulationTickSeconds(seconds));
+
+    // Surface sun elevation for downstream consumers (benchmark CSV, UI).
+    // SunSkyState::lightDir is the direction the light *travels* (sun → scene),
+    // so the sun itself lies along -lightDir; elevation = asin((-lightDir).y).
+    {
+        const auto& sunState = m_Registry.getSunSkyState();
+        const float y = std::clamp(-sunState.lightDir.y, -1.0f, 1.0f);
+        m_UI.sunElevationDeg = std::asin(y) * (180.0f / dm::PI_f);
+    }
 
     // Drive the dirty cycle here so SharedGPUAssets re-bakes the impostor atlas
     // *after* CPU mesh data is regenerated and *before* the active pass rebuilds

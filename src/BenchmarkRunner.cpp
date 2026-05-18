@@ -372,11 +372,13 @@ void BenchmarkRunner::PostRender()
             // so e.g. an empty-terrain scene doesn't claim trunk meshlets
             // from unreferenced L-system asset definitions.
             finishedRun.sceneStats.trunkInstances  = m_UI.totalInstanceCount;
-            finishedRun.sceneStats.trunkMeshlets   = m_UI.totalInstanceCount     > 0 ? m_UI.totalMeshletCount     : 0;
+            finishedRun.sceneStats.trunkMeshlets   = m_UI.totalInstanceCount     > 0 ? m_UI.totalTrunkInstanceMeshletCount : 0;
             finishedRun.sceneStats.leafInstances   = m_UI.totalLeafInstanceCount;
             finishedRun.sceneStats.leafMeshlets    = m_UI.totalLeafInstanceCount > 0 ? m_UI.totalLeafMeshletCount : 0;
             finishedRun.sceneStats.terrainVerts    = m_UI.totalTerrainVertexCount;
             finishedRun.sceneStats.terrainMeshlets = m_UI.totalTerrainMeshletCount;
+            finishedRun.sceneStats.terrainShadowMeshletsDispatched =
+                m_UI.totalTerrainMeshletCount * Render::c_NumCascades;
             _WritePipelineCsv(finishedRun);
             _StartNextPipeline();
             break;
@@ -531,7 +533,65 @@ void BenchmarkRunner::_AppendRowFromUI()
         r.camPos = sample->position;
         r.camDir = sample->lookDir;
     }
+
+    // CPU-direct fields that never lag: sun phase + total instance capacity.
+    r.sunElevationDeg    = m_UI.sunElevationDeg;
+    r.totalInstanceCount = m_UI.totalInstanceCount;
+
+    // Cascade splits + texel size: every pass now writes these from CPU
+    // ViewHandler::cascadeSplitDistances / shadowCasterBboxLS right after
+    // ComputeCascades, and on hizActive P1/P2 the SDSM readback later in the
+    // same Render() overwrites both with GPU-fitted values. Snapshot at append
+    // time so row N captures frame N's UIData. Intentionally NOT included in
+    // _SnapshotCullCountersFromUI / _LateBindGpuTimes: re-snapshotting would
+    // bind row N to a *later* frame's CPU write when Hi-Z is off.
+    for (uint32_t c = 0; c < Render::c_NumCascades; ++c) {
+        r.cascadeTexelSize[c]  = m_UI.cascadeTexelSize[c];
+        r.sdsmCascadeSplits[c] = m_UI.sdsmCascadeSplits[c];
+    }
+
+    // Initial cull-counter fill. Correct for P0 (CPU cull is synchronous);
+    // for P1/P2 these snapshot the m_UI values that are still from the
+    // readback ring's oldest slot (i.e. ~k_QueuedFrames-1 frames ago) and
+    // will be overwritten in _LateBindGpuTimes once this row's matching
+    // gpuMs becomes available.
+    _SnapshotCullCountersFromUI(r);
+
     run.rows.push_back(r);
+}
+
+void BenchmarkRunner::_SnapshotCullCountersFromUI(MetricsRow& r) const
+{
+    uint32_t mainTrunk = 0;
+    const uint32_t lodN = std::min<uint32_t>(m_UI.lodCountForUI, UIData::kMaxLodsForUI);
+    for (uint32_t i = 0; i < UIData::kMaxLodsForUI; ++i) {
+        r.mainVisibleByLod[i] = (i < lodN) ? m_UI.lodVisibleCounts[i] : 0;
+        if (i < lodN) mainTrunk += m_UI.lodVisibleCounts[i];
+    }
+    r.mainVisibleTrunk     = mainTrunk;
+    r.mainVisibleLeaves    = m_UI.visibleLeafInstanceCount;
+    r.mainVisibleImpostors = m_UI.impostorVisibleCount;
+
+    r.shadowVisibleTrunk     = m_UI.shadowVisibleCount;
+    r.shadowVisibleLeaves    = m_UI.shadowVisibleLeafInstanceCount;
+    r.shadowVisibleImpostors = m_UI.shadowImpostorVisibleCount;
+    r.shadowCascadeDraws     = m_UI.shadowCascadeDrawCount;
+
+    for (uint32_t c = 0; c < Render::c_NumCascades; ++c) {
+        r.shadowGeomCascade[c]     = m_UI.shadowGeomDrawsPerCascade[c];
+        r.shadowImpostorCascade[c] = m_UI.shadowBillboardDrawsPerCascade[c];
+    }
+
+    r.trunkMainMeshletsDispatched   = m_UI.trunkMainMeshletsDispatched;
+    r.trunkMainMeshletsRendered     = m_UI.trunkMainMeshletsRendered;
+    r.trunkShadowMeshletsDispatched = m_UI.trunkShadowMeshletsDispatched;
+    r.trunkShadowMeshletsRendered   = m_UI.trunkShadowMeshletsRendered;
+    r.leafMainMeshletsDispatched    = m_UI.leafMainMeshletsDispatched;
+    r.leafMainMeshletsRendered      = m_UI.leafMainMeshletsRendered;
+    r.leafShadowMeshletsDispatched  = m_UI.leafShadowMeshletsDispatched;
+    r.leafShadowMeshletsRendered    = m_UI.leafShadowMeshletsRendered;
+    r.terrainMainMeshletsRendered   = m_UI.visibleTerrainMeshletCount;
+    r.terrainShadowMeshletsRendered = m_UI.shadowVisibleTerrainMeshletCount;
 }
 
 void BenchmarkRunner::_LateBindGpuTimes()
@@ -544,6 +604,18 @@ void BenchmarkRunner::_LateBindGpuTimes()
     // This is best-effort alignment: with k_QueuedFrames in flight, the GPU
     // result for row N may arrive a few frames late. The DrainTimers state
     // keeps frames ticking until every row is bound.
+    //
+    // For P1/P2, we ALSO re-snapshot cull counters here, overwriting the
+    // (stale) values that _AppendRowFromUI wrote N frames ago. The cull
+    // readback unmap and RotateAndReadGpuTimer both run in the same
+    // Render() call and both touch m_UI from the same ring slot, so by
+    // the time gpuMs is ready for row N, the cull-counter m_UI fields
+    // are also from frame N. For P0, cull counters were set synchronously
+    // (CPU cull) in _AppendRowFromUI and must NOT be overwritten — the
+    // m_UI values now reflect the *current* frame, not row N's frame.
+    const bool isGpuCullPipeline =
+        (run.pipeline == Pipeline::Compute || run.pipeline == Pipeline::MeshShader);
+
     for (auto& r : run.rows) {
         if (!r.gpuMsBound) {
             // Sentinel: m_UI.gpuFrameTimeMs starts at -1.0f and is reset to
@@ -558,6 +630,9 @@ void BenchmarkRunner::_LateBindGpuTimes()
                 // in the CSV.
                 for (size_t s = 0; s < static_cast<size_t>(frame::FrameStage::COUNT); ++s) {
                     r.gpuStageMs[s] = m_UI.gpuStageTimeMs[s];
+                }
+                if (isGpuCullPipeline) {
+                    _SnapshotCullCountersFromUI(r);
                 }
                 r.gpuMsBound = true;
             }
@@ -611,12 +686,46 @@ void BenchmarkRunner::_WritePipelineCsv(const PipelineRun& run)
         return;
     }
 
-    // Stage columns inserted between gpuMs and camPosX. Order matches
-    // frame::FrameStage enum (DepthPrepass=0 ... Scene=6). Stages a pipeline
-    // doesn't run write -1; analyst code can mask them out as `df > 0`.
+    // Column layout:
+    //   timing block      : frameIdx, simTimeMs, cpuMs, gpuMs
+    //   per-stage block   : depthPrepassMs ... sceneMs (frame::FrameStage order)
+    //   camera block      : camPos*, camDir*
+    //   sun block         : sunElevationDeg
+    //   main vis block    : mainVisibleTrunk/Leaves/Impostors
+    //   shadow vis block  : shadowVisibleTrunk/Leaves/Impostors, shadowCascadeDraws
+    //   cascade fit block : cascadeTexelSize{c}, sdsmCascadeSplit{c}
+    //                       (texel size is P0/P1/P2; splits are P2-only, 0 elsewhere)
+    //   P2 meshlet block  : trunk + leaf x main + shadow x dispatched + rendered
+    // -1 in a stage cell = pipeline doesn't run that stage. The cull / meshlet
+    // columns are unsigned and default to 0 on pipelines that don't populate
+    // them (P0/P1 for meshlets, P0 for leaf-AS atomics, etc.).
     out << "frameIdx,simTimeMs,cpuMs,gpuMs,"
            "depthPrepassMs,hizMs,sdsmMs,cullMs,shadowMs,skyMs,sceneMs,"
-           "camPosX,camPosY,camPosZ,camDirX,camDirY,camDirZ\n";
+           "camPosX,camPosY,camPosZ,camDirX,camDirY,camDirZ,"
+           "sunElevationDeg,"
+           "totalInstanceCount,"
+           "mainVisibleTrunk,mainVisibleLeaves,mainVisibleImpostors,";
+    for (uint32_t i = 0; i < UIData::kMaxLodsForUI; ++i) {
+        out << "mainVisibleLod" << i << ',';
+    }
+    out << "shadowVisibleTrunk,shadowVisibleLeaves,shadowVisibleImpostors,shadowCascadeDraws,";
+    for (uint32_t c = 0; c < Render::c_NumCascades; ++c) {
+        out << "shadowGeomCascade" << c << ',';
+    }
+    for (uint32_t c = 0; c < Render::c_NumCascades; ++c) {
+        out << "shadowImpostorCascade" << c << ',';
+    }
+    for (uint32_t c = 0; c < Render::c_NumCascades; ++c) {
+        out << "cascadeTexelSize" << c << ',';
+    }
+    for (uint32_t c = 0; c < Render::c_NumCascades; ++c) {
+        out << "sdsmCascadeSplit" << c << ',';
+    }
+    out << "trunkMainMeshletsDispatched,trunkMainMeshletsRendered,"
+           "trunkShadowMeshletsDispatched,trunkShadowMeshletsRendered,"
+           "leafMainMeshletsDispatched,leafMainMeshletsRendered,"
+           "leafShadowMeshletsDispatched,leafShadowMeshletsRendered,"
+           "terrainMainMeshletsRendered,terrainShadowMeshletsRendered\n";
     for (const auto& r : run.rows) {
         out << r.frameIdx << ','
             << r.simTimeMs << ','
@@ -626,7 +735,41 @@ void BenchmarkRunner::_WritePipelineCsv(const PipelineRun& run)
             out << (r.gpuMsBound ? r.gpuStageMs[s] : -1.f) << ',';
         }
         out << r.camPos.x << ',' << r.camPos.y << ',' << r.camPos.z << ','
-            << r.camDir.x << ',' << r.camDir.y << ',' << r.camDir.z << '\n';
+            << r.camDir.x << ',' << r.camDir.y << ',' << r.camDir.z << ','
+            << r.sunElevationDeg << ','
+            << r.totalInstanceCount   << ','
+            << r.mainVisibleTrunk     << ','
+            << r.mainVisibleLeaves    << ','
+            << r.mainVisibleImpostors << ',';
+        for (uint32_t i = 0; i < UIData::kMaxLodsForUI; ++i) {
+            out << r.mainVisibleByLod[i] << ',';
+        }
+        out << r.shadowVisibleTrunk     << ','
+            << r.shadowVisibleLeaves    << ','
+            << r.shadowVisibleImpostors << ','
+            << r.shadowCascadeDraws     << ',';
+        for (uint32_t c = 0; c < Render::c_NumCascades; ++c) {
+            out << r.shadowGeomCascade[c] << ',';
+        }
+        for (uint32_t c = 0; c < Render::c_NumCascades; ++c) {
+            out << r.shadowImpostorCascade[c] << ',';
+        }
+        for (uint32_t c = 0; c < Render::c_NumCascades; ++c) {
+            out << r.cascadeTexelSize[c] << ',';
+        }
+        for (uint32_t c = 0; c < Render::c_NumCascades; ++c) {
+            out << r.sdsmCascadeSplits[c] << ',';
+        }
+        out << r.trunkMainMeshletsDispatched   << ','
+            << r.trunkMainMeshletsRendered     << ','
+            << r.trunkShadowMeshletsDispatched << ','
+            << r.trunkShadowMeshletsRendered   << ','
+            << r.leafMainMeshletsDispatched    << ','
+            << r.leafMainMeshletsRendered      << ','
+            << r.leafShadowMeshletsDispatched  << ','
+            << r.leafShadowMeshletsRendered    << ','
+            << r.terrainMainMeshletsRendered   << ','
+            << r.terrainShadowMeshletsRendered << '\n';
     }
 }
 
@@ -681,6 +824,8 @@ void BenchmarkRunner::_WriteRunSummary()
             agg.leafMeshlets     = std::max(agg.leafMeshlets,     r.sceneStats.leafMeshlets);
             agg.terrainVerts     = std::max(agg.terrainVerts,     r.sceneStats.terrainVerts);
             agg.terrainMeshlets  = std::max(agg.terrainMeshlets,  r.sceneStats.terrainMeshlets);
+            agg.terrainShadowMeshletsDispatched = std::max(agg.terrainShadowMeshletsDispatched,
+                                                           r.sceneStats.terrainShadowMeshletsDispatched);
         }
         Json::Value stats;
         stats["trunkInstances"]  = agg.trunkInstances;
@@ -689,6 +834,7 @@ void BenchmarkRunner::_WriteRunSummary()
         stats["leafMeshlets"]    = agg.leafMeshlets;
         stats["terrainVerts"]    = agg.terrainVerts;
         stats["terrainMeshlets"] = agg.terrainMeshlets;
+        stats["terrainShadowMeshletsDispatched"] = agg.terrainShadowMeshletsDispatched;
         root["sceneStats"] = stats;
     }
 

@@ -26,6 +26,12 @@ struct UIData {
     float    gpuFrameTimeMs       = -1.0f; // -1 = not yet available
     float    cpuRenderTimeMs      = 0.0f;
 
+    // Sun elevation above the horizon, degrees. Populated by RenderOrchestrator
+    // right after advanceSunSky() so every per-frame consumer (BenchmarkRunner,
+    // future UI overlays) reads a fresh value derived from the current
+    // SunSkyState::lightDir. Range: roughly [-90, 90]; negative = below horizon.
+    float    sunElevationDeg      = 0.0f;
+
     // Per-stage GPU timing in milliseconds. Indexed by frame::FrameStage.
     // -1 sentinel means "no value yet" — either the active pipeline doesn't
     // run this stage, or the timer ring is still warming up after a switch.
@@ -56,13 +62,19 @@ struct UIData {
     uint32_t shadowGeomDrawsPerCascade[Render::c_NumCascades]      = {};
     uint32_t shadowBillboardDrawsPerCascade[Render::c_NumCascades] = {};
 
-    // Scene-wide leaf totals (CPU-derived capacity) and per-frame visible counts
-    // (GPU readback from leaf_as / leaf_shadow_as atomics, mesh-shader pipeline only;
-    // 0 in P0/P1).
+    // Scene-wide leaf totals (CPU-derived capacity) and per-frame visible counts.
+    // visibleLeafInstanceCount / shadowVisibleLeafInstanceCount are written by
+    // every render pass each frame, but their semantics differ by pipeline:
+    //   - P0 (Traditional): CPU tally — sum of leafCount over draw-issued trunks.
+    //   - P1 (Compute):     CPU tally — sum of leafCount over cull-survived trunks.
+    //   - P2 (MeshShader):  GPU readback — Σ meta.y from leaf_as / leaf_shadow_as
+    //                       AS-cull atomics (i.e. post-AS, so smaller than the
+    //                       CPU tally would imply for the same trunk set).
+    // The shadow variant is cascade-summed under all three pipelines.
     uint32_t totalLeafInstanceCount        = 0;  // Σ leafCount per instance
     uint32_t totalLeafMeshletCount         = 0;  // Σ leafMeshletCount per instance
-    uint32_t visibleLeafInstanceCount      = 0;  // Σ meta.y over leaves passing eye AS cull
-    uint32_t shadowVisibleLeafInstanceCount = 0; // Σ meta.y over leaves dispatched in shadow path
+    uint32_t visibleLeafInstanceCount      = 0;  // see semantics note above
+    uint32_t shadowVisibleLeafInstanceCount = 0; // see semantics note above
 
     bool showDebugTopDown       = false;
     bool showDebugShadowTopDown = false;
@@ -82,9 +94,17 @@ struct UIData {
     // Mesh-shader pipeline stats
     float    meshletMegaBufferMB  = 0.0f;
     uint32_t totalMeshletCount    = 0;
+    // Per-instance-fanned trunk meshlet workload at LOD 0: Σ over scene instances
+    // of their asset's LOD 0 meshlet count. This is the max possible per-frame
+    // trunk-meshlet "dispatched" count (every instance visible, at full detail),
+    // parallel in semantics to totalLeafMeshletCount. P2-only.
+    uint32_t totalTrunkInstanceMeshletCount = 0;
     uint32_t totalTerrainVertexCount    = 0;
-    uint32_t totalTerrainMeshletCount   = 0;
-    uint32_t visibleTerrainMeshletCount = 0;
+    uint32_t totalTerrainMeshletCount         = 0;
+    uint32_t visibleTerrainMeshletCount       = 0;
+    // Sum of terrain meshlets that survived AS-side light-frustum cull across
+    // ALL cascades in the shadow pass. P2-only.
+    uint32_t shadowVisibleTerrainMeshletCount = 0;
 
     // Mesh-shader pipeline meshlet AS cull stats (P2 only, GPU readback,
     // k_QueuedFrames-1 latency). "Dispatched" reflects only post-instance-cull

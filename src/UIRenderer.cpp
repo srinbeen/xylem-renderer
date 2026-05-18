@@ -1202,13 +1202,14 @@ void UIRenderer::_buildTerrainFunnel() {
     ImGui::Text("Terrain (P2)");
     ImGui::Indent();
 
-    const uint32_t total  = m_ui.totalTerrainMeshletCount;
-    const uint32_t drawn  = m_ui.visibleTerrainMeshletCount;
-    const uint32_t culled = (total >= drawn) ? (total - drawn) : 0;
+    const uint32_t total        = m_ui.totalTerrainMeshletCount;
+    const uint32_t drawn        = m_ui.visibleTerrainMeshletCount;
+    const uint32_t culled       = (total >= drawn) ? (total - drawn) : 0;
+    const uint32_t shadowDrawn  = m_ui.shadowVisibleTerrainMeshletCount;
 
     ImGui::Text("Total meshlets:       %s",                  _fmtCount(total));
     ImGui::Text("Post-cull:            %s   (%s culled)",    _fmtCount(drawn), _fmtCount(culled));
-    ImGui::TextDisabled("Shadow:               \xE2\x80\x94   (full terrain per cascade, traditional VS)");
+    ImGui::Text("Shadow (\xCE\xA3 cascades): %s",            _fmtCount(shadowDrawn));
 
     ImGui::Unindent();
 }

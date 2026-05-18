@@ -624,6 +624,7 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
         m_UI.cascadeTexelSize[c] = cBbox.isempty()
             ? 0.f
             : cBbox.diagonal().x / float(m_ShadowRes);
+        m_UI.sdsmCascadeSplits[c] = m_ViewHandler.cascadeSplitDistances[c];
     }
 
     Render::CullConstantBufferEntry constants{};
@@ -824,8 +825,9 @@ void TraditionalRenderPass::Render(nvrhi::IFramebuffer* framebuffer) {
     m_UI.leafMainMeshletsRendered      = 0;
     m_UI.leafShadowMeshletsDispatched  = 0;
     m_UI.leafShadowMeshletsRendered    = 0;
-    m_UI.totalTerrainMeshletCount      = 0;
-    m_UI.visibleTerrainMeshletCount    = 0;
+    m_UI.totalTerrainMeshletCount         = 0;
+    m_UI.visibleTerrainMeshletCount       = 0;
+    m_UI.shadowVisibleTerrainMeshletCount = 0;
     if (const auto* terrain = m_Registry.getTerrain()) {
         m_UI.totalTerrainVertexCount = static_cast<uint32_t>(terrain->getVertices().size());
     } else {
